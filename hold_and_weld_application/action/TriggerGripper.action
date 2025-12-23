@@ -1,0 +1,12 @@
+# TriggerGripper.action
+# Simple trigger to execute gripper job defined in YAML
+# Goal (empty - just triggers)
+---
+# Result
+bool success
+string message
+int32 positions_executed
+---
+# Feedback
+string current_step
+float32 completion_percentage

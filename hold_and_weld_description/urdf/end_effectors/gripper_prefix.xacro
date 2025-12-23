@@ -1,0 +1,127 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_gripper">
+  <xacro:macro name="gripper_macro" params="prefix">
+    <link name="${prefix}gripper_base">
+      <visual>
+        <geometry>
+          <box size="0.08 0.12 0.04"/>
+        </geometry>
+        <material name="gray">
+          <color rgba="0.5 0.5 0.5 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <box size="0.08 0.12 0.04"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.5"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}left_finger">
+      <visual>
+        <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.04 0.20"/>
+        </geometry>
+        <material name="dark_gray">
+          <color rgba="0.3 0.3 0.3 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.04 0.20"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.2"/>
+        <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+        <inertia ixx="0.0007" ixy="0.0" ixz="0.0" iyy="0.0007" iyz="0.0" izz="0.00005"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}right_finger">
+      <visual>
+        <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.04 0.20"/>
+        </geometry>
+        <material name="dark_gray">
+          <color rgba="0.3 0.3 0.3 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.04 0.20"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.2"/>
+        <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+        <inertia ixx="0.0007" ixy="0.0" ixz="0.0" iyy="0.0007" iyz="0.0" izz="0.00005"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}left_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}left_finger"/>
+      <origin xyz="0 0.03 -0.02" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.15" effort="100" velocity="0.1"/>
+    </joint>
+
+    <joint name="${prefix}right_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}right_finger"/>
+      <origin xyz="0 -0.03 -0.02" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="0.15" effort="100" velocity="0.1"/>
+    </joint>
+
+    <gazebo reference="${prefix}gripper_base">
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+      <material>Gazebo/Grey</material>
+    </gazebo>
+    <gazebo reference="${prefix}left_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+      <material>Gazebo/DarkGrey</material>
+    </gazebo>
+    <gazebo reference="${prefix}right_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+      <material>Gazebo/DarkGrey</material>
+    </gazebo>
+
+    <ros2_control name="${prefix}gripper_system" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+
+      <joint name="${prefix}left_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">0.15</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="${prefix}right_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">0.15</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>

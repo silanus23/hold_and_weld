@@ -1,0 +1,66 @@
+# Controllers configuration
+# Place at: hold_and_weld_description/config/controllers.yaml
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    robot1_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    robot2_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+# Robot 1: Rail + Arm combined (7 joints)
+robot1_arm_controller:
+  ros__parameters:
+    joints:
+      - robot1_rail_joint
+      - robot1_joint_1_s
+      - robot1_joint_2_l
+      - robot1_joint_3_u
+      - robot1_joint_4_r
+      - robot1_joint_5_b
+      - robot1_joint_6_t
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+# Robot 2: Welder arm (6 joints)
+robot2_arm_controller:
+  ros__parameters:
+    joints:
+      - robot2_joint_1_s
+      - robot2_joint_2_l
+      - robot2_joint_3_u
+      - robot2_joint_4_r
+      - robot2_joint_5_b
+      - robot2_joint_6_t
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+# Gripper: Finger joints only
+gripper_controller:
+  ros__parameters:
+    joints:
+      - robot1_left_finger_joint
+      - robot1_right_finger_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false

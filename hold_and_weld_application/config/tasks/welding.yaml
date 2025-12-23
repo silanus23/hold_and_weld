@@ -1,0 +1,28 @@
+welder_group_name: "robot2_gp25_welder_arm"
+
+# Motion parameters
+approach_offset_z: 0.1          # Offset above seam start for approach (meters)
+retract_offset_z: 0.15          # Offset above seam end for retract (meters)
+cartesian_path_threshold: 0.95  # Minimum fraction of path that must be achievable (0.0-1.0)
+cartesian_step_size: 0.01       # Step size for Cartesian path computation (meters)
+velocity_scaling: 0.3           # Velocity scaling factor (0.0-1.0)
+
+# Retry parameters
+max_approach_retries: 3         # Maximum attempts for approach motion
+max_cartesian_retries: 2        # Maximum attempts for Cartesian path execution
+
+
+start_pose:
+  position:
+    x: 1.2
+    y: 0.3
+    z: 0.625
+  orientation:
+    x: 0.0
+    y: 0.7071068
+    z: 0.0
+    w: 0.7071068
+
+# JSON file path (optional)
+# If not specified, will auto-load latest JSON from hold_and_weld_planning/generated/
+# json_file: "/path/to/specific/seams.json"

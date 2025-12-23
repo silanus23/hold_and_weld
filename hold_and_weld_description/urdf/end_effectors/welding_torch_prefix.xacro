@@ -1,0 +1,151 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="welding_torch">
+  <xacro:macro name="welding_torch_macro" params="prefix">
+    <link name="${prefix}torch_mount">
+      <visual>
+        <geometry>
+          <cylinder radius="0.04" length="0.03"/>
+        </geometry>
+        <material name="black">
+          <color rgba="0.1 0.1 0.1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="0.04" length="0.03"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.3"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}torch_handle">
+      <visual>
+        <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.025" length="0.16"/>
+        </geometry>
+        <material name="dark_red">
+          <color rgba="0.4 0.1 0.1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.025" length="0.16"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.4"/>
+        <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+        <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.00005"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}torch_neck">
+      <visual>
+        <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.015" length="0.10"/>
+        </geometry>
+        <material name="copper">
+          <color rgba="0.72 0.45 0.20 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.015" length="0.10"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.2"/>
+        <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+        <inertia ixx="0.0002" ixy="0.0" ixz="0.0" iyy="0.0002" iyz="0.0" izz="0.00001"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}torch_nozzle">
+      <visual>
+        <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.01" length="0.06"/>
+        </geometry>
+        <material name="brass">
+          <color rgba="0.80 0.68 0.40 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.01" length="0.06"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.1"/>
+        <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+        <inertia ixx="0.00004" ixy="0.0" ixz="0.0" iyy="0.00004" iyz="0.0" izz="0.000001"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}weld_point"/>
+    <link name="${prefix}wire_tip"/>
+
+    <joint name="${prefix}mount_to_handle" type="fixed">
+      <parent link="${prefix}torch_mount"/>
+      <child link="${prefix}torch_handle"/>
+      <origin xyz="0 0 -0.015" rpy="0 0.5236 0"/>
+    </joint>
+
+    <joint name="${prefix}handle_to_neck" type="fixed">
+      <parent link="${prefix}torch_handle"/>
+      <child link="${prefix}torch_neck"/>
+      <origin xyz="0 0 -0.16" rpy="0 0.2618 0"/>
+    </joint>
+
+    <joint name="${prefix}neck_to_nozzle" type="fixed">
+      <parent link="${prefix}torch_neck"/>
+      <child link="${prefix}torch_nozzle"/>
+      <origin xyz="0 0 -0.10" rpy="0 0 0"/>
+    </joint>
+
+    <joint name="${prefix}nozzle_to_weld_point" type="fixed">
+      <parent link="${prefix}torch_nozzle"/>
+      <child link="${prefix}weld_point"/>
+      <origin xyz="0 0 -0.06" rpy="0 0 0"/>
+    </joint>
+
+    <joint name="${prefix}weld_point_to_wire_tip" type="fixed">
+      <parent link="${prefix}weld_point"/>
+      <child link="${prefix}wire_tip"/>
+      <origin xyz="0 0 -0.015" rpy="0 0 0"/>
+    </joint>
+
+    <gazebo reference="${prefix}torch_mount">
+      <mu1>0.5</mu1>
+      <mu2>0.5</mu2>
+      <material>Gazebo/Black</material>
+    </gazebo>
+
+    <gazebo reference="${prefix}torch_handle">
+      <mu1>0.6</mu1>
+      <mu2>0.6</mu2>
+      <material>Gazebo/Red</material>
+    </gazebo>
+
+    <gazebo reference="${prefix}torch_neck">
+      <mu1>0.3</mu1>
+      <mu2>0.3</mu2>
+      <material>Gazebo/Copper</material>
+    </gazebo>
+
+    <gazebo reference="${prefix}torch_nozzle">
+      <mu1>0.3</mu1>
+      <mu2>0.3</mu2>
+      <material>Gazebo/Yellow</material>
+    </gazebo>
+  </xacro:macro>
+</robot>

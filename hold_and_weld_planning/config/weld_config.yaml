@@ -1,0 +1,21 @@
+# Weld job configuration
+parameters:
+  joint_type: "t_joint"
+  num_points: 20
+  gap_mm: 25.0
+  work_angle_deg: 45.0
+  travel_angle_deg: 5.0
+
+surface:
+  center: [1.2, -0.5, 0.8]
+  normal: [0.0, 0.0, 1.0]
+
+seams:
+  - start: [1.075, -0.625, 0.8]
+    end: [1.075, -0.325, 0.8]
+  - start: [1.075, -0.325, 0.8]
+    end: [1.325, -0.325, 0.8]
+  - start: [1.325, -0.325, 0.8]
+    end: [1.325, -0.625, 0.8]
+  - start: [1.075, -0.625, 0.8]
+    end: [1.325, -0.625, 0.8]

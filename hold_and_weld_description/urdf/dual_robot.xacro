@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="dual_gp25_system">
+  <xacro:arg name="controller_config_file" default=""/>
+  <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
+
+  <!-- Include all macro files -->
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/extra_axis/linear_rail_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/welding_torch_prefix.xacro"/>
+
+  <link name="world"/>
+
+  <!-- Robot 1: Gripper System with Rail -->
+  <xacro:linear_rail_macro parent="world" prefix="robot1_"/>
+  <xacro:gp25_arm_macro parent="robot1_rail_carriage" prefix="robot1_"/>
+  <xacro:gripper_macro prefix="robot1_"/>
+
+  <joint name="robot1_tool0_to_gripper" type="fixed">
+    <parent link="robot1_tool0"/>
+    <child link="robot1_gripper_base"/>
+    <origin xyz="0 0 0.025" rpy="3.14159 0 0"/>
+  </joint>
+
+  <!-- Robot 2: Welder System (standalone) -->
+  <xacro:gp25_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'/>
+  <xacro:welding_torch_macro prefix="robot2_"/>
+
+  <joint name="robot2_tool0_to_torch" type="fixed">
+    <parent link="robot2_tool0"/>
+    <child link="robot2_torch_mount"/>
+    <origin xyz="0 0 0" rpy="3.14 0 0"/>
+  </joint>
+
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>${controller_config_file}</parameters>
+      <robot_param>robot_description</robot_param>
+      <robot_param_node>robot_state_publisher</robot_param_node>
+      <ros>
+        <namespace>/</namespace>
+      </ros>
+    </plugin>
+  </gazebo>
+</robot>

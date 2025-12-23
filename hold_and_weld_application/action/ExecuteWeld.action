@@ -1,0 +1,16 @@
+# Goal - Request to execute a weld seam
+string seam_id
+float64 velocity_mps
+float64 wire_feed_rate_mpm
+
+---
+# Result - Outcome of the weld execution
+bool success
+string message
+int32 points_executed
+
+---
+# Feedback - Progress updates during welding
+int32 current_point
+int32 total_points
+float64 completion_percentage

@@ -1,0 +1,14 @@
+# ExecuteGripper.action
+# Action for executing gripper pick-and-place sequences
+
+# Goal
+string sequence_name    # Sequence to execute: "pick_cube", "place_workpiece", or position name
+---
+# Result
+bool success
+string message
+int32 positions_executed
+---
+# Feedback
+string current_step              # Current operation: "opening", "moving_to_X", "closing", etc.
+float32 completion_percentage    # 0.0 to 100.0

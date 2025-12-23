@@ -1,0 +1,81 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="linear_rail">
+  <xacro:macro name="linear_rail_macro" params="parent prefix">
+    <xacro:property name="rail_height" value="0.2"/>
+    <xacro:property name="rail_length" value="4.0"/>
+    <xacro:property name="carriage_height" value="0.05"/>
+
+    <link name="${prefix}rail_base">
+      <visual>
+        <geometry>
+          <box size="0.6 ${rail_length} ${rail_height}"/>
+        </geometry>
+        <material name="gray">
+          <color rgba="0.5 0.5 0.5 1"/>
+        </material>
+        <origin xyz="0 0 ${rail_height/2}"/>
+      </visual>
+      <collision>
+        <geometry>
+          <box size="0.6 ${rail_length} ${rail_height}"/>
+        </geometry>
+        <origin xyz="0 0 ${rail_height/2}"/>
+      </collision>
+      <inertial>
+        <mass value="200.0"/>
+        <origin xyz="0 0 ${rail_height/2}"/>
+        <inertia ixx="100.0" ixy="0.0" ixz="0.0" iyy="100.0" iyz="0.0" izz="100.0"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}rail_base_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}rail_base"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${prefix}rail_carriage">
+      <visual>
+        <geometry>
+          <box size="0.5 0.5 ${carriage_height}"/>
+        </geometry>
+        <material name="silver">
+          <color rgba="0.8 0.8 0.8 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <box size="0.5 0.5 ${carriage_height}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="50.0"/>
+        <origin xyz="0 0 0"/>
+        <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}rail_joint" type="prismatic">
+      <parent link="${prefix}rail_base"/>
+      <child link="${prefix}rail_carriage"/>
+      <origin xyz="0 0 ${rail_height + (carriage_height/2)}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-1.8" upper="1.8" effort="1000" velocity="1.0"/>
+      <dynamics damping="1.0" friction="1.0"/>
+    </joint>
+
+    <ros2_control name="${prefix}rail_hardware" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+      <joint name="${prefix}rail_joint">
+        <command_interface name="position">
+          <param name="min">-1.8</param>
+          <param name="max">1.8</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>

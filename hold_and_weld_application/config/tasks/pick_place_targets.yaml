@@ -1,0 +1,53 @@
+gripper:
+  open_position: 0.15
+  close_position: 0.128
+  attach_link: robot1_gripper_base
+  touch_links:
+    - robot1_tool0
+    - robot1_link_6_t
+    - robot1_flange
+    - robot1_gripper_base
+    - robot1_left_finger
+    - robot1_right_finger
+targets:
+  - target_id: "target_cube"
+    approach_pose:
+      position:
+        x: 1.2
+        y: 0.3
+        z: 0.625
+      orientation:
+        x: 0.0
+        y: 0.7071068
+        z: 0.0
+        w: 0.7071068
+    pick_pose:
+      position:
+        x: 1.2
+        y: 0.3
+        z: 0.400
+      orientation:
+        x: 0.0
+        y: 0.7071068
+        z: 0.0
+        w: 0.7071068
+    retract_pose:
+      position:
+        x: 1.2
+        y: -0.5
+        z: 1.400
+      orientation:
+        x: 0.0
+        y: 0.7071068
+        z: 0.0
+        w: 0.7071068
+    place_pose:
+      position:
+        x: 1.2
+        y: -0.5
+        z: 1.375
+      orientation:
+        x: 0.0
+        y: 0.7071068
+        z: 0.0
+        w: 0.7071068

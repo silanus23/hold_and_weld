@@ -1,0 +1,317 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_arm_macro">
+  <xacro:macro name="gp25_arm_macro" params="parent prefix x:=0 y:=0 z:=0 roll:=0 pitch:=0 yaw:=0">
+    <joint name="${prefix}base_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}base_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="${roll} ${pitch} ${yaw}"/>
+    </joint>
+
+    <link name="${prefix}base_link">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/base_link.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/base_link.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="50.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="5.0" ixy="0.0" ixz="0.0" iyy="5.0" iyz="0.0" izz="5.0"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}link_1_s">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/link_1_s.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/link_1_s.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="30.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="2.0" ixy="0.0" ixz="0.0" iyy="2.0" iyz="0.0" izz="2.0"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}link_2_l">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/link_2_l.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/link_2_l.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="25.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="1.5" ixy="0.0" ixz="0.0" iyy="1.5" iyz="0.0" izz="1.5"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}link_3_u">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/link_3_u.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/link_3_u.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="20.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}link_4_r">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/link_4_r.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/link_4_r.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="5.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.5" ixy="0.0" ixz="0.0" iyy="0.5" iyz="0.0" izz="0.5"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}link_5_b">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/link_5_b.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/link_5_b.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="3.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.3" ixy="0.0" ixz="0.0" iyy="0.3" iyz="0.0" izz="0.3"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}link_6_t">
+      <visual>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/visual/link_6_t.dae"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0 0 1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/gp25/collision/link_6_t.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="2.0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
+      </inertial>
+    </link>
+
+    <link name="${prefix}base"/>
+    <joint name="${prefix}base_link-base" type="fixed">
+      <origin xyz="0 0 0.505" rpy="0 0 0"/>
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}base"/>
+    </joint>
+
+    <link name="${prefix}flange"/>
+    <joint name="${prefix}joint_6_t-flange" type="fixed">
+      <origin xyz="0.100 0 0" rpy="0 0 0"/>
+      <parent link="${prefix}link_6_t"/>
+      <child link="${prefix}flange"/>
+    </joint>
+
+    <link name="${prefix}tool0"/>
+    <joint name="${prefix}flange-tool0" type="fixed">
+      <origin xyz="0 0 0" rpy="3.14159265359 -1.57079632679 0"/>
+      <parent link="${prefix}flange"/>
+      <child link="${prefix}tool0"/>
+    </joint>
+
+    <joint name="${prefix}joint_1_s" type="revolute">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}link_1_s"/>
+      <origin xyz="0 0 0.505" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.14159265359" upper="3.14159265359" effort="3087" velocity="3.66519142919"/>
+    </joint>
+
+    <joint name="${prefix}joint_2_l" type="revolute">
+      <parent link="${prefix}link_1_s"/>
+      <child link="${prefix}link_2_l"/>
+      <origin xyz="0.150 0 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-1.83259571459" upper="2.70526034059" effort="3087" velocity="3.66519142919"/>
+    </joint>
+
+    <joint name="${prefix}joint_3_u" type="revolute">
+      <parent link="${prefix}link_2_l"/>
+      <child link="${prefix}link_3_u"/>
+      <origin xyz="0 0 0.760" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="-1.50098315672" upper="2.79252680319" effort="926.1" velocity="4.62512251778"/>
+    </joint>
+
+    <joint name="${prefix}joint_4_r" type="revolute">
+      <parent link="${prefix}link_3_u"/>
+      <child link="${prefix}link_4_r"/>
+      <origin xyz="0.795 0 0.200" rpy="0 0 0"/>
+      <axis xyz="-1 0 0"/>
+      <limit lower="-3.49065850399" upper="3.49065850399" effort="88.2" velocity="7.33038285837"/>
+    </joint>
+
+    <joint name="${prefix}joint_5_b" type="revolute">
+      <parent link="${prefix}link_4_r"/>
+      <child link="${prefix}link_5_b"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="-2.61799387799" upper="2.61799387799" effort="70.56" velocity="7.33038285837"/>
+    </joint>
+
+    <joint name="${prefix}joint_6_t" type="revolute">
+      <parent link="${prefix}link_5_b"/>
+      <child link="${prefix}link_6_t"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="-1 0 0"/>
+      <limit lower="-7.941654" upper="7.941654" effort="50.31" velocity="15.4508497187"/>
+    </joint>
+
+    <gazebo reference="${prefix}base_link">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+    <gazebo reference="${prefix}link_1_s">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+    <gazebo reference="${prefix}link_2_l">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+    <gazebo reference="${prefix}link_3_u">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+    <gazebo reference="${prefix}link_4_r">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+    <gazebo reference="${prefix}link_5_b">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+    <gazebo reference="${prefix}link_6_t">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Blue</material>
+    </gazebo>
+
+    <ros2_control name="${prefix}gp25_system" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+
+      <joint name="${prefix}joint_1_s">
+        <command_interface name="position">
+          <param name="min">-3.14159</param>
+          <param name="max">3.14159</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}joint_2_l">
+        <command_interface name="position">
+          <param name="min">-1.83260</param>
+          <param name="max">2.70526</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}joint_3_u">
+        <command_interface name="position">
+          <param name="min">-1.50098</param>
+          <param name="max">2.79253</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}joint_4_r">
+        <command_interface name="position">
+          <param name="min">-3.49066</param>
+          <param name="max">3.49066</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}joint_5_b">
+        <command_interface name="position">
+          <param name="min">-2.61799</param>
+          <param name="max">2.61799</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}joint_6_t">
+        <command_interface name="position">
+          <param name="min">-7.94163</param>
+          <param name="max">7.94163</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>

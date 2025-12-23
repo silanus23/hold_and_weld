@@ -1,0 +1,14 @@
+# TriggerWelder.action
+# Simple trigger to execute weld job defined in JSON
+# Goal (empty - just triggers)
+---
+# Result
+bool success
+string message
+int32 points_executed
+---
+# Feedback
+string current_step
+float32 completion_percentage
+int32 current_point
+int32 total_points

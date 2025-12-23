@@ -1,0 +1,47 @@
+/**:
+  ros__parameters:
+    move_group:
+      planning_plugins:
+        - ompl_interface/OMPLPlanner
+      request_adapters:
+        - default_planning_request_adapters/ResolveConstraintFrames
+        - default_planning_request_adapters/ValidateWorkspaceBounds
+        - default_planning_request_adapters/CheckStartStateBounds
+        - default_planning_request_adapters/CheckStartStateCollision
+      response_adapters:
+        - default_planning_response_adapters/AddTimeOptimalParameterization
+        - default_planning_response_adapters/ValidateSolution
+        - default_planning_response_adapters/DisplayMotionPath
+    ompl:
+      planner_configs:
+        RRTConnect:
+          type: geometric::RRTConnect
+          range: 0.0
+        RRT:
+          type: geometric::RRT
+          range: 0.0
+          goal_bias: 0.05
+        EST:
+          type: geometric::EST
+          range: 0.0
+          goal_bias: 0.05
+      robot1_gp25_arm:
+        planner_configs:
+          - RRTConnect
+          - RRT
+          - EST
+        projection_evaluator: joints(robot1_joint_1_s,robot1_joint_2_l,robot1_joint_3_u)
+        longest_valid_segment_fraction: 0.005
+      robot1_gripper:
+        planner_configs:
+          - RRTConnect
+          - RRT
+        projection_evaluator: joints(robot1_left_finger_joint,robot1_right_finger_joint)
+        longest_valid_segment_fraction: 0.005
+      robot2_gp25_welder_arm:
+        planner_configs:
+          - RRTConnect
+          - RRT
+          - EST
+        projection_evaluator: joints(robot2_joint_1_s,robot2_joint_2_l,robot2_joint_3_u)
+        longest_valid_segment_fraction: 0.005
