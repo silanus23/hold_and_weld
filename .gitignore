@@ -4,7 +4,7 @@ install/
 log/
 .catkin_tools/
 .colcon/
-.json
+*.json
 
 *.o
 *.so

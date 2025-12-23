@@ -53,6 +53,7 @@ This project is designed with the following principles in mind:
 ### Milestone 1 – Core Stability
 - [ ] Realistic models for external-axis torch and gripper
 - [ ] Action server for moving a robot to a target pose
+- [ ] Utilize execute action messages instead only triggering ones.
 - [ ] Test coverage for all supported weld joint types
 
 ### Milestone 2 – Configuration & Extensibility
@@ -96,11 +97,11 @@ will be solved by adding json parserer independent from colcon.
 
 ## Quick Start
 ```bash
-# Build
+# Build. Execute in workspace
 colcon build --packages-up-to hold_and_weld_application
 
-# Generate weld path
-ros2 run hold_and_weld_planning generate_weld_path
+# Generate weld path. Execute in hold_and_weld_planning/hold_and_weld_planning
+python3 seam_generator.py
 
 # Run simulation
 ros2 launch hold_and_weld_application simulation.launch.py
@@ -113,4 +114,5 @@ Apache-2.0
 ## Author
 
 Berkan Tali (berkantali23@outlook.com)
+
 GitHub: @silanus23
