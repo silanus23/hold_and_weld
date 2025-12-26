@@ -26,6 +26,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
+#include <moveit_msgs/msg/planning_scene.hpp>
+#include <moveit_msgs/srv/apply_planning_scene.hpp>
+#include <moveit_msgs/srv/get_planning_scene.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit_msgs/msg/attached_collision_object.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -83,13 +86,13 @@ public:
   explicit GripperActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
-    // Initialization
+  // Initialization
   /**
    * @brief Initialize MoveIt interface and planning scene.
    */
   void initialize_moveit();
 
-    // Action server callbacks
+  // Action server callbacks
   /**
    * @brief Handle incoming goal requests from action clients.
    * @param uuid Unique identifier for the goal.
@@ -120,14 +123,14 @@ private:
    */
   void execute_job(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
-    // Configuration loading
+  // Configuration loading
   /**
    * @brief Load job configuration from YAML file.
    * @param yaml_path Path to the YAML configuration file.
    */
   void load_job_from_yaml(const std::string & yaml_path);
 
-    // Gripper control
+  // Gripper control
   /**
    * @brief Set the gripper to a specific position.
    * @param position Target position for the gripper (0.0 = closed, 0.15 = open).
@@ -135,7 +138,7 @@ private:
    */
   bool set_gripper_position(double position);
 
-    // Motion
+  // Motion
   /**
    * @brief Move the arm to a specified pose.
    * @param pose Target pose for the arm.
@@ -144,7 +147,7 @@ private:
    */
   bool move_to_pose(const geometry_msgs::msg::Pose & pose, const std::string & step_name);
 
-    // Collision objects
+  // Collision objects
   /**
    * @brief Attach an object to the gripper in the planning scene.
    * @param object_id Identifier of the object to attach.
@@ -159,7 +162,7 @@ private:
    */
   bool detach_object(const std::string & object_id);
 
-    // Utility
+  // Utility
   /**
    * @brief Normalize a quaternion to unit length.
    * @param q Quaternion to normalize (modified in-place).
@@ -173,14 +176,22 @@ private:
    */
   bool wait_for_planning_scene_update(int millis);
 
-    // Members
+  /**
+   * @brief Allow collision between cube and workpiece for placement.
+   * @return true if collision matrix was updated successfully, false otherwise.
+   */
+  bool allow_collision_for_placement();
+
+  // Members
   rclcpp_action::Server<TriggerGripper>::SharedPtr action_server_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
+  rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
 
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_action_client_;
   rclcpp::Publisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr attached_collision_pub_;
+  rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr get_planning_scene_client_;
 
-    // Configuration (protected by mutex)
+  // Configuration (protected by mutex)
   std::mutex config_mutex_;
   GripperJob job_;
   bool job_loaded_ = false;
@@ -195,11 +206,11 @@ private:
     "robot1_gripper_base", "robot1_left_finger", "robot1_right_finger"};
   std::string attach_link_ = "robot1_link_6_t";
 
-    // Execution thread management
+  // Execution thread management
   std::shared_ptr<std::thread> execution_thread_;
   std::mutex execution_mutex_;
 
-    // Delayed init
+  // Delayed init
   rclcpp::TimerBase::SharedPtr init_timer_;
   bool initialized_ = false;
   std::string arm_group_name_;

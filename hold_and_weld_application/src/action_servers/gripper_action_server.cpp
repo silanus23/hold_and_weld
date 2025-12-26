@@ -41,7 +41,7 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
 
   std::string yaml_path = get_parameter("positions_yaml").as_string();
 
-  RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
+RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
   RCLCPP_INFO(get_logger(), "  Arm group: %s", arm_group_name_.c_str());
 
   // Initialize gripper action client
@@ -59,6 +59,12 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
   init_timer_ = create_wall_timer(
         std::chrono::milliseconds(500),
         std::bind(&GripperActionServer::initialize_moveit, this));
+
+  planning_scene_client_ = create_client<moveit_msgs::srv::ApplyPlanningScene>(
+        "/apply_planning_scene");
+
+  get_planning_scene_client_ = create_client<moveit_msgs::srv::GetPlanningScene>
+        ("/get_planning_scene");
 }
 
 void GripperActionServer::initialize_moveit()
@@ -317,6 +323,12 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
+  // Updating collision matrix
+  RCLCPP_INFO(get_logger(), "Allowing collision between cube and workpiece");
+  if (!allow_collision_for_placement()) {
+    RCLCPP_WARN(get_logger(), "Failed to update collision matrix, continuing anyway");
+  }
+
   // 6. Place
   update_feedback("moving_to_place");
   if (!move_to_pose(job.place_pose, "place")) {
@@ -453,6 +465,65 @@ bool GripperActionServer::detach_object(const std::string & object_id)
 
   RCLCPP_INFO(get_logger(), "[Detach] Object detached.");
   return true;
+}
+
+bool GripperActionServer::allow_collision_for_placement()
+{
+  auto get_request = std::make_shared<moveit_msgs::srv::GetPlanningScene::Request>();
+  get_request->components.components = moveit_msgs::msg::PlanningSceneComponents::ALLOWED_COLLISION_MATRIX;
+
+  if (!get_planning_scene_client_->wait_for_service(std::chrono::seconds(2))) {
+    RCLCPP_ERROR(get_logger(), "Get Planning Scene service not available");
+    return false;
+  }
+
+  auto get_future = get_planning_scene_client_->async_send_request(get_request);
+  if (get_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    RCLCPP_ERROR(get_logger(), "Timeout getting planning scene");
+    return false;
+  }
+
+  auto current_scene = get_future.get();
+  auto & acm = current_scene->scene.allowed_collision_matrix;
+
+  auto toggle_acm_bit = [&](const std::string & name1, const std::string & name2) {
+    auto find_or_add = [&](const std::string & name) -> size_t {
+      auto it = std::find(acm.entry_names.begin(), acm.entry_names.end(), name);
+      if (it != acm.entry_names.end()) {
+        return std::distance(acm.entry_names.begin(), it);
+      }
+      // If not found, add it and resize the values
+      acm.entry_names.push_back(name);
+      size_t new_idx = acm.entry_names.size() - 1;
+      acm.entry_values.resize(acm.entry_names.size());
+      for (auto & row : acm.entry_values) {
+        row.enabled.resize(acm.entry_names.size(), false);
+      }
+      return new_idx;
+    };
+
+    size_t idx1 = find_or_add(name1);
+    size_t idx2 = find_or_add(name2);
+
+    // Set bit symmetrically
+    acm.entry_values[idx1].enabled[idx2] = true;
+    acm.entry_values[idx2].enabled[idx1] = true;
+  };
+
+  // Apply your specific "Hold and Weld" rule
+  // Using job.target_id instead of hardcoded strings
+  toggle_acm_bit(job_.target_id, "workpiece");
+
+  auto apply_request = std::make_shared<moveit_msgs::srv::ApplyPlanningScene::Request>();
+  apply_request->scene.allowed_collision_matrix = acm;
+  apply_request->scene.is_diff = true;
+
+  auto apply_future = planning_scene_client_->async_send_request(apply_request);
+  if (apply_future.wait_for(std::chrono::seconds(2)) == std::future_status::ready) {
+    return apply_future.get()->success;
+  }
+
+  return false;
 }
 
 }  // namespace hold_and_weld
