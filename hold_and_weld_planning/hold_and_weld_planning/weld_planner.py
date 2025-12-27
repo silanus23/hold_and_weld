@@ -397,7 +397,7 @@ class WeldPlanner:
         gap_component = self.gap_m / np.sqrt(2.0)
 
         if self.joint_type in ["t_joint", "butt_joint"]:
-            return surface_normal * gap_component + radial_direction * gap_component
+            return surface_normal * gap_component - radial_direction * gap_component
 
         elif self.joint_type == "edge_joint":
             return -surface_normal * gap_component + (-radial_direction) * gap_component

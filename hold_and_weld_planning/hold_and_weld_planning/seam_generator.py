@@ -122,7 +122,7 @@ def main():
             success = planner.generate_seam(seam, surface_info)
 
             if not success:
-                print(f"✗ Failed to generate seam {i}")
+                print(f"Failed to generate seam {i}")
                 return 1
 
             if args.verbose:

@@ -232,10 +232,10 @@ def generate_launch_description():
     spawn_robot = Node(
         package="ros_gz_sim",
         executable="create",
-        name="spawn_dual_arm_system",
+        name="spawn_dual_gp25_system",
         arguments=[
             "-topic", "/robot_description",
-            "-name", "dual_arm_system",
+            "-name", "dual_gp25_system",
             "-allow_renaming", "true",
             "-x", "0", "-y", "0", "-z", "0",
         ],
