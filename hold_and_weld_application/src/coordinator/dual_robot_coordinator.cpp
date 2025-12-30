@@ -20,7 +20,6 @@ namespace hold_and_weld
 DualRobotCoordinator::DualRobotCoordinator(const rclcpp::NodeOptions & options)
 : Node("dual_robot_coordinator", options)
 {
-    // Create gripper action client
   gripper_client_ = rclcpp_action::create_client<TriggerGripper>(
         this, "trigger_gripper");
 
@@ -31,7 +30,6 @@ DualRobotCoordinator::DualRobotCoordinator(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(get_logger(), "Connected to gripper action server");
   }
 
-    // Create welder action client
   welder_client_ = rclcpp_action::create_client<TriggerWelder>(
         this, "trigger_welder");
 
@@ -46,7 +44,7 @@ DualRobotCoordinator::DualRobotCoordinator(const rclcpp::NodeOptions & options)
         std::bind(&DualRobotCoordinator::init_moveit, this)
   );
 
-  RCLCPP_INFO(get_logger(), "Coordinator initialized, waiting for MoveIt setup...");
+  RCLCPP_INFO(get_logger(), "Coordinator initialized, waiting for MoveIt setup");
 }
 
 void DualRobotCoordinator::run()
@@ -56,8 +54,6 @@ void DualRobotCoordinator::run()
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   RCLCPP_INFO(get_logger(), "MoveIt ready, starting sequence");
-
-  RCLCPP_INFO(get_logger(), "Waiting for system to initialize");
   spin_for_duration(5.0);
 
   if (!move_welder_to_safety()) {
@@ -78,13 +74,13 @@ void DualRobotCoordinator::run()
 
 void DualRobotCoordinator::init_moveit()
 {
-    // Cancel the timer so this only runs once
+  // Cancel the timer so this only runs once
   init_timer_->cancel();
 
   welder_move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
         shared_from_this(), "robot2_gp25_welder_arm");
 
-    // Configure Safety Settings
+  // Configure Safety Settings
   welder_move_group_->setPlanningTime(5.0);
   welder_move_group_->setNumPlanningAttempts(10);
   welder_move_group_->setMaxVelocityScalingFactor(0.2);
@@ -149,6 +145,10 @@ bool DualRobotCoordinator::execute_gripper_job()
   return true;
 }
 
+//  This is a temporary solution
+// TODO(@silanus23): Create MoveToPose action server to replace
+// hard-coded safety positions and timing workarounds
+
 bool DualRobotCoordinator::move_welder_to_safety()
 {
   std::map<std::string, double> safety_joints;
@@ -178,7 +178,6 @@ bool DualRobotCoordinator::move_welder_to_safety()
 
 bool DualRobotCoordinator::execute_welder_job()
 {
-    // Create empty goal
   auto goal_msg = TriggerWelder::Goal();
 
     // Send goal with callbacks

@@ -19,7 +19,6 @@ repos:
       - id: trailing-whitespace
         exclude_types: [rst]
       - id: fix-byte-order-marker
-
 -   repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
@@ -63,20 +62,15 @@ repos:
         types: [xml]
         entry: ament_xmllint
     -   id: ament_flake8
-        args: ["--ignore=Q000"]
         name: ament_flake8
         description: Check Python code style using flake8.
         language: system
         types: [python]
         entry: ament_flake8
-    -   id: ament_pep257
-        name: ament_pep257
-        description: Check Python code style using pep257.
+    -   id: pydocstyle
+        name: pydocstyle
+        description: Check Python docstring style (Google convention).
+        entry: pydocstyle
         language: system
         types: [python]
-        entry: ament_pep257
-    -   id: ament_copyright
-        name: ament_copyright
-        description: Check for copyright notices in source files.
-        language: system
-        entry: ament_copyright
+        args: ['--convention=google']

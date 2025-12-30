@@ -26,7 +26,6 @@ int main(int argc, char ** argv)
   executor.add_node(node);
 
   std::thread logic_thread([node, &executor]() {
-        // Run the sequence
       node->run();
       executor.cancel();
     });

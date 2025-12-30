@@ -48,22 +48,23 @@ This project is designed with the following principles in mind:
   only after a stable execution pipeline is established.
 
 
-## 🚀 Planned Milestones
+## Planned Milestones
 
 ### Milestone 1 – Core Stability
 - [ ] Realistic models for external-axis torch and gripper
 - [ ] Action server for moving a robot to a target pose
 - [ ] Utilize execute action messages instead only triggering ones.
-- [ ] Test coverage for all supported weld joint types
+- [ ] Making task yaml monolithic and main source for every package
+- [ ] Replacing time based delay
 
 ### Milestone 2 – Configuration & Extensibility
-- [ ] YAML-based configuration system
-- [ ] Pilz and IKFast integration
 - [ ] Guidelines for adding robots and jobs
+- [ ] Test coverage for all supported weld joint types
+- [ ] Adding reachability test by adding jacobian calculations
 
 ### Milestone 3 – Advanced Autonomy
-- [ ] URDF-driven geometry engine
 - [ ] Behavior Tree–based task orchestration
+- [ ] URDF-driven geometry engine
 
 ## Conceptual Design Notes (Future Work)
 
@@ -72,14 +73,14 @@ This section documents design considerations and architectural directions explor
 
 ### Geometry Engine
 
-Currently seam geometry is created by yaml inputs and it requires user to enter values like:
-seam geometry, surface normal and surface center etc. Main purpose of geometry engine will
-be calculating how to give work, travel angel and requested gap with processing urdf or stl.
-User will only be giving seam lines relative to the world frame.
+Currently the system can extract weld line coordinates and workpiece poses from URDFs alone.
+This iteration depends on defining weld geometry from URDFs and only calculates flat surfaces.
 
-A similar mechanic can be used for gripper. Currently gripper needs input of 4 phase sequence
-and open close positions. Geometry engine will help user to create a physical road that will
-avoid collision.
+Future work includes making this geometry independent from joint types, choosing non-colliding
+orientations from multiple possibilities, extending to curved surfaces while maintaining
+work/travel angles, and being able to work with mesh files. Eventually this system should be
+capable of creating contemporary art installations with arbitrary weld geometries.
+
 
 ### Behavior Tree
 
@@ -94,18 +95,8 @@ gripping failure mid mission.
 - Currently gripper system is showing inconsistencies due to model problems.
 - JSON system can create problems that can be solved by building from cache after creating json. This problem
 will be solved by adding json parserer independent from colcon.
-
-## Quick Start
-```bash
-# Build. Execute in workspace
-colcon build --packages-up-to hold_and_weld_application
-
-# Generate weld path. Execute in hold_and_weld_planning/hold_and_weld_planning
-python3 seam_generator.py
-
-# Run simulation
-ros2 launch hold_and_weld_application simulation.launch.py
-```
+- Current version is tested in in butt_joint and T-joint only more test cases from contributors are welcomed
+lap_joint's logic could be better in urdf generator.
 
 ## License
 

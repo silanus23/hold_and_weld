@@ -150,7 +150,6 @@ void WelderActionServer::initialize_moveit()
     RCLCPP_ERROR(get_logger(), "Failed to initialize MoveIt: %s", e.what());
     return;
   }
-    // Initialize action server
   action_server_ = rclcpp_action::create_server<TriggerWelder>(
         this,
         "trigger_welder",
@@ -313,7 +312,6 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     return;
   }
 
-  // Load seams from JSON
   std::vector<WeldSeam> seams = load_seams_from_json(json_path);
 
   if (seams.empty()) {

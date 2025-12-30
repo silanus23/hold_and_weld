@@ -41,7 +41,7 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
 
   std::string yaml_path = get_parameter("positions_yaml").as_string();
 
-RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
+  RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
   RCLCPP_INFO(get_logger(), "  Arm group: %s", arm_group_name_.c_str());
 
   // Initialize gripper action client
@@ -63,8 +63,8 @@ RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
   planning_scene_client_ = create_client<moveit_msgs::srv::ApplyPlanningScene>(
         "/apply_planning_scene");
 
-  get_planning_scene_client_ = create_client<moveit_msgs::srv::GetPlanningScene>
-        ("/get_planning_scene");
+  get_planning_scene_client_ =
+    create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
 }
 
 void GripperActionServer::initialize_moveit()
@@ -454,8 +454,6 @@ bool GripperActionServer::attach_object(const std::string & object_id)
 
 bool GripperActionServer::detach_object(const std::string & object_id)
 {
-  RCLCPP_INFO(get_logger(), "[Detach] Detaching '%s'", object_id.c_str());
-
   moveit_msgs::msg::AttachedCollisionObject detach_object;
   detach_object.object.id = object_id;
   detach_object.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
@@ -470,7 +468,8 @@ bool GripperActionServer::detach_object(const std::string & object_id)
 bool GripperActionServer::allow_collision_for_placement()
 {
   auto get_request = std::make_shared<moveit_msgs::srv::GetPlanningScene::Request>();
-  get_request->components.components = moveit_msgs::msg::PlanningSceneComponents::ALLOWED_COLLISION_MATRIX;
+  get_request->components.components =
+    moveit_msgs::msg::PlanningSceneComponents::ALLOWED_COLLISION_MATRIX;
 
   if (!get_planning_scene_client_->wait_for_service(std::chrono::seconds(2))) {
     RCLCPP_ERROR(get_logger(), "Get Planning Scene service not available");
@@ -487,30 +486,29 @@ bool GripperActionServer::allow_collision_for_placement()
   auto & acm = current_scene->scene.allowed_collision_matrix;
 
   auto toggle_acm_bit = [&](const std::string & name1, const std::string & name2) {
-    auto find_or_add = [&](const std::string & name) -> size_t {
-      auto it = std::find(acm.entry_names.begin(), acm.entry_names.end(), name);
-      if (it != acm.entry_names.end()) {
-        return std::distance(acm.entry_names.begin(), it);
-      }
+      auto find_or_add = [&](const std::string & name) -> size_t {
+          auto it = std::find(acm.entry_names.begin(), acm.entry_names.end(), name);
+          if (it != acm.entry_names.end()) {
+            return std::distance(acm.entry_names.begin(), it);
+          }
       // If not found, add it and resize the values
-      acm.entry_names.push_back(name);
-      size_t new_idx = acm.entry_names.size() - 1;
-      acm.entry_values.resize(acm.entry_names.size());
-      for (auto & row : acm.entry_values) {
-        row.enabled.resize(acm.entry_names.size(), false);
-      }
-      return new_idx;
-    };
+          acm.entry_names.push_back(name);
+          size_t new_idx = acm.entry_names.size() - 1;
+          acm.entry_values.resize(acm.entry_names.size());
+          for (auto & row : acm.entry_values) {
+            row.enabled.resize(acm.entry_names.size(), false);
+          }
+          return new_idx;
+        };
 
-    size_t idx1 = find_or_add(name1);
-    size_t idx2 = find_or_add(name2);
+      size_t idx1 = find_or_add(name1);
+      size_t idx2 = find_or_add(name2);
 
     // Set bit symmetrically
-    acm.entry_values[idx1].enabled[idx2] = true;
-    acm.entry_values[idx2].enabled[idx1] = true;
-  };
+      acm.entry_values[idx1].enabled[idx2] = true;
+      acm.entry_values[idx2].enabled[idx1] = true;
+    };
 
-  // Apply your specific "Hold and Weld" rule
   // Using job.target_id instead of hardcoded strings
   toggle_acm_bit(job_.target_id, "workpiece");
 

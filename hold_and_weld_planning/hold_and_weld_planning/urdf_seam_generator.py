@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Manual seam generator - uses manually specified surfaces and joint types."""
+"""URDF-based seam generator - auto-detects surfaces and joint types from geometry."""
 
 import argparse
 from pathlib import Path
@@ -23,14 +23,18 @@ import sys
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).parent))
 
-from hold_and_weld_planning.planning import WeldPlanner
-from hold_and_weld_planning.utils import export_to_json, load_weld_job, path_utils
+from hold_and_weld_planning.urdf import URDFSeamPlanner
+from hold_and_weld_planning.utils import (
+    auto_generate_output_path,
+    export_to_json,
+    load_urdf_config,
+)
 
 
 def parse_arguments():
-    """Parse command line arguments with smart defaults."""
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Generate weld seam trajectories from YAML configuration (manual workflow)',
+        description='Generate weld seams using URDF geometry (auto-detect surfaces)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -38,43 +42,42 @@ Examples:
   %(prog)s
 
   # Specify input config
-  %(prog)s --input my_job.yaml
-
-  # Specify both input and output
-  %(prog)s --input my_job.yaml --output my_poses.json
+  %(prog)s --input urdf_weld_config.yaml
 
   # Verbose output
-  %(prog)s --input my_job.yaml --verbose
+  %(prog)s --input urdf_weld_config.yaml --verbose
         """
     )
 
-    default_config = Path(__file__).parent.parent / 'config' / 'weld_config.yaml'
+    default_config = (
+        Path(__file__).parent.parent / 'config' / 'urdf_welding_conf.yaml'
+    )
 
     parser.add_argument(
         '--input', '-i',
         type=str,
         default=str(default_config) if default_config.exists() else None,
-        help='Input YAML configuration file (default: config/weld_config.yaml)'
+        help='Input YAML configuration file'
     )
 
     parser.add_argument(
         '--output', '-o',
         type=str,
         default=None,
-        help='Output JSON file (default: auto-generated in generated/)'
+        help='Output JSON file (default: auto-generated)'
     )
 
     parser.add_argument(
         '--verbose', '-v',
         action='store_true',
-        help='Print detailed information during generation'
+        help='Print detailed information'
     )
 
     return parser.parse_args()
 
 
 def main():
-    """Orchestrate loading, planning, and exporting of weld seams."""
+    """Orchestrate URDF-based seam generation."""
     args = parse_arguments()
 
     if args.input is None:
@@ -84,57 +87,56 @@ def main():
 
     try:
         if args.verbose:
-            print(f'Loading configuration from: {args.input}')
+            print(f'Loading URDF-based configuration from: {args.input}')
 
-        seams, parameters, surface_info = load_weld_job(args.input)
+        seams, parameters, workpiece_config = load_urdf_config(args.input)
 
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
-            print(f'  Joint type: {parameters["joint_type"]}')
             print(f'  Number of seams: {len(seams)}')
-            print(f"  Points per seam: {parameters['num_points']}")
-            print(f"  Work angle: {parameters['work_angle_deg']}°")
-            print(f"  Travel angle: {parameters['travel_angle_deg']}°")
-            print(f"  Gap: {parameters['gap_mm']}mm")
+            print(f'  Points per seam: {parameters["num_points"]}')
+            print(f'  Work angle: {parameters["work_angle_deg"]}°')
+            print(f'  Travel angle: {parameters["travel_angle_deg"]}°')
+            print(f'  Gap: {parameters["gap_mm"]}mm')
             print()
 
-        planner = WeldPlanner(parameters)
+        planner = URDFSeamPlanner(workpiece_config)
+
+        main_link = workpiece_config['main_part']['link_name']
+        extra_link = workpiece_config['extra_part']['link_name']
+
         if args.verbose:
-            print(f"Created planner for {parameters['joint_type']}")
+            print(
+                f'  Main part URDF: '
+                f'{workpiece_config["main_part"]["urdf_path"]}'
+            )
+            print(f'  Main link: {main_link}')
+            print(
+                f'  Extra part URDF: '
+                f'{workpiece_config["extra_part"]["urdf_path"]}'
+            )
+            print(f'  Extra link: {extra_link}')
             print()
 
+        joint_type, surface_info, success = planner.generate_seams(
+            seams, parameters
+        )
+
+        if not success:
+            print('ERROR: Failed to generate seams')
+            return 1
+
         if args.verbose:
-            print(f'Generating poses for {len(seams)} seam(s)')
+            print(f'  Detected joint type: {joint_type}')
+            print(f'  Surface center: {surface_info["center"]}')
+            print(f'  Surface normal: {surface_info["normal"]}')
+            print()
 
-        for i, seam in enumerate(seams):
-            line = seam.line_segment
-
-            if args.verbose:
-                print(f'  Processing seam {i}:')
-                print(
-                    f'    Start: [{line.start[0]:.3f}, '
-                    f'{line.start[1]:.3f}, {line.start[2]:.3f}]'
-                )
-                print(
-                    f'    End:   [{line.end[0]:.3f}, '
-                    f'{line.end[1]:.3f}, {line.end[2]:.3f}]'
-                )
-                print(f'    Length: {line.length()*1000:.1f}mm')
-
-            success = planner.generate_seam(seam, surface_info)
-
-            if not success:
-                print(f'Failed to generate seam {i}')
-                return 1
-
-            if args.verbose:
-                print(f'    Generated {len(seam.poses)} poses')
-
-        print(f'Generated {len(seams)} seam(s)')
+        print(f'Generated {len(seams)} seam(s) with joint type: {joint_type}')
         print()
 
         if args.output is None:
-            output_path = path_utils.auto_generate_output_path(args.input)
+            output_path = auto_generate_output_path(args.input)
             if args.verbose:
                 print(f'Auto-generated output path: {output_path}')
         else:
@@ -142,10 +144,13 @@ def main():
 
         metadata = {
             'input_file': str(Path(args.input).resolve()),
-            'joint_type': parameters['joint_type'],
+            'joint_type': joint_type,
+            'joint_type_auto_detected': True,
             'work_angle_deg': parameters['work_angle_deg'],
             'travel_angle_deg': parameters['travel_angle_deg'],
-            'gap_mm': parameters['gap_mm']
+            'gap_mm': parameters['gap_mm'],
+            'surface_center': surface_info['center'],
+            'surface_normal': surface_info['normal']
         }
 
         export_to_json(seams, output_path, metadata)
