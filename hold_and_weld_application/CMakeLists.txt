@@ -5,7 +5,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -22,6 +21,9 @@ find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(Ceres REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(urdf REQUIRED)
 
 # Generate action interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -50,7 +52,6 @@ set(DEPENDENCIES
   ament_index_cpp
 )
 
-# Gripper Action Server Library
 add_library(gripper_action_server SHARED
   src/action_servers/gripper_action_server.cpp
 )
@@ -58,17 +59,27 @@ ament_target_dependencies(gripper_action_server ${DEPENDENCIES})
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(gripper_action_server "${cpp_typesupport_target}" yaml-cpp)
 
-# Welder Action Server Library
 add_library(welder_action_server SHARED
   src/action_servers/welder_action_server.cpp
 )
 ament_target_dependencies(welder_action_server ${DEPENDENCIES})
 target_link_libraries(welder_action_server "${cpp_typesupport_target}" nlohmann_json::nlohmann_json yaml-cpp)
 
-# Dual Robot Coordinator Library
 add_library(dual_robot_coordinator SHARED
   src/coordinator/dual_robot_coordinator.cpp
 )
+
+add_library(hold_and_weld_kinematics SHARED
+  src/kinematics/urdf_parser.cpp
+)
+ament_target_dependencies(hold_and_weld_kinematics
+  ament_index_cpp
+  urdf
+)
+target_link_libraries(hold_and_weld_kinematics
+  Eigen3::Eigen
+)
+
 ament_target_dependencies(dual_robot_coordinator ${DEPENDENCIES})
 target_link_libraries(dual_robot_coordinator
   "${cpp_typesupport_target}"
@@ -94,7 +105,6 @@ add_executable(coordinator_node
 ament_target_dependencies(coordinator_node ${DEPENDENCIES})
 target_link_libraries(coordinator_node dual_robot_coordinator yaml-cpp)
 
-# Install
 install(TARGETS
   gripper_action_server
   welder_action_server
@@ -122,7 +132,6 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
-# Install Python scripts
 install(PROGRAMS
   scripts/utils/add_collision_objects.py
   DESTINATION lib/${PROJECT_NAME}
@@ -130,12 +139,7 @@ install(PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
