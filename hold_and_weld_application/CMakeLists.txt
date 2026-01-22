@@ -73,6 +73,7 @@ add_library(hold_and_weld_kinematics SHARED
   src/kinematics/urdf_parser.cpp
 )
 ament_target_dependencies(hold_and_weld_kinematics
+  rclcpp
   ament_index_cpp
   urdf
 )
@@ -139,9 +140,30 @@ install(PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  set(ament_cmake_copyright_FOUND TRUE)
-  set(ament_cmake_cpplint_FOUND TRUE)
+  find_package(ament_cmake_gtest REQUIRED)
+
   ament_lint_auto_find_test_dependencies()
+
+  # URDF Parser Test
+  find_package(hold_and_weld_description REQUIRED)
+
+  ament_add_gtest(urdf_parser_test
+    test/urdf_parser_test.cpp
+  )
+  target_include_directories(urdf_parser_test PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_target_dependencies(urdf_parser_test
+    rclcpp
+    ament_index_cpp
+    urdf
+    hold_and_weld_description
+  )
+  target_link_libraries(urdf_parser_test
+    hold_and_weld_kinematics
+    Eigen3::Eigen
+  )
 endif()
 
 ament_package()
