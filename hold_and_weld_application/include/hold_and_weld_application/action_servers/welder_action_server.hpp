@@ -210,23 +210,23 @@ private:
     return pose;
   }
 
-    // MoveIt
+  // MoveIt interface
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
 
-    // Action server
+  // Action server
   rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
 
-    // Timer for delayed initialization
+  // Initialization
   rclcpp::TimerBase::SharedPtr init_timer_;
 
-    // Worker thread
+  // Worker thread for asynchronous goal execution
   std::thread worker_thread_;
   std::mutex work_mutex_;
   std::condition_variable work_cv_;
   std::shared_ptr<GoalHandleTriggerWelder> pending_goal_;
   bool shutdown_requested_ = false;
 
-    // Configuration
+  // Configuration
   WelderConfig config_;
   bool initialized_ = false;
 };

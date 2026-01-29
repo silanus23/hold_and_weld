@@ -25,12 +25,10 @@ namespace hold_and_weld
 GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
 : Node("gripper_action_server", options)
 {
-  // Build default YAML path
   std::string default_yaml =
     ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
     "/config/tasks/pick_place_targets.yaml";
 
-  // Declare parameters
   declare_parameter("arm_group_name", "robot1_gp25_arm");
   declare_parameter("positions_yaml", default_yaml);
   declare_parameter("gripper_joint_names", std::vector<std::string>{
@@ -44,18 +42,14 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
   RCLCPP_INFO(get_logger(), "  Arm group: %s", arm_group_name_.c_str());
 
-  // Initialize gripper action client
   gripper_action_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
         this, "/gripper_controller/follow_joint_trajectory");
 
-  // Initialize attached collision object publisher
   attached_collision_pub_ = create_publisher<moveit_msgs::msg::AttachedCollisionObject>(
         "/attached_collision_object", 10);
 
-  // Load job from YAML
   load_job_from_yaml(yaml_path);
 
-  // Delay MoveIt initialization
   init_timer_ = create_wall_timer(
         std::chrono::milliseconds(500),
         std::bind(&GripperActionServer::initialize_moveit, this));
@@ -90,19 +84,15 @@ void GripperActionServer::initialize_moveit()
     return;
   }
 
-  // Initialize action server
   action_server_ = rclcpp_action::create_server<TriggerGripper>(
     this,
     "trigger_gripper",
-    // Goal Callback
     [this](const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TriggerGripper::Goal> goal) {
       return this->handle_goal(uuid, goal);
     },
-    // Cancel Callback
     [this](const std::shared_ptr<GoalHandleTriggerGripper> goal_handle) {
       return this->handle_cancel(goal_handle);
     },
-    // Accepted Callback
     [this](const std::shared_ptr<GoalHandleTriggerGripper> goal_handle) {
       this->handle_accepted(goal_handle);
     }
@@ -145,7 +135,6 @@ void GripperActionServer::load_job_from_yaml(const std::string & yaml_path)
 
     YAML::Node config = YAML::LoadFile(yaml_path);
 
-    // Helper lambda to load a pose from YAML node
     auto load_pose = [this](const YAML::Node & pose_node, geometry_msgs::msg::Pose & pose) -> bool {
         if (!pose_node || !pose_node["position"] || !pose_node["orientation"]) {
           return false;
@@ -162,9 +151,8 @@ void GripperActionServer::load_job_from_yaml(const std::string & yaml_path)
         return true;
       };
 
-    // Load first target from targets array
     if (config["targets"] && config["targets"].size() > 0) {
-      const auto & target = config["targets"][0];      // Loading the first one for now
+      const auto & target = config["targets"][0];
 
       job_.target_id = target["target_id"].as<std::string>("unknown_part");
 
@@ -221,7 +209,7 @@ void GripperActionServer::handle_accepted(
 {
   std::lock_guard<std::mutex> lock(execution_mutex_);
 
-  // Wait for previous execution to complete if any
+  // Ensure only one job executes at a time by waiting for previous thread to finish
   if (execution_thread_ && execution_thread_->joinable()) {
     execution_thread_->join();
   }
@@ -230,8 +218,10 @@ void GripperActionServer::handle_accepted(
         &GripperActionServer::execute_job, this, goal_handle);
 }
 
+
 bool GripperActionServer::wait_for_planning_scene_update(int millis)
 {
+  // Wait for asynchronous planning scene updates to propagate
   auto start = this->now();
   auto duration = rclcpp::Duration::from_seconds(millis / 1000.0);
 
@@ -249,27 +239,25 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
   auto feedback = std::make_shared<TriggerGripper::Feedback>();
   auto result = std::make_shared<TriggerGripper::Result>();
 
-  // Copy job data with lock
   GripperJob job;
   {
     std::lock_guard<std::mutex> lock(config_mutex_);
     job = job_;
   }
 
-  int current_step_idx = 0;
-  const int total_steps = 6;   // Explicitly defined total for percentage calc
+  int current_step_index = 0;
+  const int total_steps = 6;
 
   auto update_feedback = [&](const std::string & step_name) {
       feedback->current_step = step_name;
-      feedback->completion_percentage = (static_cast<float>(current_step_idx) / total_steps) *
+      feedback->completion_percentage = (static_cast<float>(current_step_index) / total_steps) *
         100.0f;
       goal_handle->publish_feedback(feedback);
-      RCLCPP_INFO(get_logger(), "[Step %d/%d] %s", current_step_idx + 1, total_steps,
+      RCLCPP_INFO(get_logger(), "[Step %d/%d] %s", current_step_index + 1, total_steps,
         step_name.c_str());
-      current_step_idx++;
+      current_step_index++;
     };
 
-  // 1. Open
   update_feedback("opening_gripper");
   if (!set_gripper_position(open_position_)) {
     result->success = false;
@@ -278,7 +266,6 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  // Check Cancel
   if (goal_handle->is_canceling()) {
     result->success = false;
     result->message = "Canceled";
@@ -286,7 +273,6 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  // 2. Approach
   update_feedback("moving_to_approach");
   if (!move_to_pose(job.approach_pose, "approach")) {
     result->success = false;
@@ -295,7 +281,6 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  // 3. Pick Pose
   update_feedback("moving_to_pick");
   if (!move_to_pose(job.pick_pose, "pick")) {
     result->success = false;
@@ -304,7 +289,6 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  // 4. Close & Attach
   update_feedback("closing_gripper");
   if (!set_gripper_position(close_position_)) {
     result->success = false;
@@ -314,7 +298,6 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
   }
   attach_object(job.target_id);
 
-  // 5. Retract
   update_feedback("moving_to_retract");
   if (!move_to_pose(job.retract_pose, "retract")) {
     result->success = false;
@@ -323,13 +306,11 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  // Updating collision matrix
   RCLCPP_INFO(get_logger(), "Allowing collision between cube and workpiece");
   if (!allow_collision_for_placement()) {
     RCLCPP_WARN(get_logger(), "Failed to update collision matrix, continuing anyway");
   }
 
-  // 6. Place
   update_feedback("moving_to_place");
   if (!move_to_pose(job.place_pose, "place")) {
     result->success = false;
@@ -345,7 +326,7 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
 
   result->success = true;
   result->message = "Gripper job completed";
-  result->positions_executed = current_step_idx;
+  result->positions_executed = current_step_index;
   goal_handle->succeed(result);
 }
 
@@ -467,6 +448,7 @@ bool GripperActionServer::detach_object(const std::string & object_id)
 
 bool GripperActionServer::allow_collision_for_placement()
 {
+  // Allow collision between target and workpiece for placement
   auto get_request = std::make_shared<moveit_msgs::srv::GetPlanningScene::Request>();
   get_request->components.components =
     moveit_msgs::msg::PlanningSceneComponents::ALLOWED_COLLISION_MATRIX;
@@ -485,13 +467,14 @@ bool GripperActionServer::allow_collision_for_placement()
   auto current_scene = get_future.get();
   auto & acm = current_scene->scene.allowed_collision_matrix;
 
+  // Update ACM to allow collision between specified objects
   auto toggle_acm_bit = [&](const std::string & name1, const std::string & name2) {
       auto find_or_add = [&](const std::string & name) -> size_t {
           auto it = std::find(acm.entry_names.begin(), acm.entry_names.end(), name);
           if (it != acm.entry_names.end()) {
             return std::distance(acm.entry_names.begin(), it);
           }
-      // If not found, add it and resize the values
+          // Add new object and expand matrix
           acm.entry_names.push_back(name);
           size_t new_idx = acm.entry_names.size() - 1;
           acm.entry_values.resize(acm.entry_names.size());
@@ -504,12 +487,10 @@ bool GripperActionServer::allow_collision_for_placement()
       size_t idx1 = find_or_add(name1);
       size_t idx2 = find_or_add(name2);
 
-    // Set bit symmetrically
       acm.entry_values[idx1].enabled[idx2] = true;
       acm.entry_values[idx2].enabled[idx1] = true;
     };
 
-  // Using job.target_id instead of hardcoded strings
   toggle_acm_bit(job_.target_id, "workpiece");
 
   auto apply_request = std::make_shared<moveit_msgs::srv::ApplyPlanningScene::Request>();

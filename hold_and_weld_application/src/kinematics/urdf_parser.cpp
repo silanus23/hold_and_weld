@@ -241,6 +241,7 @@ std::vector<JointInfo> URDFParser::extract_joints_from_chain(
     throw std::runtime_error("Chain must have at least 2 links");
   }
 
+  // Accumulate fixed joint transforms
   Eigen::Isometry3d accumulated_fixed = Eigen::Isometry3d::Identity();
 
   for (size_t i = 1; i < link_chain.size(); ++i) {
@@ -295,7 +296,6 @@ std::vector<JointInfo> URDFParser::extract_joints_from_chain(
                         joint->name.c_str(), info.q_min, info.q_max);
     } else {
       if (info.is_revolute) {
-                // Continuous joint - use +/- pi as default range
         info.q_min = -M_PI;
         info.q_max = M_PI;
         RCLCPP_WARN(logger, "Joint '%s' is continuous, using default limits [-π, π]",

@@ -81,7 +81,7 @@ private:
    */
   void init_moveit();
 
-  // Temporary
+  // MoveIt interface for safety positioning
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> welder_move_group_;
 
   // Action clients

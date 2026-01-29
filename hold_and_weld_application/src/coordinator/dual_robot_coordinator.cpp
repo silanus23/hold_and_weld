@@ -74,13 +74,11 @@ void DualRobotCoordinator::run()
 
 void DualRobotCoordinator::init_moveit()
 {
-  // Cancel the timer so this only runs once
   init_timer_->cancel();
 
   welder_move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
         shared_from_this(), "robot2_gp25_welder_arm");
 
-  // Configure Safety Settings
   welder_move_group_->setPlanningTime(5.0);
   welder_move_group_->setNumPlanningAttempts(10);
   welder_move_group_->setMaxVelocityScalingFactor(0.2);
@@ -128,7 +126,6 @@ bool DualRobotCoordinator::execute_gripper_job()
 
   auto result_future = gripper_client_->async_get_result(goal_handle);
 
-    // Wait for result
   if (result_future.wait_for(std::chrono::hours(1)) != std::future_status::ready) {
     RCLCPP_ERROR(get_logger(), "Gripper job timed out!");
     return false;
@@ -151,6 +148,7 @@ bool DualRobotCoordinator::execute_gripper_job()
 
 bool DualRobotCoordinator::move_welder_to_safety()
 {
+  // TODO(@silanus23): Replace with configurable safe poses or teach pendant positions
   std::map<std::string, double> safety_joints;
   safety_joints["robot2_joint_1_s"] = 0.02367382699844696;
   safety_joints["robot2_joint_2_l"] = -0.26463564871997514;

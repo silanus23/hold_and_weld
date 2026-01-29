@@ -191,14 +191,16 @@ private:
   rclcpp::Publisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr attached_collision_pub_;
   rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr get_planning_scene_client_;
 
-  // Configuration (protected by mutex)
+  // Configuration
   std::mutex config_mutex_;
   GripperJob job_;
   bool job_loaded_ = false;
 
+  // Gripper position limits [m]
   double open_position_ = 0.15;
   double close_position_ = 0.0;
 
+  // Robot-specific configuration
   std::vector<std::string> gripper_joint_names_ = {
     "robot1_left_finger_joint", "robot1_right_finger_joint"};
   std::vector<std::string> touch_links_ = {
@@ -210,7 +212,7 @@ private:
   std::shared_ptr<std::thread> execution_thread_;
   std::mutex execution_mutex_;
 
-  // Delayed init
+  // Initialization
   rclcpp::TimerBase::SharedPtr init_timer_;
   bool initialized_ = false;
   std::string arm_group_name_;

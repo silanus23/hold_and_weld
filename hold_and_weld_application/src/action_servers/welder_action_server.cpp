@@ -31,11 +31,9 @@ WelderActionServer::WelderActionServer(const rclcpp::NodeOptions & options)
 : Node("welder_action_server", options)
 {
   RCLCPP_INFO(get_logger(), "Welder Action Server starting");
-
-  // Load configuration from YAML
   load_config_from_yaml();
 
-  // Start worker thread
+  // Dedicated worker thread decouples goal acceptance from welding execution
   worker_thread_ = std::thread(&WelderActionServer::worker_thread_func, this);
 
   // Delay MoveIt initialization to avoid bad_weak_ptr
@@ -107,6 +105,7 @@ void WelderActionServer::load_config_from_yaml()
 
 void WelderActionServer::worker_thread_func()
 {
+  // Wait for goals using condition variable to avoid busy-waiting
   while (!shutdown_requested_) {
     std::shared_ptr<GoalHandleTriggerWelder> goal_handle;
 
@@ -132,7 +131,7 @@ void WelderActionServer::worker_thread_func()
 
 void WelderActionServer::initialize_moveit()
 {
-  // Cancel timer - only run once
+  // Cancel timer only run once
   init_timer_->cancel();
 
   using namespace std::placeholders;
@@ -191,6 +190,7 @@ std::string WelderActionServer::find_latest_json()
       return "";
     }
 
+    // Sort by modification time (newest first)
     std::sort(json_files.begin(), json_files.end(),
       [](const auto & a, const auto & b) {
         return std::filesystem::last_write_time(a) >
@@ -224,7 +224,6 @@ std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string
       RCLCPP_ERROR(get_logger(), "JSON missing 'seams' key");
       return seams;
     }
-
 
     for (const auto & [seam_id, seam_data] : data["seams"].items()) {
       if (!seam_data.contains("poses")) {
@@ -321,7 +320,6 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     return;
   }
 
-  // Calculate total waypoints for global completion percentage
   int32_t total_waypoints = 0;
   for (const auto & seam : seams) {
     total_waypoints += static_cast<int32_t>(seam.poses.size());
@@ -372,7 +370,8 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     }
 
     publish_progress("approaching " + seam.seam_id, points_processed);
-    // Approach with retry
+
+    // Retry approach with 500ms delays - allows transient planning failures to recover
     bool approach_success = false;
     for (int attempt = 1; attempt <= config_.max_approach_retries; ++attempt) {
       if (goal_handle->is_canceling()) {
@@ -402,10 +401,10 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
       continue;
     }
 
-    // Execute path with retry
     feedback->current_step = "welding " + seam.seam_id;
     goal_handle->publish_feedback(feedback);
 
+    // Cartesian path requires precise continuous motion
     bool path_success = false;
     for (int attempt = 1; attempt <= config_.max_cartesian_retries; ++attempt) {
       if (goal_handle->is_canceling()) {
@@ -431,7 +430,6 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
       }
     }
     publish_progress("welding " + seam.seam_id, points_processed);
-    // Retract (always attempt)
     feedback->current_step = "retracting " + seam.seam_id;
     goal_handle->publish_feedback(feedback);
     retract_from_seam(waypoints.back());
@@ -448,7 +446,6 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     }
   }
 
-  // Build result message
   std::string msg = "Completed. Succeeded: ";
   for (size_t i = 0; i < succeeded_seams.size(); ++i) {
     if (i > 0) {msg += ", ";}
@@ -531,7 +528,6 @@ bool WelderActionServer::execute_cartesian_path(
   moveit_msgs::msg::RobotTrajectory trajectory;
   double fraction = move_group_->computeCartesianPath(
         waypoints, config_.cartesian_step_size, trajectory);
-
   if (fraction < config_.cartesian_path_threshold) {
     RCLCPP_ERROR(get_logger(), "Cartesian path only %.2f%% complete (threshold: %.2f%%)",
                     fraction * 100.0, config_.cartesian_path_threshold * 100.0);
@@ -540,10 +536,8 @@ bool WelderActionServer::execute_cartesian_path(
 
   RCLCPP_INFO(get_logger(), "Cartesian path %.2f%% complete, executing", fraction * 100.0);
 
-  // Execute trajectory
   auto execute_result = move_group_->execute(trajectory);
 
-  // Update feedback with global progress
   int32_t points_after_seam = points_before_seam + static_cast<int32_t>(waypoints.size());
   feedback->current_point = points_after_seam;
   feedback->completion_percentage = (total_waypoints > 0) ?
