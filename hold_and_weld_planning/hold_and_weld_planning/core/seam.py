@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Seam - Weld seam with geometry and generated poses."""
+"""Seam - Weld seam with geometry and generated poses.
+
+Provides a domain-specific wrapper around LineSegment for welding applications,
+managing both geometric data and generated trajectory poses.
+"""
+
+from typing import Any, Dict, List
 
 from .line_segment import LineSegment
 
@@ -23,21 +29,22 @@ class Seam:
     Wraps a LineSegment for geometry and holds weld-specific state (poses).
     """
 
-    def __init__(self, seam_dict):
-        """Initialize seam from YAML dictionary.
+    def __init__(self, seam_dict: Dict[str, List[float]]) -> None:
+        """Initialize seam from YAML/config dictionary.
 
         Args:
-            seam_dict: Dictionary with 'start' and 'end' keys.
+            seam_dict: Dictionary with 'start' and 'end' keys containing
+                [x, y, z] coordinates.
         """
         self.line_segment = LineSegment(seam_dict['start'], seam_dict['end'])
         self.poses = None
         self.is_generated = False
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         """Convert seam to dictionary for JSON export.
 
         Returns:
-            Dictionary with seam data and generated poses.
+            Dictionary with 'start', 'end', 'length_m', 'poses', and 'num_poses' keys.
 
         Raises:
             RuntimeError: If poses not generated yet.
@@ -53,7 +60,11 @@ class Seam:
             'num_poses': len(self.poses) if self.poses else 0
         }
 
-    def __repr__(self):
-        """Return string representation of Seam."""
+    def __repr__(self) -> str:
+        """Return string representation of Seam.
+
+        Returns:
+            String showing length and generation status.
+        """
         status = 'generated' if self.is_generated else 'not generated'
         return f'Seam(length={self.line_segment.length():.3f}m, {status})'

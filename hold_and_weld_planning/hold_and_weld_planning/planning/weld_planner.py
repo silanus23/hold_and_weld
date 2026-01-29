@@ -13,9 +13,17 @@
 # limitations under the License.
 
 
-"""Weld path planner - handles all geometric calculations for trajectory generation."""
+"""Weld path planner - handles all geometric calculations for trajectory generation.
+
+This module generates weld torch poses along seam paths based on joint type and
+welding parameters. It handles coordinate frame construction, work/travel angle
+application, and gap offset calculations for various joint configurations.
+"""
+
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
 
@@ -29,16 +37,20 @@ class WeldPlanner:
         't_joint', 'butt_joint', 'corner_joint', 'lap_joint', 'edge_joint'
     ]
 
-    def __init__(self, parameters):
+    def __init__(self, parameters: Dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
 
         Args:
             parameters: Dictionary with keys:
-                - joint_type: Type of weld joint
-                - work_angle_deg: Work angle in degrees
-                - travel_angle_deg: Travel angle in degrees
-                - gap_mm: Gap distance in millimeters
-                - num_points: Number of poses to generate per seam
+                - joint_type: Type of weld joint (str)
+                - work_angle_deg: Work angle in degrees (float)
+                - travel_angle_deg: Travel angle in degrees (float)
+                - gap_mm: Gap distance in millimeters (float)
+                - num_points: Number of poses to generate per seam (int)
+                
+        Raises:
+            ValueError: If joint_type unsupported, num_points out of range,
+                or gap_mm is non-positive.
         """
         self.joint_type = parameters['joint_type'].lower()
         self.work_angle_rad = np.radians(parameters['work_angle_deg'])
@@ -58,17 +70,22 @@ class WeldPlanner:
                 f"gap_mm must be positive, got {parameters['gap_mm']}"
             )
 
-    def generate_seam(self, seam, surface_info, lean_sign=1):
+    def generate_seam(
+        self,
+        seam: Any,
+        surface_info: Dict[str, List[float]],
+        lean_sign: int = 1
+    ) -> bool:
         """Generate poses for a seam. Modifies seam object in place.
 
         Args:
-            seam: Seam object to process.
-            surface_info: Dictionary with 'center' and 'normal' keys.
+            seam: Seam object with line_segment attribute to process.
+            surface_info: Dictionary with 'center' and 'normal' keys (lists of floats).
             lean_sign: Sign for lean/radial direction (+1 or -1), used for
-                lap_joint and corner_joint variants (default is 1).
+                lap_joint and corner_joint variants (default 1).
 
         Returns:
-            True if successful, False otherwise.
+            True if successful, False if error occurred.
         """
         try:
             surface_center = np.array(surface_info['center'], dtype=float)
@@ -131,15 +148,30 @@ class WeldPlanner:
             seam.is_generated = False
             return False
 
-    def requires_variants(self):
-        """Check if this joint type requires generating both +/- variants.
+    def requires_variants(self) -> bool:
+        """Check if this joint type requires generating both +/- lean variants.
 
         Returns:
-            True if lap_joint or corner_joint.
+            True if lap_joint or corner_joint, False otherwise.
         """
         return self.joint_type in ['lap_joint', 'corner_joint']
 
-    def _validate_seam(self, line, surface_center, surface_normal):
+    def _validate_seam(
+        self,
+        line: Any,
+        surface_center: NDArray,
+        surface_normal: NDArray
+    ) -> None:
+        """Validate seam geometry and position relative to surface.
+        
+        Args:
+            line: LineSegment object to validate.
+            surface_center: Center point of surface.
+            surface_normal: Normal vector of surface.
+            
+        Raises:
+            ValueError: If seam is degenerate, too long, or not on surface plane.
+        """
         if line.length() < 1e-6:
             raise ValueError('Seam is too short (degenerate)')
 
@@ -213,8 +245,8 @@ class WeldPlanner:
         return radial_direction
 
     def _get_main_direction(
-        self, surface_normal: np.ndarray, radial_direction: np.ndarray
-    ) -> np.ndarray:
+        self, surface_normal: NDArray, radial_direction: NDArray
+    ) -> NDArray:
         """Calculate main torch direction (base orientation before work angle).
 
         Args:
@@ -223,6 +255,9 @@ class WeldPlanner:
 
         Returns:
             Main direction vector (where torch points by default).
+            
+        Raises:
+            ValueError: If joint_type is unknown.
         """
         if self.joint_type in [
             't_joint', 'butt_joint', 'lap_joint', 'corner_joint'
@@ -235,20 +270,23 @@ class WeldPlanner:
 
     def _get_lean_direction(
         self,
-        surface_normal: np.ndarray,
-        radial_direction: np.ndarray,
+        surface_normal: NDArray,
+        radial_direction: NDArray,
         lean_sign: int = 1
-    ) -> np.ndarray:
+    ) -> NDArray:
         """Calculate lean direction (direction to apply work angle tilt).
 
         Args:
             surface_normal: Normal vector of surface.
             radial_direction: Radial direction from seam line to center.
             lean_sign: Sign multiplier for radial direction (+1 or -1), used
-                for lap/corner variants (default is 1).
+                for lap/corner variants (default 1).
 
         Returns:
             Lean direction vector (which way to tilt torch).
+            
+        Raises:
+            ValueError: If joint_type is unknown.
         """
         if self.joint_type in ['t_joint', 'butt_joint']:
             return radial_direction
@@ -261,9 +299,9 @@ class WeldPlanner:
 
     def _build_base_frame(
         self,
-        tangent: np.ndarray,
-        main_direction: np.ndarray,
-    ) -> tuple:
+        tangent: NDArray,
+        main_direction: NDArray,
+    ) -> Tuple[NDArray, NDArray, NDArray]:
         """Build orthonormal frame from tangent and main direction.
 
         Args:
@@ -285,11 +323,11 @@ class WeldPlanner:
 
     def _apply_work_angle(
         self,
-        normal: np.ndarray,
-        tangent: np.ndarray,
-        binormal: np.ndarray,
-        lean_direction: np.ndarray,
-    ) -> tuple:
+        normal: NDArray,
+        tangent: NDArray,
+        binormal: NDArray,
+        lean_direction: NDArray,
+    ) -> Tuple[NDArray, NDArray, NDArray]:
         """Apply work angle rotation, choosing direction that tilts toward lean.
 
         Args:
@@ -326,10 +364,10 @@ class WeldPlanner:
 
     def _apply_travel_angle(
         self,
-        normal: np.ndarray,
-        binormal: np.ndarray,
-        tangent: np.ndarray,
-    ) -> tuple:
+        normal: NDArray,
+        binormal: NDArray,
+        tangent: NDArray,
+    ) -> Tuple[NDArray, NDArray, NDArray]:
         """Apply travel angle rotation around binormal axis.
 
         Args:
@@ -349,20 +387,23 @@ class WeldPlanner:
 
     def _calculate_gap_offset(
         self,
-        surface_normal: np.ndarray,
-        radial_direction: np.ndarray,
+        surface_normal: NDArray,
+        radial_direction: NDArray,
         lean_sign: int = 1,
-    ) -> np.ndarray:
+    ) -> NDArray:
         """Calculate gap offset from seam based on joint type.
 
         Args:
             surface_normal: Normal vector of surface.
             radial_direction: Radial direction from seam line to center.
             lean_sign: Sign multiplier for radial direction (+1 or -1), used
-                for lap/corner variants (default is 1).
+                for lap/corner variants (default 1).
 
         Returns:
             Gap offset vector.
+            
+        Raises:
+            ValueError: If joint_type is unknown.
         """
         gap_component = self.gap_m / np.sqrt(2.0)
 
@@ -389,23 +430,23 @@ class WeldPlanner:
 
     def _build_pose_data(
         self,
-        position: np.ndarray,
-        tangent: np.ndarray,
-        binormal: np.ndarray,
-        normal: np.ndarray,
+        position: NDArray,
+        tangent: NDArray,
+        binormal: NDArray,
+        normal: NDArray,
         index: int,
-    ) -> dict:
-        """Build pose data dictionary.
+    ) -> Dict[str, Any]:
+        """Build pose data dictionary with position and orientation.
 
         Args:
             position: 3D position vector.
             tangent: Tangent vector (X-axis).
             binormal: Binormal vector (Y-axis will be -binormal).
             normal: Normal vector (Z-axis will be -normal).
-            index: Point index.
+            index: Point index in sequence.
 
         Returns:
-            Dictionary with pose data.
+            Dictionary with 'index', 'position', 'quaternion', and 'matrix' keys.
         """
         rot_matrix = np.column_stack([tangent, -binormal, -normal])
 

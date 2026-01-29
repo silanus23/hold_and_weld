@@ -12,9 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LineSegment - Pure geometry primitive for 3D line segments."""
+"""LineSegment - Pure geometry primitive for 3D line segments.
+
+Provides a reusable geometric primitive for representing line segments in 3D space.
+Useful for mesh edges, rays, seam paths, and other linear geometric entities.
+"""
+
+from typing import List
 
 import numpy as np
+from numpy.typing import NDArray
 
 
 class LineSegment:
@@ -24,17 +31,15 @@ class LineSegment:
     Reusable for mesh edges, rays, seams, etc.
     """
 
-    def __init__(self, start, end):
+    def __init__(self, start: List[float] | NDArray, end: List[float] | NDArray) -> None:
         """Initialize line segment from start and end points.
 
         Args:
-            start: Start point [x, y, z]
-            end: End point [x, y, z]
+            start: Start point [x, y, z] as list or numpy array.
+            end: End point [x, y, z] as list or numpy array.
 
         Raises:
-        ValueError
-            If points are not 3D
-
+            ValueError: If points are not 3D.
         """
         self.start = np.array(start, dtype=float)
         self.end = np.array(end, dtype=float)
@@ -42,50 +47,51 @@ class LineSegment:
         if self.start.shape != (3,) or self.end.shape != (3,):
             raise ValueError('Start and end must be 3D points [x, y, z]')
 
-    def length(self):
-        """Calculate segment length in meters."""
+    def length(self) -> float:
+        """Calculate segment length in meters.
+
+        Returns:
+            Length of the segment as a float.
+        """
         return float(np.linalg.norm(self.end - self.start))
 
-    def tangent(self):
+    def tangent(self) -> NDArray:
         """Calculate normalized tangent vector along the segment.
 
-        Returns
-        np.ndarray
-            Normalized direction vector from start to end
+        Returns:
+            Normalized direction vector from start to end.
 
         Raises:
-        ValueError
-            If segment is degenerate (zero length)
-
+            ValueError: If segment is degenerate (zero length).
         """
         length = self.length()
         if length < 1e-9:
             raise ValueError('Segment is degenerate (zero length)')
         return (self.end - self.start) / length
 
-    def midpoint(self):
-        """Get middle point of the line.
+    def midpoint(self) -> NDArray:
+        """Get middle point of the segment.
 
-        Returns
-        np.ndarray
-            Point at the exact midlle between start and end
-
+        Returns:
+            Point at the exact middle between start and end.
         """
         return (self.start + self.end) / 2.0
 
-    def point_at(self, t):
+    def point_at(self, t: float) -> NDArray:
         """Get point along segment at parameter t.
 
         Args:
-            t: Parameter value (0 = start, 1 = end)
+            t: Parameter value (0 = start, 1 = end).
 
-        Returns
-        np.ndarray
-            Point at parameter t
-
+        Returns:
+            Point at parameter t (linear interpolation).
         """
         return self.start + t * (self.end - self.start)
 
-    def __repr__(self):
-        """Return string representation of LineSegment."""
+    def __repr__(self) -> str:
+        """Return string representation of LineSegment.
+
+        Returns:
+            String showing segment length.
+        """
         return f'LineSegment(length={self.length():.3f}m)'

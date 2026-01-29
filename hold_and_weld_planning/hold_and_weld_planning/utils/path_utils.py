@@ -18,13 +18,16 @@
 from datetime import datetime
 import json
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 from ..core.seam import Seam
 
 
-def load_weld_job(yaml_path):
+def load_weld_job(
+    yaml_path: str | Path
+) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
     """Load weld job configuration from a YAML file.
 
     Args:
@@ -80,7 +83,9 @@ def load_weld_job(yaml_path):
     return seams, config['parameters'], config['surface']
 
 
-def load_urdf_config(yaml_path):
+def load_urdf_config(
+    yaml_path: str | Path
+) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
     """Load URDF-based weld configuration (URDF workflow).
 
     Args:
@@ -90,7 +95,7 @@ def load_urdf_config(yaml_path):
         A tuple containing:
         - seams: List of Seam objects.
         - parameters: Dictionary of weld parameters.
-        - workpiece_config: Dictionary with 'main_part' and 'extra_part'.
+        - workpiece_config: Dictionary with 'main_part' and 'secondary_part'.
 
     Raises:
         FileNotFoundError: If config file not found.
@@ -109,9 +114,9 @@ def load_urdf_config(yaml_path):
 
     if (
         'main_part' not in config['workpiece'] or
-        'extra_part' not in config['workpiece']
+        'secondary_part' not in config['workpiece']
     ):
-        raise ValueError("Config must have both 'main_part' and 'extra_part'")
+        raise ValueError("Config must have both 'main_part' and 'secondary_part'")
 
     if 'parameters' not in config:
         raise ValueError("Config missing 'parameters' section")
@@ -128,7 +133,11 @@ def load_urdf_config(yaml_path):
     return seams, config['parameters'], config['workpiece']
 
 
-def export_to_json(seams, output_path, metadata=None):
+def export_to_json(
+    seams: List[Seam],
+    output_path: str | Path,
+    metadata: Optional[Dict[str, Any]] = None
+) -> None:
     """Export generated seam poses to a JSON file.
 
     Args:
@@ -167,7 +176,7 @@ def export_to_json(seams, output_path, metadata=None):
         json.dump(data, f, indent=2)
 
 
-def auto_generate_output_path(input_path):
+def auto_generate_output_path(input_path: str | Path) -> Path:
     """Generate output path with timestamp relative to project root.
 
     The output directory will be:

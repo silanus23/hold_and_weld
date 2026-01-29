@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""URDF processor - handles package paths, xacro processing, and URDF parsing."""
+"""URDF processor - handles package paths, xacro processing, and URDF parsing.
+
+This module provides utilities for loading URDF/xacro files, resolving ROS package
+paths, and managing coordinate frame transformations for workpiece positioning.
+"""
 
 from pathlib import Path
+from typing import Any, List
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 from urdf_parser_py.urdf import URDF
 
@@ -28,11 +34,11 @@ class URDFProcessor:
     transformations.
     """
 
-    def __init__(self, urdf_path):
+    def __init__(self, urdf_path: str | Path) -> None:
         """Initialize URDF processor with URDF or xacro file.
 
         Args:
-            urdf_path: Path to URDF or xacro file.
+            urdf_path: Path to URDF or xacro file (accepts package:// URIs).
 
         Raises:
             FileNotFoundError: If file doesn't exist.
@@ -50,7 +56,9 @@ class URDFProcessor:
         self.world_rpy = np.array([0.0, 0.0, 0.0])
         self.world_transform = np.eye(4)
 
-    def set_world_pose(self, xyz, rpy):
+    def set_world_pose(
+        self, xyz: List[float] | NDArray, rpy: List[float] | NDArray
+    ) -> None:
         """Set world pose of the workpiece.
 
         Args:
@@ -61,31 +69,31 @@ class URDFProcessor:
         self.world_rpy = np.array(rpy, dtype=float)
         self.world_transform = self._build_transform_matrix(xyz, rpy)
 
-    def get_link(self, link_name):
-        """Get link by name.
+    def get_link(self, link_name: str) -> Any:
+        """Get link by name from the URDF model.
 
         Args:
-            link_name: Name of the link.
+            link_name: Name of the link to retrieve.
 
         Returns:
             Link object from URDF.
 
         Raises:
-            ValueError: If link not found.
+            ValueError: If link not found in URDF.
         """
         for link in self.robot.links:
             if link.name == link_name:
                 return link
         raise ValueError(f"Link '{link_name}' not found in URDF")
 
-    def get_collision_transform(self, collision):
+    def get_collision_transform(self, collision: Any) -> NDArray:
         """Get transformation matrix from collision origin.
 
         Args:
             collision: Collision object from URDF.
 
         Returns:
-            4x4 transformation matrix.
+            4x4 transformation matrix (homogeneous transform).
         """
         if collision.origin is not None:
             xyz = collision.origin.xyz if collision.origin.xyz else [0, 0, 0]
@@ -96,17 +104,18 @@ class URDFProcessor:
 
         return self._build_transform_matrix(xyz, rpy)
 
-    def _resolve_package_path(self, path_str):
+    def _resolve_package_path(self, path_str: str | Path) -> Path:
         """Resolve package:// URI to absolute path.
 
         Args:
-            path_str: Path string, either absolute or package://.
+            path_str: Path string, either absolute or package:// URI.
 
         Returns:
-            Resolved absolute path.
+            Resolved absolute path as Path object.
 
         Raises:
             FileNotFoundError: If package not found or file doesn't exist.
+            ValueError: If package path format is invalid.
         """
         path_str = str(path_str)
 
@@ -140,7 +149,7 @@ class URDFProcessor:
 
         return resolved
 
-    def _process_xacro(self, xacro_path):
+    def _process_xacro(self, xacro_path: Path) -> str:
         """Process xacro file to URDF string.
 
         Args:
@@ -159,8 +168,18 @@ class URDFProcessor:
         except Exception as e:
             raise ValueError(f"Failed to process xacro '{xacro_path}': {e}")
 
-    def _build_transform_matrix(self, xyz, rpy):
-        """Build 4x4 transformation matrix from position and orientation."""
+    def _build_transform_matrix(
+        self, xyz: List[float] | NDArray, rpy: List[float] | NDArray
+    ) -> NDArray:
+        """Build 4x4 transformation matrix from position and orientation.
+
+        Args:
+            xyz: [x, y, z] position vector.
+            rpy: [roll, pitch, yaw] orientation in radians.
+
+        Returns:
+            4x4 homogeneous transformation matrix.
+        """
         R = Rotation.from_euler('xyz', rpy).as_matrix()
         T = np.eye(4)
         T[:3, :3] = R

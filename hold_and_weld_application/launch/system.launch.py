@@ -1,18 +1,19 @@
 # Copyright 2025 Berkan Tali
 #
-# Licensed under the Apache License, Version 2.0 (the 'License');
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an 'AS IS' BASIS,
+# distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Complete hold_and_weld system launch file.
+"""
+Complete hold_and_weld system launch file.
 
 Launches: Gazebo, MoveIt, RViz, and application nodes.
 """
@@ -378,7 +379,7 @@ def generate_launch_description():
     # APPLICATION NODES
     welder_action_server = Node(
         package='hold_and_weld_application',
-        executable='welder_server_node',
+        executable='welder_server',
         name='welder_action_server',
         output='screen',
         parameters=[
@@ -395,7 +396,7 @@ def generate_launch_description():
 
     gripper_action_server = Node(
         package='hold_and_weld_application',
-        executable='gripper_server_node',
+        executable='gripper_server',
         name='gripper_action_server',
         output='screen',
         parameters=[
@@ -412,7 +413,7 @@ def generate_launch_description():
 
     coordinator_node = Node(
         package='hold_and_weld_application',
-        executable='coordinator_node',
+        executable='dual_robot_coordinator',
         name='dual_robot_coordinator',
         output='screen',
         parameters=[

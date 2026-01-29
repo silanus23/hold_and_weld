@@ -14,7 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""URDF-based seam generator - auto-detects surfaces and joint types from geometry."""
+"""URDF-based seam generator - auto-detects surfaces and joint types from geometry.
+
+This module provides a command-line interface for generating weld seam trajectories
+by automatically analyzing URDF geometry files. It detects joint types (butt, lap,
+T-joint, etc.) and generates appropriate seam paths with configurable welding parameters.
+"""
 
 import argparse
 from pathlib import Path
@@ -32,7 +37,14 @@ from hold_and_weld_planning.utils import (
 
 
 def parse_arguments():
-    """Parse command line arguments."""
+    """Parse command line arguments for URDF-based seam generation.
+
+    Returns:
+        argparse.Namespace: Parsed arguments containing:
+            - input: Path to input YAML configuration file
+            - output: Optional path to output JSON file
+            - verbose: Flag for detailed output
+    """
     parser = argparse.ArgumentParser(
         description='Generate weld seams using URDF geometry (auto-detect surfaces)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -77,7 +89,15 @@ Examples:
 
 
 def main():
-    """Orchestrate URDF-based seam generation."""
+    """Orchestrate URDF-based seam generation workflow.
+
+    Loads URDF configuration, analyzes workpiece geometry to detect joint types,
+    generates seam trajectories with specified welding parameters, and exports
+    results to JSON format.
+
+    Returns:
+        int: Exit code (0 for success, 1 for error)
+    """
     args = parse_arguments()
 
     if args.input is None:
@@ -103,7 +123,7 @@ def main():
         planner = URDFSeamPlanner(workpiece_config)
 
         main_link = workpiece_config['main_part']['link_name']
-        extra_link = workpiece_config['extra_part']['link_name']
+        secondary_link = workpiece_config['secondary_part']['link_name']
 
         if args.verbose:
             print(
@@ -112,10 +132,10 @@ def main():
             )
             print(f'  Main link: {main_link}')
             print(
-                f'  Extra part URDF: '
-                f'{workpiece_config["extra_part"]["urdf_path"]}'
+                f'  Secondary part URDF: '
+                f'{workpiece_config["secondary_part"]["urdf_path"]}'
             )
-            print(f'  Extra link: {extra_link}')
+            print(f'  Secondary link: {secondary_link}')
             print()
 
         joint_type, surface_info, success = planner.generate_seams(
