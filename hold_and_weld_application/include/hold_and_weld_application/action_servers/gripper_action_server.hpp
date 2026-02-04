@@ -129,7 +129,10 @@ private:
    * @param yaml_path Path to the YAML configuration file.
    */
   void load_job_from_yaml(const std::string & yaml_path);
-
+  /**
+   * @brief Load object configuration (base_link, child_link) from shared objects.yaml.
+   */
+  void load_object_config();
   // Gripper control
   /**
    * @brief Set the gripper to a specific position.
@@ -177,7 +180,7 @@ private:
   bool wait_for_planning_scene_update(int millis);
 
   /**
-   * @brief Allow collision between cube and workpiece for placement.
+   * @brief Allow collision between child_link (cube) and base_link (workpiece) for placement.
    * @return true if collision matrix was updated successfully, false otherwise.
    */
   bool allow_collision_for_placement();
@@ -196,6 +199,9 @@ private:
   GripperJob job_;
   bool job_loaded_ = false;
 
+  // Object IDs from shared config
+  std::string base_link_id_ = "base_link";  // base_link ID from URDF
+  
   // Gripper position limits [m]
   double open_position_ = 0.15;
   double close_position_ = 0.0;
@@ -207,6 +213,7 @@ private:
     "robot1_tool0", "robot1_link_6_t", "robot1_flange",
     "robot1_gripper_base", "robot1_left_finger", "robot1_right_finger"};
   std::string attach_link_ = "robot1_link_6_t";
+  int max_planning_retries_ = 3;
 
   // Execution thread management
   std::shared_ptr<std::thread> execution_thread_;
@@ -214,6 +221,7 @@ private:
 
   // Initialization
   rclcpp::TimerBase::SharedPtr init_timer_;
+  rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
   bool initialized_ = false;
   std::string arm_group_name_;
 };

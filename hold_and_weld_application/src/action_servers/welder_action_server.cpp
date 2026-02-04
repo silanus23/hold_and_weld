@@ -162,18 +162,42 @@ void WelderActionServer::initialize_moveit()
 std::string WelderActionServer::find_latest_json()
 {
   std::string generated_dir;
+  
   try {
-    generated_dir = ament_index_cpp::get_package_share_directory("hold_and_weld_planning") +
-      "/generated";
+    std::string pkg_share = ament_index_cpp::get_package_share_directory("hold_and_weld_application");
+    
+    // CURRENT STRUCTURE:
+    // pkg_share = /home/berkan/ros2_yaskawa/install/hold_and_weld_application/share/hold_and_weld_application
+    
+    std::filesystem::path share_path(pkg_share);
+    
+    // Go up 4 levels to reach the workspace root:
+    // 1: .../share/
+    // 2: .../hold_and_weld_application/
+    // 3: .../install/
+    // 4: /home/berkan/ros2_yaskawa/ (Workspace Root)
+    std::filesystem::path ws_root = share_path.parent_path().parent_path().parent_path().parent_path();
+    
+    // Navigate to source trajectory directory (build-independent)
+    std::filesystem::path src_path = ws_root / "src" / "hold_and_weld" / "hold_and_weld_application" / "trajectories";
+    
+    if (std::filesystem::exists(src_path)) {
+      generated_dir = src_path.string();
+      RCLCPP_INFO(get_logger(), "Using source trajectory dir: %s", generated_dir.c_str());
+    } else {
+      // Fallback to install directory if source isn't found
+      generated_dir = pkg_share + "/trajectories";
+      RCLCPP_WARN(get_logger(), "Source dir not found, using install: %s", generated_dir.c_str());
+    }
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(get_logger(), "Failed to get hold_and_weld_planning package: %s", e.what());
+    RCLCPP_ERROR(get_logger(), "Failed to locate package: %s", e.what());
     return "";
   }
 
   RCLCPP_INFO(get_logger(), "Searching for JSON in: %s", generated_dir.c_str());
 
   if (!std::filesystem::exists(generated_dir)) {
-    RCLCPP_ERROR(get_logger(), "Generated directory does not exist: %s", generated_dir.c_str());
+    RCLCPP_ERROR(get_logger(), "Trajectory directory does not exist: %s", generated_dir.c_str());
     return "";
   }
 

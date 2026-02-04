@@ -33,6 +33,8 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
   declare_parameter("positions_yaml", default_yaml);
   declare_parameter("gripper_joint_names", std::vector<std::string>{
       "robot1_left_finger_joint", "robot1_right_finger_joint"});
+  declare_parameter("auto_trigger", false);
+  declare_parameter("auto_trigger_delay_sec", 3.0);
 
   arm_group_name_ = get_parameter("arm_group_name").as_string();
   gripper_joint_names_ = get_parameter("gripper_joint_names").as_string_array();
@@ -59,6 +61,32 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
 
   get_planning_scene_client_ =
     create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
+
+  // Load base_link_id from objects.yaml
+  load_object_config();
+}
+
+void GripperActionServer::load_object_config()
+{
+  try {
+    std::string objects_yaml_path =
+      ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
+      "/config/collision_objects/objects.yaml";
+
+    YAML::Node config = YAML::LoadFile(objects_yaml_path);
+    
+    if (config["/**"] && config["/**"]["ros__parameters"] && 
+        config["/**"]["ros__parameters"]["base_link"]) {
+      auto base_link = config["/**"]["ros__parameters"]["base_link"];
+      if (base_link["id"]) {
+        base_link_id_ = base_link["id"].as<std::string>();
+        RCLCPP_INFO(get_logger(), "Loaded base_link_id: %s", base_link_id_.c_str());
+      }
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Could not load object config, using default base_link_id: %s", 
+                e.what());
+  }
 }
 
 void GripperActionServer::initialize_moveit()
@@ -106,6 +134,92 @@ void GripperActionServer::initialize_moveit()
     RCLCPP_INFO(get_logger(), "  Job loaded for target: %s", job_.target_id.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "  No job loaded!");
+  }
+
+  // Auto-trigger if enabled
+  bool auto_trigger = get_parameter("auto_trigger").as_bool();
+  if (auto_trigger && job_loaded_) {
+    double delay = get_parameter("auto_trigger_delay_sec").as_double();
+    RCLCPP_INFO(get_logger(), "Auto-trigger enabled, will start in %.1f seconds", delay);
+    
+    auto_trigger_timer_ = create_wall_timer(
+      std::chrono::milliseconds(static_cast<int>(delay * 1000)),
+      [this]() {
+        auto_trigger_timer_->cancel();
+        RCLCPP_INFO(get_logger(), "Auto-triggering gripper action...");
+        
+        // Execute the job directly in a new thread
+        std::lock_guard<std::mutex> exec_lock(execution_mutex_);
+        if (execution_thread_ && execution_thread_->joinable()) {
+          execution_thread_->join();
+        }
+        
+        execution_thread_ = std::make_shared<std::thread>(
+          [this]() {
+            auto feedback = std::make_shared<TriggerGripper::Feedback>();
+            
+            GripperJob job;
+            {
+              std::lock_guard<std::mutex> lock(config_mutex_);
+              job = job_;
+            }
+
+            int current_step_index = 0;
+            const int total_steps = 6;
+
+            auto update_feedback = [&](const std::string & step_name) {
+                RCLCPP_INFO(get_logger(), "[Auto-Step %d/%d] %s", 
+                           current_step_index + 1, total_steps, step_name.c_str());
+                current_step_index++;
+              };
+
+            update_feedback("opening_gripper");
+            if (!set_gripper_position(open_position_)) {
+              RCLCPP_ERROR(get_logger(), "Failed to open gripper");
+              return;
+            }
+
+            update_feedback("moving_to_approach");
+            if (!move_to_pose(job.approach_pose, "approach")) {
+              RCLCPP_ERROR(get_logger(), "Failed to move to approach");
+              return;
+            }
+
+            update_feedback("moving_to_pick");
+            if (!move_to_pose(job.pick_pose, "pick")) {
+              RCLCPP_ERROR(get_logger(), "Failed to move to pick");
+              return;
+            }
+
+            update_feedback("closing_gripper");
+            if (!set_gripper_position(close_position_)) {
+              RCLCPP_ERROR(get_logger(), "Failed to close gripper");
+              return;
+            }
+            attach_object(job.target_id);
+
+            update_feedback("moving_to_retract");
+            if (!move_to_pose(job.retract_pose, "retract")) {
+              RCLCPP_ERROR(get_logger(), "Failed to move to retract");
+              return;
+            }
+
+            RCLCPP_INFO(get_logger(), "Allowing collision between child_link and base_link");
+            if (!allow_collision_for_placement()) {
+              RCLCPP_WARN(get_logger(), "Failed to update collision matrix, continuing anyway");
+            }
+
+            update_feedback("moving_to_place");
+            if (!move_to_pose(job.place_pose, "place")) {
+              RCLCPP_ERROR(get_logger(), "Failed to move to place");
+              return;
+            }
+
+            RCLCPP_INFO(get_logger(), "[Auto-trigger] Job completed successfully!");
+          }
+        );
+      }
+    );
   }
 }
 
@@ -306,7 +420,7 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  RCLCPP_INFO(get_logger(), "Allowing collision between cube and workpiece");
+  RCLCPP_INFO(get_logger(), "Allowing collision between child_link and base_link");
   if (!allow_collision_for_placement()) {
     RCLCPP_WARN(get_logger(), "Failed to update collision matrix, continuing anyway");
   }
@@ -392,27 +506,45 @@ bool GripperActionServer::move_to_pose(
                pose.position.y,
                pose.position.z);
 
-  move_group_->setPoseTarget(pose);
+  // Retry planning with delays to handle transient failures
+  for (int attempt = 1; attempt <= max_planning_retries_; ++attempt) {
+    move_group_->setPoseTarget(pose);
 
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
-  bool success = (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    bool success = (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
-  if (success) {
-    RCLCPP_INFO(get_logger(), "[%s] Executing", step_name.c_str());
-    auto exec_result = move_group_->execute(plan);
+    if (success) {
+      RCLCPP_INFO(get_logger(), "[%s] Executing", step_name.c_str());
+      auto exec_result = move_group_->execute(plan);
 
-    if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_ERROR(get_logger(), "[%s] Execution failed!", step_name.c_str());
-      return false;
+      if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
+        RCLCPP_ERROR(get_logger(), "[%s] Execution failed!", step_name.c_str());
+        
+        if (attempt < max_planning_retries_) {
+          RCLCPP_WARN(get_logger(), "[%s] Retrying execution (attempt %d/%d)",
+                      step_name.c_str(), attempt, max_planning_retries_);
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+          continue;
+        }
+        return false;
+      }
+
+      wait_for_planning_scene_update(timing::MOTION_SETTLE_TIME_MS);
+      RCLCPP_INFO(get_logger(), "[%s] Done.", step_name.c_str());
+      return true;
+    } else {
+      RCLCPP_WARN(get_logger(), "[%s] Planning attempt %d/%d failed",
+                  step_name.c_str(), attempt, max_planning_retries_);
+      
+      if (attempt < max_planning_retries_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      }
     }
-
-    wait_for_planning_scene_update(timing::MOTION_SETTLE_TIME_MS);
-    RCLCPP_INFO(get_logger(), "[%s] Done.", step_name.c_str());
-    return true;
-  } else {
-    RCLCPP_ERROR(get_logger(), "[%s] Planning failed!", step_name.c_str());
-    return false;
   }
+
+  RCLCPP_ERROR(get_logger(), "[%s] Planning failed after %d attempts!",
+               step_name.c_str(), max_planning_retries_);
+  return false;
 }
 
 bool GripperActionServer::attach_object(const std::string & object_id)
@@ -448,7 +580,7 @@ bool GripperActionServer::detach_object(const std::string & object_id)
 
 bool GripperActionServer::allow_collision_for_placement()
 {
-  // Allow collision between target and workpiece for placement
+  // Allow collision between child_link and base_link for placement
   auto get_request = std::make_shared<moveit_msgs::srv::GetPlanningScene::Request>();
   get_request->components.components =
     moveit_msgs::msg::PlanningSceneComponents::ALLOWED_COLLISION_MATRIX;
@@ -491,7 +623,8 @@ bool GripperActionServer::allow_collision_for_placement()
       acm.entry_values[idx2].enabled[idx1] = true;
     };
 
-  toggle_acm_bit(job_.target_id, "workpiece");
+  // Use base_link_id from config
+  toggle_acm_bit(job_.target_id, base_link_id_);
 
   auto apply_request = std::make_shared<moveit_msgs::srv::ApplyPlanningScene::Request>();
   apply_request->scene.allowed_collision_matrix = acm;
