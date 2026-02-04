@@ -1,0 +1,21 @@
+# MoveToPose.action
+# Action for moving robot to a target position in joint or Cartesian space
+
+# Goal
+int32 JOINT_SPACE = 0
+int32 CARTESIAN_SPACE = 1
+
+int32 mode                                    # Movement mode: JOINT_SPACE or CARTESIAN_SPACE
+string[] joint_names                          # Joint names (used when mode = JOINT_SPACE)
+float64[] joint_positions                     # Joint positions (used when mode = JOINT_SPACE)
+geometry_msgs/Pose cartesian_target           # Cartesian target (used when mode = CARTESIAN_SPACE)
+string move_group_name                        # MoveIt move group name (e.g., "robot2_gp25_welder_arm")
+---
+# Result
+bool success
+string message
+float64 execution_time_sec
+---
+# Feedback
+string current_step              # Current operation: "planning", "executing", etc.
+float32 completion_percentage    # 0.0 to 100.0

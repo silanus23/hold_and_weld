@@ -10,7 +10,7 @@ gripper:
     - robot1_left_finger
     - robot1_right_finger
 targets:
-  - target_id: "target_cube"
+  - target_id: "child_link"
     approach_pose:
       position:
         x: 1.2

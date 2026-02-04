@@ -36,6 +36,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ExecuteWeld.action"
   "action/TriggerGripper.action"
   "action/TriggerWelder.action"
+  "action/MoveToPose.action"
   DEPENDENCIES geometry_msgs
 )
 
@@ -63,6 +64,7 @@ target_link_libraries(hold_and_weld_kinematics
 add_library(hold_and_weld_action_servers SHARED
   src/action_servers/gripper_action_server.cpp
   src/action_servers/welder_action_server.cpp
+  src/action_servers/move_to_pose_action_server.cpp
 )
 
 ament_target_dependencies(hold_and_weld_action_servers
@@ -122,6 +124,18 @@ ament_target_dependencies(welder_server
   rclcpp
 )
 
+add_executable(move_to_pose_server
+  src/action_servers/move_to_pose_server_main.cpp
+)
+
+target_link_libraries(move_to_pose_server
+  hold_and_weld_action_servers
+)
+
+ament_target_dependencies(move_to_pose_server
+  rclcpp
+)
+
 add_executable(dual_robot_coordinator
   src/coordinator/coordinator_main.cpp
 )
@@ -175,6 +189,7 @@ install(TARGETS
 install(TARGETS
   gripper_server
   welder_server
+  move_to_pose_server
   dual_robot_coordinator
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -197,7 +212,12 @@ install(DIRECTORY action/
 
 install(PROGRAMS
   scripts/utils/add_collision_objects.py
+  scripts/magic_wand.py
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY trajectories/
+  DESTINATION share/${PROJECT_NAME}/trajectories
 )
 
 ament_export_dependencies(
