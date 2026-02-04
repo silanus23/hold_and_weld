@@ -13,53 +13,40 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Add collision objects to MoveIt planning scene."""
+"""Add collision objects to MoveIt planning scene from URDF files."""
 
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject
+import os
 import rclpy
 from rclpy.node import Node
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
+import subprocess
+import xml.etree.ElementTree as ET
+import yaml
 
 
 class AddCollisionObjects(Node):
-    """Combined node to add both cube and workpiece."""
+    """Combined node to add both base_link and child_link from URDF files."""
 
     def __init__(self):
         """Initialize the collision objects node."""
         super().__init__('add_objects_to_scene')
 
-        # Cube parameters
-        self.declare_parameter('cube_size', 0.25)
-        self.declare_parameter('cube_x', 1.2)
-        self.declare_parameter('cube_y', 0.3)
-        self.declare_parameter('cube_z', 0.125)
+        # Load configuration from YAML
+        app_pkg = get_package_share_directory('hold_and_weld_application')
+        desc_pkg = get_package_share_directory('hold_and_weld_description')
+        objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
+        
+        with open(objects_yaml_path, 'r') as file:
+            objects_yaml_dict = yaml.safe_load(file)
+        objects_config = objects_yaml_dict.get('/**', {}).get('ros__parameters', {})
 
-        # Workpiece parameters
-        self.declare_parameter('length', 0.80)
-        self.declare_parameter('width', 0.40)
-        self.declare_parameter('height', 0.30)
-        self.declare_parameter('workpiece_x', 1.2)
-        self.declare_parameter('workpiece_y', -0.5)
-        self.declare_parameter('workpiece_z', 0.65)
-
-        self.declare_parameter('frame_id', 'world')
-
-        cube_size = self.get_parameter('cube_size').value
-        cube_x = self.get_parameter('cube_x').value
-        cube_y = self.get_parameter('cube_y').value
-        cube_z = self.get_parameter('cube_z').value
-
-        length = self.get_parameter('length').value
-        width = self.get_parameter('width').value
-        height = self.get_parameter('height').value
-        workpiece_x = self.get_parameter('workpiece_x').value
-        workpiece_y = self.get_parameter('workpiece_y').value
-        workpiece_z = self.get_parameter('workpiece_z').value
-
-        frame_id = self.get_parameter('frame_id').value
-
+        # Get configuration
+        frame_id = objects_config.get('frame_id', 'world')
+        
         self.collision_pub = self.create_publisher(
             CollisionObject, '/collision_object', 10
         )
@@ -69,60 +56,99 @@ class AddCollisionObjects(Node):
         while self.collision_pub.get_subscription_count() < 1:
             rclpy.spin_once(self, timeout_sec=0.1)
 
-        cube_obj = CollisionObject()
-        cube_obj.header = Header()
-        cube_obj.header.frame_id = frame_id
-        cube_obj.id = 'target_cube'
+        # Add child_link from URDF
+        child_link_config = objects_config.get('child_link', {})
+        self.add_object_from_urdf(
+            child_link_config.get('urdf_path', ''),
+            child_link_config.get('id', 'child_link'),
+            child_link_config.get('pose', {}),
+            frame_id,
+            desc_pkg
+        )
 
-        cube_primitive = SolidPrimitive()
-        cube_primitive.type = SolidPrimitive.BOX
-        cube_primitive.dimensions = [cube_size, cube_size, cube_size]
+        # Add base_link from URDF
+        base_link_config = objects_config.get('base_link', {})
+        self.add_object_from_urdf(
+            base_link_config.get('urdf_path', ''),
+            base_link_config.get('id', 'base_link'),
+            base_link_config.get('pose', {}),
+            frame_id,
+            desc_pkg
+        )
 
-        cube_pose = Pose()
-        cube_pose.position.x = cube_x
-        cube_pose.position.y = cube_y
-        cube_pose.position.z = cube_z
-        cube_pose.orientation.w = 1.0
+    def add_object_from_urdf(self, urdf_path, object_id, pose_config, frame_id, desc_pkg):
+        """Add collision object by parsing URDF file."""
+        full_urdf_path = os.path.join(desc_pkg, urdf_path)
+        
+        # Process xacro to get URDF
+        try:
+            result = subprocess.run(
+                ['xacro', full_urdf_path],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            urdf_content = result.stdout
+        except subprocess.CalledProcessError as e:
+            self.get_logger().error(f'Failed to process xacro: {e}')
+            return
 
-        cube_obj.primitives = [cube_primitive]
-        cube_obj.primitive_poses = [cube_pose]
-        cube_obj.operation = CollisionObject.ADD
+        # Parse URDF XML
+        try:
+            root = ET.fromstring(urdf_content)
+        except ET.ParseError as e:
+            self.get_logger().error(f'Failed to parse URDF: {e}')
+            return
+
+        # Create collision object
+        collision_obj = CollisionObject()
+        collision_obj.header = Header()
+        collision_obj.header.frame_id = frame_id
+        collision_obj.id = object_id
+
+        # Extract collision geometry from first link
+        link = root.find('.//link')
+        if link is None:
+            self.get_logger().error(f'No link found in URDF for {object_id}')
+            return
+
+        collision = link.find('collision')
+        if collision is None:
+            self.get_logger().error(f'No collision geometry found for {object_id}')
+            return
+
+        geometry = collision.find('geometry')
+        if geometry is None:
+            self.get_logger().error(f'No geometry found in collision for {object_id}')
+            return
+
+        # Parse geometry (box, sphere, cylinder)
+        box = geometry.find('box')
+        if box is not None:
+            size_attr = box.get('size')
+            if size_attr:
+                sizes = [float(x) for x in size_attr.split()]
+                primitive = SolidPrimitive()
+                primitive.type = SolidPrimitive.BOX
+                primitive.dimensions = sizes
+                collision_obj.primitives = [primitive]
+        
+        # Set pose
+        pose = Pose()
+        pose.position.x = pose_config.get('x', 0.0)
+        pose.position.y = pose_config.get('y', 0.0)
+        pose.position.z = pose_config.get('z', 0.0)
+        pose.orientation.w = 1.0
+        
+        collision_obj.primitive_poses = [pose]
+        collision_obj.operation = CollisionObject.ADD
 
         self.get_logger().info(
-            f'Adding cube to planning scene: size={cube_size}, '
-            f'position=({cube_x}, {cube_y}, {cube_z})'
+            f'Adding {object_id} to planning scene from URDF: {urdf_path}'
         )
-        self.collision_pub.publish(cube_obj)
+        self.collision_pub.publish(collision_obj)
         rclpy.spin_once(self, timeout_sec=0.5)
-        self.get_logger().info('Cube added to planning scene successfully!')
-
-        workpiece_obj = CollisionObject()
-        workpiece_obj.header = Header()
-        workpiece_obj.header.frame_id = frame_id
-        workpiece_obj.id = 'workpiece'
-
-        workpiece_primitive = SolidPrimitive()
-        workpiece_primitive.type = SolidPrimitive.BOX
-        workpiece_primitive.dimensions = [length, width, height]
-
-        workpiece_pose = Pose()
-        workpiece_pose.position.x = workpiece_x
-        workpiece_pose.position.y = workpiece_y
-        workpiece_pose.position.z = workpiece_z
-        workpiece_pose.orientation.w = 1.0
-
-        workpiece_obj.primitives = [workpiece_primitive]
-        workpiece_obj.primitive_poses = [workpiece_pose]
-        workpiece_obj.operation = CollisionObject.ADD
-
-        self.get_logger().info(
-            f'Adding workpiece to planning scene: '
-            f'size=({length}, {width}, {height}), '
-            f'position=({workpiece_x}, {workpiece_y}, {workpiece_z})'
-        )
-        self.collision_pub.publish(workpiece_obj)
-        rclpy.spin_once(self, timeout_sec=0.5)
-        self.get_logger().info('Workpiece added to planning scene successfully!')
+        self.get_logger().info(f'{object_id} added to planning scene successfully!')
 
 
 def main(args=None):

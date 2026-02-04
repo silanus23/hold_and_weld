@@ -158,29 +158,44 @@ def generate_launch_description():
         'move_group': {'planning_plugins': ['ompl_interface/OMPLPlanner']}
     }
 
-    # OBJECT DESCRIPTIONS (CUBE & WORKPIECE)
-    cube_xacro_file = PathJoinSubstitution([
+    # LOAD OBJECT CONFIGURATION FROM YAML
+    objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
+    with open(objects_yaml_path, 'r') as file:
+        objects_yaml_dict = yaml.safe_load(file)
+    objects_config = objects_yaml_dict.get('/**', {}).get('ros__parameters', {})
+
+    # OBJECT DESCRIPTIONS (CHILD_LINK & BASE_LINK)
+    # Extract all object parameters first
+    child_link_urdf_path = objects_config.get('child_link', {}).get('urdf_path', '')
+    child_link_spawn_name = objects_config.get('child_link', {}).get('spawn_name', 'child_link')
+    child_link_pose = objects_config.get('child_link', {}).get('pose', {})
+    
+    base_link_urdf_path = objects_config.get('base_link', {}).get('urdf_path', '')
+    base_link_spawn_name = objects_config.get('base_link', {}).get('spawn_name', 'base_link')
+    base_link_pose = objects_config.get('base_link_collision', {}).get('pose', {})
+    
+    child_link_xacro_file = PathJoinSubstitution([
         FindPackageShare('hold_and_weld_description'),
-        'urdf', 'environment', 'cube.urdf.xacro',
+        child_link_urdf_path,
     ])
-    cube_description_content = ParameterValue(
+    child_link_description_content = ParameterValue(
         Command([
             PathJoinSubstitution([FindExecutable(name='xacro')]),
             ' ',
-            cube_xacro_file,
+            child_link_xacro_file,
         ]),
         value_type=str,
     )
 
-    workpiece_xacro_file = PathJoinSubstitution([
+    base_link_xacro_file = PathJoinSubstitution([
         FindPackageShare('hold_and_weld_description'),
-        'urdf', 'environment', 'workpiece.urdf.xacro',
+        base_link_urdf_path,
     ])
-    workpiece_description_content = ParameterValue(
+    base_link_description_content = ParameterValue(
         Command([
             PathJoinSubstitution([FindExecutable(name='xacro')]),
             ' ',
-            workpiece_xacro_file,
+            base_link_xacro_file,
         ]),
         value_type=str,
     )
@@ -209,14 +224,14 @@ def generate_launch_description():
             '/world/default/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             ('/world/default/model/dual_arm_system/joint_state'
              '@sensor_msgs/msg/JointState[gz.msgs.Model'),
-            '/model/target_cube/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
-            '/model/workpiece/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+            f'/model/{child_link_spawn_name}/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+            f'/model/{base_link_spawn_name}/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
         ],
         remappings=[
             ('/world/default/clock', '/clock'),
             ('/world/default/model/dual_arm_system/joint_state', '/joint_states'),
-            ('/model/target_cube/pose', '/tf'),
-            ('/model/workpiece/pose', '/tf'),
+            (f'/model/{child_link_spawn_name}/pose', '/tf'),
+            (f'/model/{base_link_spawn_name}/pose', '/tf'),
         ],
         output='screen',
     )
@@ -243,26 +258,31 @@ def generate_launch_description():
         output='screen',
     )
 
-    spawn_cube = Node(
+    spawn_child_link = Node(
         package='ros_gz_sim',
         executable='create',
-        name='spawn_target_cube',
+        name='spawn_child_link',
         arguments=[
-            '-string', cube_description_content.value,
-            '-name', 'target_cube',
-            '-x', '1.2', '-y', '0.3', '-z', '0.125',
+            '-string', child_link_description_content.value,
+            '-name', child_link_spawn_name,
+            '-x', str(child_link_pose.get('x', 1.2)),
+            '-y', str(child_link_pose.get('y', 0.3)),
+            '-z', str(child_link_pose.get('z', 0.125)),
         ],
         output='screen',
     )
 
-    spawn_workpiece = Node(
+    spawn_base_link = Node(
         package='ros_gz_sim',
         executable='create',
-        name='spawn_workpiece',
+        name='spawn_base_link',
         arguments=[
-            '-string', workpiece_description_content.value,
-            '-name', 'workpiece',
-            '-x', '1.2', '-y', '-0.5', '-z', '0.65',
+            '-string', base_link_description_content.value,
+            '-name', base_link_spawn_name,
+            '-x', str(base_link_pose.get('x', 1.2)),
+            '-y', str(base_link_pose.get('y', -0.5)),
+            '-z', str(base_link_pose.get('z', 0.65)),
+            '-static',
         ],
         output='screen',
     )
@@ -407,6 +427,7 @@ def generate_launch_description():
                 'arm_group_name': 'robot1_gp25_arm',
                 'gripper_controller_topic': '/gripper_controller/joint_trajectory',
                 'use_sim_time': True,
+                'auto_trigger': False,
             }
         ],
     )
@@ -464,8 +485,8 @@ def generate_launch_description():
         ros_gz_bridge,
         robot_state_publisher,
         spawn_robot,
-        spawn_cube,
-        spawn_workpiece,
+        spawn_child_link,
+        spawn_base_link,
         delay_joint_state_broadcaster,
         delay_robot1_arm_controller,
         delay_robot2_arm_controller,
