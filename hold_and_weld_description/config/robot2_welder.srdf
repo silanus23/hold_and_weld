@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="gp25_welder_system">
+  <!-- Robot 2: Welder System -->
+  <group name="robot2_gp25_welder_arm">
+    <chain base_link="robot2_base_link" tip_link="robot2_wire_tip"/>
+  </group>
+
+  <!-- Virtual joint -->
+  <virtual_joint name="robot2_virtual_joint" type="fixed" parent_frame="world" child_link="robot2_base_link"/>
+
+  <!-- Collision pairs -->
+  <disable_collisions link1="robot2_base_link" link2="robot2_link_1_s" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_1_s" link2="robot2_link_2_l" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_2_l" link2="robot2_link_3_u" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_3_u" link2="robot2_link_4_r" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_4_r" link2="robot2_link_5_b" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_5_b" link2="robot2_link_6_t" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_6_t" link2="robot2_torch_mount" reason="Adjacent"/>
+  <disable_collisions link1="robot2_torch_mount" link2="robot2_torch_handle" reason="Adjacent"/>
+  <disable_collisions link1="robot2_torch_handle" link2="robot2_torch_neck" reason="Adjacent"/>
+  <disable_collisions link1="robot2_torch_neck" link2="robot2_torch_nozzle" reason="Adjacent"/>
+  <disable_collisions link1="robot2_torch_nozzle" link2="robot2_weld_point" reason="Adjacent"/>
+  <disable_collisions link1="robot2_weld_point" link2="robot2_wire_tip" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_5_b" link2="robot2_torch_mount" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_4_r" link2="robot2_torch_mount" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_4_r" link2="robot2_torch_handle" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_4_r" link2="robot2_torch_neck" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_4_r" link2="robot2_torch_nozzle" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_4_r" link2="robot2_link_6_t" reason="ExpectedContact"/>
+  <disable_collisions link1="robot2_link_6_t" link2="robot2_torch_neck" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_5_b" link2="robot2_torch_neck" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_5_b" link2="robot2_torch_handle" reason="Adjacent"/>
+  <disable_collisions link1="robot2_link_6_t" link2="robot2_torch_handle" reason="Adjacent"/>
+
+  <!-- Group states -->
+  <group_state name="home" group="robot2_gp25_welder_arm">
+    <joint name="robot2_joint_1_s" value="0"/>
+    <joint name="robot2_joint_2_l" value="0"/>
+    <joint name="robot2_joint_3_u" value="0"/>
+    <joint name="robot2_joint_4_r" value="0"/>
+    <joint name="robot2_joint_5_b" value="0"/>
+    <joint name="robot2_joint_6_t" value="0"/>
+  </group_state>
+
+  <!-- End effector -->
+  <end_effector name="welding_torch" parent_link="robot2_tool0" group="robot2_gp25_welder_arm"/>
+</robot>

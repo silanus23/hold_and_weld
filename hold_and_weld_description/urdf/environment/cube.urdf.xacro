@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://ros.org/wiki/xacro" name="cube">
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="child_link">
   <xacro:property name="cube_size" value="0.25"/>
 
-  <link name="target_cube">
+  <link name="child_link">
     <visual>
       <geometry>
         <box size="${cube_size} ${cube_size} ${cube_size}"/>
@@ -24,7 +24,7 @@
   </link>
 
   <!-- Gazebo properties for the cube -->
-  <gazebo reference="target_cube">
+  <gazebo reference="child_link">
     <visual>
       <material>
         <ambient>1 0 0 1</ambient>
