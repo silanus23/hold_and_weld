@@ -1,0 +1,30 @@
+# Single robot welder system controller configuration
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    robot2_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+# Robot 2: Welder arm (6 joints)
+robot2_arm_controller:
+  ros__parameters:
+    joints:
+      - robot2_joint_1_s
+      - robot2_joint_2_l
+      - robot2_joint_3_u
+      - robot2_joint_4_r
+      - robot2_joint_5_b
+      - robot2_joint_6_t
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+joint_state_broadcaster:
+  ros__parameters: {}

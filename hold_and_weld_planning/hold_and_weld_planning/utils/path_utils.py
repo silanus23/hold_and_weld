@@ -177,10 +177,11 @@ def export_to_json(
 
 
 def auto_generate_output_path(input_path: str | Path) -> Path:
-    """Generate output path with timestamp relative to project root.
+    """Generate output path in hold_and_weld_application/trajectories/.
 
-    The output directory will be:
-    .../hold_and_weld_planning/generated/
+    This allows C++ action server to read JSON without rebuilding.
+    
+    Output location: src/hold_and_weld/hold_and_weld_application/trajectories/
 
     Args:
         input_path: Path to the input file.
@@ -192,9 +193,24 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
     job_name = input_path.stem
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    project_root = Path(__file__).parent.parent.parent
-
-    output_dir = project_root / 'generated'
+    # Navigate to workspace root and then to the source directory
+    # This works whether running from build/ or install/ directories
+    current_path = Path(__file__).resolve()
+    
+    # Find the workspace root by looking for 'src' directory
+    workspace_root = None
+    for parent in current_path.parents:
+        if (parent / 'src').exists() and (parent / 'src' / 'hold_and_weld').exists():
+            workspace_root = parent
+            break
+    
+    if workspace_root is None:
+        # Fallback: try relative path from current location
+        workspace_root = current_path.parent.parent.parent.parent.parent
+    
+    # Direct path to source trajectories directory
+    output_dir = workspace_root / 'src' / 'hold_and_weld' / 'hold_and_weld_application' / 'trajectories'
+    
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_filename = f'{job_name}_{timestamp}.json'
