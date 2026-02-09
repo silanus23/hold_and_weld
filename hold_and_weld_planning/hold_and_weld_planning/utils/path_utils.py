@@ -121,14 +121,19 @@ def load_urdf_config(
     if 'parameters' not in config:
         raise ValueError("Config missing 'parameters' section")
 
-    if 'seams' not in config or not config['seams']:
-        raise ValueError("Config missing 'seams' or seams list is empty")
+    # Check if auto-detect is enabled
+    auto_detect = config['workpiece'].get('auto_detect_seams', False)
 
+    # Only require seams if auto-detect is disabled
     seams = []
-    for seam_dict in config['seams']:
-        if 'start' not in seam_dict or 'end' not in seam_dict:
-            raise ValueError("Each seam must have 'start' and 'end'")
-        seams.append(Seam(seam_dict))
+    if not auto_detect:
+        if 'seams' not in config or not config['seams']:
+            raise ValueError("Config missing 'seams' or seams list is empty")
+
+        for seam_dict in config['seams']:
+            if 'start' not in seam_dict or 'end' not in seam_dict:
+                raise ValueError("Each seam must have 'start' and 'end'")
+            seams.append(Seam(seam_dict))
 
     return seams, config['parameters'], config['workpiece']
 

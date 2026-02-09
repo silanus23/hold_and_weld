@@ -16,5 +16,6 @@
 
 from .line_segment import LineSegment
 from .seam import Seam
+from .surface import Surface
 
-__all__ = ['LineSegment', 'Seam']
+__all__ = ['LineSegment', 'Seam', 'Surface']

@@ -1,31 +1,31 @@
 workpiece:
+  auto_detect_seams: true
   main_part:
     urdf_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
-    link_name: "workpiece_body"
+    link_name: "base_link"
     world_pose:
-      xyz: [1.2, -0.5, 0.65]
-      rpy: [0, 0, 0]
-
+      xyz:
+      - 1.2
+      - -0.5
+      - 0.65
+      rpy:
+      - 0
+      - 0.785398
+      - 0
   secondary_part:
     urdf_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
-    link_name: "target_cube"
+    link_name: "child_link"
     world_pose:
-      xyz: [1.2, -0.5, 0.935]
-      rpy: [0, 0, 0]
-
+      xyz:
+      - 1.394
+      - -0.5
+      - 0.844
+      rpy:
+      - 0
+      - 0.785398
+      - 0
 parameters:
-  # joint_type is auto-detected from geometry
   num_points: 20
   gap_mm: 25.0
   work_angle_deg: 45.0
   travel_angle_deg: 5.0
-
-seams:
-  - start: [1.075, -0.625, 0.8]
-    end: [1.075, -0.325, 0.8]
-  - start: [1.075, -0.325, 0.8]
-    end: [1.325, -0.325, 0.8]
-  - start: [1.325, -0.325, 0.8]
-    end: [1.325, -0.625, 0.8]
-  - start: [1.075, -0.625, 0.8]
-    end: [1.325, -0.625, 0.8]

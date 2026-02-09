@@ -14,7 +14,7 @@
 
 """Hold and Weld Planning Package - Weld seam trajectory generation."""
 
-from .core import LineSegment, Seam
+from .core import LineSegment, Seam, Surface
 from .planning import WeldPlanner
 from .urdf import SurfaceProcessor, URDFProcessor, URDFSeamPlanner
 from .utils import (
@@ -28,6 +28,7 @@ __version__ = '0.1.0'
 __all__ = [
     'LineSegment',
     'Seam',
+    'Surface',
     'WeldPlanner',
     'URDFProcessor',
     'SurfaceProcessor',

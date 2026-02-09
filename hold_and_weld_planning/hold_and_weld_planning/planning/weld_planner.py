@@ -74,6 +74,7 @@ class WeldPlanner:
         self,
         seam: Any,
         surface_info: Dict[str, List[float]],
+        away_from_wall_vector: List[float] | NDArray | None = None,
         lean_sign: int = 1
     ) -> bool:
         """Generate poses for a seam. Modifies seam object in place.
@@ -81,13 +82,25 @@ class WeldPlanner:
         Args:
             seam: Seam object with line_segment attribute to process.
             surface_info: Dictionary with 'center' and 'normal' keys (lists of floats).
-            lean_sign: Sign for lean/radial direction (+1 or -1), used for
+            away_from_wall_vector: Vector pointing away from wall/material. If None,
+                raises error (manual users must provide this).
+            lean_sign: Sign for lean/away direction (+1 or -1), used for
                 lap_joint and corner_joint variants (default 1).
 
         Returns:
             True if successful, False if error occurred.
+            
+        Raises:
+            ValueError: If away_from_wall_vector is None (required for all seams).
         """
         try:
+            if away_from_wall_vector is None:
+                raise ValueError(
+                    "away_from_wall_vector is required. "
+                    "For URDF workflow, this is auto-calculated. "
+                    "For manual workflow, you must specify it in your seam config."
+                )
+            
             surface_center = np.array(surface_info['center'], dtype=float)
             surface_normal = np.array(surface_info['normal'], dtype=float)
             surface_normal = surface_normal / np.linalg.norm(surface_normal)
@@ -97,15 +110,16 @@ class WeldPlanner:
             self._validate_seam(line, surface_center, surface_normal)
 
             tangent = line.tangent()
-            radial = self._calculate_radial_direction(
-                line.start, line.end, surface_center, surface_normal
-            )
+            
+            # Use the provided away_from_wall_vector
+            away_vec = np.array(away_from_wall_vector, dtype=float)
+            away_vec = away_vec / np.linalg.norm(away_vec)  # Normalize
 
             main_direction = self._get_main_direction(
-                surface_normal, radial
+                surface_normal, away_vec
             )
             lean_direction = self._get_lean_direction(
-                surface_normal, radial, lean_sign
+                surface_normal, away_vec, lean_sign
             )
 
             tangent_base, binormal_base, normal_base = (
@@ -125,7 +139,7 @@ class WeldPlanner:
             )
 
             gap_offset = self._calculate_gap_offset(
-                surface_normal, radial, lean_sign
+                surface_normal, away_vec, lean_sign
             )
 
             poses = []
@@ -194,64 +208,14 @@ class WeldPlanner:
                 f'Seam end is {dist_end*1000:.1f}mm from surface plane'
             )
 
-    def _calculate_radial_direction(
-        self,
-        seam_start: np.ndarray,
-        seam_end: np.ndarray,
-        surface_center: np.ndarray,
-        surface_normal: np.ndarray,
-        min_offset_m: float = 0.01,
-    ) -> np.ndarray:
-        """Calculate radial direction from infinite seam line to surface center.
-
-        Args:
-            seam_start: Start point of seam.
-            seam_end: End point of seam.
-            surface_center: Center point of surface.
-            surface_normal: Normal vector of surface.
-            min_offset_m: Minimum perpendicular distance required (default
-                10mm).
-
-        Returns:
-            Normalized radial direction vector (from line toward center).
-
-        Raises:
-            ValueError: If center is too close to seam line.
-        """
-        tangent = seam_end - seam_start
-        tangent = tangent / np.linalg.norm(tangent)
-
-        vec_to_center = surface_center - seam_start
-        t = np.dot(vec_to_center, tangent)
-        closest_point_on_line = seam_start + t * tangent
-
-        from_line_to_center = surface_center - closest_point_on_line
-
-        from_line_to_center_in_plane = from_line_to_center - np.dot(
-            from_line_to_center, surface_normal
-        ) * surface_normal
-
-        distance = np.linalg.norm(from_line_to_center_in_plane)
-        if distance < min_offset_m:
-            raise ValueError(
-                f'Seam line too close to surface center '
-                f'(perpendicular distance: {distance*1000:.1f}mm, '
-                f'minimum: {min_offset_m*1000:.1f}mm). '
-                f'Cannot determine radial direction.'
-            )
-
-        radial_direction = from_line_to_center_in_plane / distance
-
-        return radial_direction
-
     def _get_main_direction(
-        self, surface_normal: NDArray, radial_direction: NDArray
+        self, surface_normal: NDArray, away_from_wall_vector: NDArray
     ) -> NDArray:
         """Calculate main torch direction (base orientation before work angle).
 
         Args:
             surface_normal: Normal vector of surface.
-            radial_direction: Radial direction from seam line to center.
+            away_from_wall_vector: Vector pointing away from wall/material.
 
         Returns:
             Main direction vector (where torch points by default).
@@ -264,22 +228,22 @@ class WeldPlanner:
         ]:
             return -surface_normal
         elif self.joint_type == 'edge_joint':
-            return -radial_direction
+            return -away_from_wall_vector
         else:
             raise ValueError(f'Unknown joint type: {self.joint_type}')
 
     def _get_lean_direction(
         self,
         surface_normal: NDArray,
-        radial_direction: NDArray,
+        away_from_wall_vector: NDArray,
         lean_sign: int = 1
     ) -> NDArray:
         """Calculate lean direction (direction to apply work angle tilt).
 
         Args:
             surface_normal: Normal vector of surface.
-            radial_direction: Radial direction from seam line to center.
-            lean_sign: Sign multiplier for radial direction (+1 or -1), used
+            away_from_wall_vector: Vector pointing away from wall/material.
+            lean_sign: Sign multiplier for away direction (+1 or -1), used
                 for lap/corner variants (default 1).
 
         Returns:
@@ -289,11 +253,11 @@ class WeldPlanner:
             ValueError: If joint_type is unknown.
         """
         if self.joint_type in ['t_joint', 'butt_joint']:
-            return radial_direction
+            return away_from_wall_vector
         elif self.joint_type == 'edge_joint':
             return -surface_normal
         elif self.joint_type in ['lap_joint', 'corner_joint']:
-            return lean_sign * radial_direction
+            return lean_sign * away_from_wall_vector
         else:
             raise ValueError(f'Unknown joint type: {self.joint_type}')
 
@@ -388,15 +352,15 @@ class WeldPlanner:
     def _calculate_gap_offset(
         self,
         surface_normal: NDArray,
-        radial_direction: NDArray,
+        away_from_wall_vector: NDArray,
         lean_sign: int = 1,
     ) -> NDArray:
         """Calculate gap offset from seam based on joint type.
 
         Args:
             surface_normal: Normal vector of surface.
-            radial_direction: Radial direction from seam line to center.
-            lean_sign: Sign multiplier for radial direction (+1 or -1), used
+            away_from_wall_vector: Vector pointing away from wall/material.
+            lean_sign: Sign multiplier for away direction (+1 or -1), used
                 for lap/corner variants (default 1).
 
         Returns:
@@ -410,19 +374,19 @@ class WeldPlanner:
         if self.joint_type in ['t_joint', 'butt_joint']:
             return (
                 surface_normal * gap_component -
-                radial_direction * gap_component
+                away_from_wall_vector * gap_component
             )
 
         elif self.joint_type == 'edge_joint':
             return (
                 -surface_normal * gap_component +
-                (-radial_direction) * gap_component
+                (-away_from_wall_vector) * gap_component
             )
 
         elif self.joint_type in ['lap_joint', 'corner_joint']:
             return (
                 surface_normal * gap_component +
-                (lean_sign * radial_direction) * gap_component
+                (lean_sign * away_from_wall_vector) * gap_component
             )
 
         else:
