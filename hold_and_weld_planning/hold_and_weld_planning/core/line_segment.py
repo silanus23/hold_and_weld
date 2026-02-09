@@ -29,23 +29,45 @@ class LineSegment:
 
     Pure geometry class - no application-specific logic.
     Reusable for mesh edges, rays, seams, etc.
+    
+    Attributes:
+        start: Start point as numpy array [x, y, z].
+        end: End point as numpy array [x, y, z].
+        away_from_wall_vector: Optional normalized vector [x, y, z] pointing away 
+            from wall/material. None if not set yet.
     """
 
-    def __init__(self, start: List[float] | NDArray, end: List[float] | NDArray) -> None:
+    def __init__(
+        self, 
+        start: List[float] | NDArray, 
+        end: List[float] | NDArray,
+        away_from_wall_vector: List[float] | NDArray | None = None
+    ) -> None:
         """Initialize line segment from start and end points.
 
         Args:
             start: Start point [x, y, z] as list or numpy array.
             end: End point [x, y, z] as list or numpy array.
+            away_from_wall_vector: Optional vector [x, y, z] pointing away from wall/material.
+                Will be normalized if provided.
 
         Raises:
-            ValueError: If points are not 3D.
+            ValueError: If points are not 3D or away_from_wall_vector is not 3D.
         """
         self.start = np.array(start, dtype=float)
         self.end = np.array(end, dtype=float)
 
         if self.start.shape != (3,) or self.end.shape != (3,):
             raise ValueError('Start and end must be 3D points [x, y, z]')
+
+        if away_from_wall_vector is not None:
+            away_from_wall_vector = np.array(away_from_wall_vector, dtype=float)
+            if away_from_wall_vector.shape != (3,):
+                raise ValueError('away_from_wall_vector must be 3D vector [x, y, z]')
+            # Normalize it
+            self.away_from_wall_vector = away_from_wall_vector / np.linalg.norm(away_from_wall_vector)
+        else:
+            self.away_from_wall_vector = None
 
     def length(self) -> float:
         """Calculate segment length in meters.
@@ -92,6 +114,7 @@ class LineSegment:
         """Return string representation of LineSegment.
 
         Returns:
-            String showing segment length.
+            String showing segment length and whether away_from_wall_vector is set.
         """
-        return f'LineSegment(length={self.length():.3f}m)'
+        has_away = 'with away_vector' if self.away_from_wall_vector is not None else 'no away_vector'
+        return f'LineSegment(length={self.length():.3f}m, {has_away})'

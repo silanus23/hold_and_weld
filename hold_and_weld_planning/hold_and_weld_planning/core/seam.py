@@ -27,16 +27,39 @@ class Seam:
     """Represent a weld seam.
 
     Wraps a LineSegment for geometry and holds weld-specific state (poses).
+    
+    Attributes:
+        line_segment: LineSegment containing start, end, and away_from_wall_vector.
+        poses: List of generated pose dictionaries, None if not generated yet.
+        is_generated: True if poses have been successfully generated.
     """
 
     def __init__(self, seam_dict: Dict[str, List[float]]) -> None:
         """Initialize seam from YAML/config dictionary.
 
         Args:
-            seam_dict: Dictionary with 'start' and 'end' keys containing
-                [x, y, z] coordinates.
+            seam_dict: Dictionary with required keys:
+                - 'start': [x, y, z] coordinates
+                - 'end': [x, y, z] coordinates
+                Optional keys:
+                - 'away_from_wall_vector': [x, y, z] vector (for manual workflow)
+
+        Raises:
+            KeyError: If 'start' or 'end' missing from seam_dict.
         """
-        self.line_segment = LineSegment(seam_dict['start'], seam_dict['end'])
+        if 'start' not in seam_dict:
+            raise KeyError("seam_dict must contain 'start' key")
+        if 'end' not in seam_dict:
+            raise KeyError("seam_dict must contain 'end' key")
+
+        # Extract away_from_wall_vector if present
+        away_vec = seam_dict.get('away_from_wall_vector', None)
+        
+        self.line_segment = LineSegment(
+            seam_dict['start'], 
+            seam_dict['end'],
+            away_from_wall_vector=away_vec
+        )
         self.poses = None
         self.is_generated = False
 
@@ -44,7 +67,8 @@ class Seam:
         """Convert seam to dictionary for JSON export.
 
         Returns:
-            Dictionary with 'start', 'end', 'length_m', 'poses', and 'num_poses' keys.
+            Dictionary with 'start', 'end', 'length_m', 'away_from_wall_vector', 
+            'poses', and 'num_poses' keys.
 
         Raises:
             RuntimeError: If poses not generated yet.
@@ -52,7 +76,7 @@ class Seam:
         if not self.is_generated:
             raise RuntimeError('Cannot export seam - poses not generated yet')
 
-        return {
+        result = {
             'start': self.line_segment.start.tolist(),
             'end': self.line_segment.end.tolist(),
             'length_m': self.line_segment.length(),
@@ -60,11 +84,18 @@ class Seam:
             'num_poses': len(self.poses) if self.poses else 0
         }
 
+        # Include away_from_wall_vector for debugging if it's set
+        if self.line_segment.away_from_wall_vector is not None:
+            result['away_from_wall_vector'] = self.line_segment.away_from_wall_vector.tolist()
+
+        return result
+
     def __repr__(self) -> str:
         """Return string representation of Seam.
 
         Returns:
-            String showing length and generation status.
+            String showing length, generation status, and away_vector status.
         """
         status = 'generated' if self.is_generated else 'not generated'
-        return f'Seam(length={self.line_segment.length():.3f}m, {status})'
+        has_away = 'with away_vector' if self.line_segment.away_from_wall_vector is not None else 'no away_vector'
+        return f'Seam(length={self.line_segment.length():.3f}m, {status}, {has_away})'
