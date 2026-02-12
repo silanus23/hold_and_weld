@@ -116,7 +116,9 @@ def load_urdf_config(
         'main_part' not in config['workpiece'] or
         'secondary_part' not in config['workpiece']
     ):
-        raise ValueError("Config must have both 'main_part' and 'secondary_part'")
+        raise ValueError(
+            "Config must have both 'main_part' and 'secondary_part'"
+        )
 
     if 'parameters' not in config:
         raise ValueError("Config missing 'parameters' section")
@@ -128,7 +130,9 @@ def load_urdf_config(
     seams = []
     if not auto_detect:
         if 'seams' not in config or not config['seams']:
-            raise ValueError("Config missing 'seams' or seams list is empty")
+            raise ValueError(
+                "Config missing 'seams' or seams list is empty"
+            )
 
         for seam_dict in config['seams']:
             if 'start' not in seam_dict or 'end' not in seam_dict:
@@ -186,7 +190,8 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
 
     This allows C++ action server to read JSON without rebuilding.
 
-    Output location: src/hold_and_weld/hold_and_weld_application/trajectories/
+    Output location:
+        src/hold_and_weld/hold_and_weld_application/trajectories/
 
     Args:
         input_path: Path to the input file.
@@ -205,7 +210,8 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
     # Find the workspace root by looking for 'src' directory
     workspace_root = None
     for parent in current_path.parents:
-        if (parent / 'src').exists() and (parent / 'src' / 'hold_and_weld').exists():
+        src_path = parent / 'src'
+        if src_path.exists() and (src_path / 'hold_and_weld').exists():
             workspace_root = parent
             break
 
@@ -214,7 +220,10 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
         workspace_root = current_path.parent.parent.parent.parent.parent
 
     # Direct path to source trajectories directory
-    output_dir = workspace_root / 'src' / 'hold_and_weld' / 'hold_and_weld_application' / 'trajectories'
+    output_dir = (
+        workspace_root / 'src' / 'hold_and_weld' /
+        'hold_and_weld_application' / 'trajectories'
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

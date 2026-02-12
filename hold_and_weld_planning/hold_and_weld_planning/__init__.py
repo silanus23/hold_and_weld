@@ -17,11 +17,11 @@
 from .core import LineSegment, Seam, Surface
 from .planning import WeldPlanner
 from .urdf import (
-    URDFProcessor,
-    SurfaceExtractor,
-    SurfaceAnalyzer,
     SeamDetector,
-    URDFSeamPlanner
+    SurfaceAnalyzer,
+    SurfaceExtractor,
+    URDFProcessor,
+    URDFSeamPlanner,
 )
 from .utils import (
     auto_generate_output_path,

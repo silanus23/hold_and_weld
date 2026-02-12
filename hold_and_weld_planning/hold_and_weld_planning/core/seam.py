@@ -29,7 +29,7 @@ class Seam:
     Wraps a LineSegment for geometry and holds weld-specific state (poses).
 
     Attributes:
-        line_segment: LineSegment containing start, end, and away_from_wall_vector.
+        line_segment: LineSegment containing start, end, away_from_wall_vector.
         poses: List of generated pose dictionaries, None if not generated yet.
         is_generated: True if poses have been successfully generated.
         config: Optional dict with metadata (is_edge_joint, on_surface, etc).
@@ -41,13 +41,13 @@ class Seam:
         line_segment: Optional[LineSegment] = None,
         config: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Initialize seam from dict (manual workflow) or LineSegment (URDF workflow).
+        """Initialize seam from dict or LineSegment.
 
         Args:
-            seam_dict: Dictionary with 'start', 'end', optional 'away_from_wall_vector'.
-                Used for manual YAML workflow.
-            line_segment: Pre-constructed LineSegment with away_from_wall_vector.
-                Used for URDF auto-detection workflow.
+            seam_dict: Dictionary with 'start', 'end', optional
+                'away_from_wall_vector'. Used for manual YAML workflow.
+            line_segment: Pre-constructed LineSegment with
+                away_from_wall_vector. Used for URDF auto-detection workflow.
             config: Optional metadata dict (is_edge_joint, on_surface, etc).
 
         Raises:
@@ -55,10 +55,8 @@ class Seam:
             KeyError: If seam_dict missing required keys.
         """
         if line_segment is not None:
-            # URDF workflow: use provided LineSegment
             self.line_segment = line_segment
         elif seam_dict is not None:
-            # Manual workflow: construct from dict
             if 'start' not in seam_dict:
                 raise KeyError("seam_dict must contain 'start' key")
             if 'end' not in seam_dict:
@@ -71,7 +69,7 @@ class Seam:
                 away_from_wall_vector=away_vec
             )
         else:
-            raise ValueError("Must provide either seam_dict or line_segment")
+            raise ValueError('Must provide either seam_dict or line_segment')
 
         self.poses = None
         self.is_generated = False
@@ -81,14 +79,14 @@ class Seam:
         """Convert seam to dictionary for JSON export.
 
         Returns:
-            Dictionary with 'start', 'end', 'length_m', 'away_from_wall_vector',
-            'poses', and 'num_poses' keys.
+            Dictionary with 'start', 'end', 'length_m',
+            'away_from_wall_vector', 'poses', and 'num_poses' keys.
 
         Raises:
             RuntimeError: If poses not generated yet.
         """
         if not self.is_generated:
-            raise RuntimeError("Cannot export seam - poses not generated yet")
+            raise RuntimeError('Cannot export seam - poses not generated yet')
 
         result = {
             'start': self.line_segment.start.tolist(),
@@ -99,7 +97,9 @@ class Seam:
         }
 
         if self.line_segment.away_from_wall_vector is not None:
-            result['away_from_wall_vector'] = self.line_segment.away_from_wall_vector.tolist()
+            result['away_from_wall_vector'] = (
+                self.line_segment.away_from_wall_vector.tolist()
+            )
 
         # Include config metadata if present (convert numpy types for JSON)
         if self.config:
@@ -111,12 +111,21 @@ class Seam:
         return result
 
     def __repr__(self) -> str:
-        """Return string representation of Seam.
-
-        Returns:
-            String showing length, generation status, and away_vector status.
-        """
+        """Return string representation of Seam."""
         status = 'generated' if self.is_generated else 'not generated'
-        has_away = 'with away_vector' if self.line_segment.away_from_wall_vector is not None else 'no away_vector'
-        edge_info = f", edge_joint={self.config.get('is_edge_joint', False)}" if self.config else ""
-        return f'Seam(length={self.line_segment.length():.3f}m, {status}, {has_away}{edge_info})'
+
+        has_away = (
+            'with away_vector'
+            if self.line_segment.away_from_wall_vector is not None
+            else 'no away_vector'
+        )
+
+        edge_info = ''
+        if self.config:
+            is_edge = self.config.get('is_edge_joint', False)
+            edge_info = f', edge_joint={is_edge}'
+
+        return (
+            f'Seam(length={self.line_segment.length():.3f}m, '
+            f'{status}, {has_away}{edge_info})'
+        )

@@ -48,7 +48,7 @@ class LineSegment:
         Args:
             start: Start point [x, y, z] as list or numpy array.
             end: End point [x, y, z] as list or numpy array.
-            away_from_wall_vector: Optional vector [x, y, z] pointing away from wall/material.
+            away_from_wall_vector: Optional vector [x, y, z] pointing away.
                 Will be normalized if provided.
 
         Raises:
@@ -63,10 +63,12 @@ class LineSegment:
         if away_from_wall_vector is not None:
             away_from_wall_vector = np.array(away_from_wall_vector, dtype=float)
             if away_from_wall_vector.shape != (3,):
-                raise ValueError('away_from_wall_vector must be 3D vector [x, y, z]')
+                raise ValueError(
+                    'away_from_wall_vector must be 3D vector [x, y, z]'
+                )
             # Normalize it
             self.away_from_wall_vector = (
-            away_from_wall_vector / np.linalg.norm(away_from_wall_vector)
+                away_from_wall_vector / np.linalg.norm(away_from_wall_vector)
             )
         else:
             self.away_from_wall_vector = None
@@ -119,6 +121,8 @@ class LineSegment:
             String showing segment length and whether away_from_wall_vector is set.
         """
         has_away = (
-            'with away_vector' if self.away_from_wall_vector is not None else 'no away_vector'
+            'with away_vector'
+            if self.away_from_wall_vector is not None
+            else 'no away_vector'
         )
         return f'LineSegment(length={self.length():.3f}m, {has_away})'

@@ -15,16 +15,18 @@
 # limitations under the License.
 """Add collision objects to MoveIt planning scene from URDF files."""
 
+import os
+import subprocess
+import xml.etree.ElementTree as ET
+
 from ament_index_python.packages import get_package_share_directory
+
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject
-import os
 import rclpy
 from rclpy.node import Node
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
-import subprocess
-import xml.etree.ElementTree as ET
 import yaml
 
 
@@ -35,7 +37,6 @@ class AddCollisionObjects(Node):
         """Initialize the collision objects node."""
         super().__init__('add_objects_to_scene')
 
-        # Load configuration from YAML
         app_pkg = get_package_share_directory('hold_and_weld_application')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
         objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
@@ -44,7 +45,6 @@ class AddCollisionObjects(Node):
             objects_yaml_dict = yaml.safe_load(file)
         objects_config = objects_yaml_dict.get('/**', {}).get('ros__parameters', {})
 
-        # Get configuration
         frame_id = objects_config.get('frame_id', 'world')
 
         self.collision_pub = self.create_publisher(
@@ -56,7 +56,6 @@ class AddCollisionObjects(Node):
         while self.collision_pub.get_subscription_count() < 1:
             rclpy.spin_once(self, timeout_sec=0.1)
 
-        # Add child_link from URDF
         child_link_config = objects_config.get('child_link', {})
         self.add_object_from_urdf(
             child_link_config.get('urdf_path', ''),
@@ -66,7 +65,6 @@ class AddCollisionObjects(Node):
             desc_pkg
         )
 
-        # Add base_link from URDF
         base_link_config = objects_config.get('base_link', {})
         self.add_object_from_urdf(
             base_link_config.get('urdf_path', ''),
@@ -82,7 +80,6 @@ class AddCollisionObjects(Node):
         orientation_config = object_config.get('orientation', {})
         full_urdf_path = os.path.join(desc_pkg, urdf_path)
 
-        # Process xacro to get URDF
         try:
             result = subprocess.run(
                 ['xacro', full_urdf_path],
@@ -95,20 +92,17 @@ class AddCollisionObjects(Node):
             self.get_logger().error(f'Failed to process xacro: {e}')
             return
 
-        # Parse URDF XML
         try:
             root = ET.fromstring(urdf_content)
         except ET.ParseError as e:
             self.get_logger().error(f'Failed to parse URDF: {e}')
             return
 
-        # Create collision object
         collision_obj = CollisionObject()
         collision_obj.header = Header()
         collision_obj.header.frame_id = frame_id
         collision_obj.id = object_id
 
-        # Extract collision geometry from first link
         link = root.find('.//link')
         if link is None:
             self.get_logger().error(f'No link found in URDF for {object_id}')
@@ -124,7 +118,6 @@ class AddCollisionObjects(Node):
             self.get_logger().error(f'No geometry found in collision for {object_id}')
             return
 
-        # Parse geometry (box, sphere, cylinder)
         box = geometry.find('box')
         if box is not None:
             size_attr = box.get('size')
@@ -135,7 +128,6 @@ class AddCollisionObjects(Node):
                 primitive.dimensions = sizes
                 collision_obj.primitives = [primitive]
 
-        # Set pose
         pose = Pose()
         pose.position.x = pose_config.get('x', 0.0)
         pose.position.y = pose_config.get('y', 0.0)

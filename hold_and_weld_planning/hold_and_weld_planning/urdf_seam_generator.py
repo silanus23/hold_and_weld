@@ -107,7 +107,9 @@ def main():
         secondary_urdf = workpiece_config['secondary_part']['urdf_path']
 
         main_world_pose = workpiece_config['main_part'].get('world_pose')
-        secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
+        secondary_world_pose = (
+            workpiece_config['secondary_part'].get('world_pose')
+        )
 
         planner = URDFSeamPlanner(
             main_urdf_path=main_urdf,
@@ -141,7 +143,10 @@ def main():
         if args.verbose:
             print(f'  Detected {len(generated_seams)} seam segment(s)')
 
-            num_edge = sum(1 for s in generated_seams if s.config.get('is_edge_joint', False))
+            num_edge = sum(
+                1 for s in generated_seams
+                if s.config.get('is_edge_joint', False)
+            )
             num_flat = len(generated_seams) - num_edge
 
             if num_edge > 0:
@@ -152,8 +157,13 @@ def main():
             for idx, seam in enumerate(generated_seams):
                 seam_length_mm = seam.line_segment.length() * 1000
                 num_poses = len(seam.poses) if seam.poses else 0
-                joint_type = 'EDGE' if seam.config.get('is_edge_joint') else 'FLAT'
-                print(f'  Segment {idx}: {seam_length_mm:.1f}mm with {num_poses} poses [{joint_type}]')
+                joint_type = (
+                    'EDGE' if seam.config.get('is_edge_joint') else 'FLAT'
+                )
+                print(
+                    f'  Segment {idx}: {seam_length_mm:.1f}mm '
+                    f'with {num_poses} poses [{joint_type}]'
+                )
             print()
 
         print(f'Generated {len(generated_seams)} seam segment(s)')
@@ -173,7 +183,10 @@ def main():
             'gap_mm': parameters['gap_mm'],
             'num_segments': len(generated_seams),
             'geometry_driven': True,
-            'note': 'Seams split at surface boundaries, edge vs flat determined by boundary positions'
+            'note': (
+                'Seams split at surface boundaries, '
+                'edge vs flat determined by boundary positions'
+            )
         }
 
         output_data = {
@@ -187,8 +200,12 @@ def main():
             seam.is_generated = True
             seam_dict = seam.to_dict()
 
-            seam_dict['is_edge_joint'] = bool(seam.config.get('is_edge_joint', False))
-            seam_dict['on_surface'] = str(seam.config.get('on_surface', 'unknown'))
+            seam_dict['is_edge_joint'] = bool(
+                seam.config.get('is_edge_joint', False)
+            )
+            seam_dict['on_surface'] = str(
+                seam.config.get('on_surface', 'unknown')
+            )
 
             output_data['seams'][seam_id] = seam_dict
 

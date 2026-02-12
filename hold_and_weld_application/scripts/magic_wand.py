@@ -13,22 +13,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Magic wand script to spawn child_link at end_pose and visualize JSON surfaces as interactive markers."""
+"""Magic wand to spawn child_link at end_pose and visualize JSON surfaces."""
 
-from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Pose, Point, Quaternion
-from moveit_msgs.msg import CollisionObject
-from visualization_msgs.msg import InteractiveMarker, InteractiveMarkerControl, Marker
-from interactive_markers import InteractiveMarkerServer
 import glob
 import json
 import os
+import subprocess
+import xml.etree.ElementTree as ET
+
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import Point, Pose  # Quaternion kullanılmadığı için (F401) silindi
+from interactive_markers import InteractiveMarkerServer
+from moveit_msgs.msg import CollisionObject
 import rclpy
 from rclpy.node import Node
 from shape_msgs.msg import SolidPrimitive
-from std_msgs.msg import Header, ColorRGBA
-import subprocess
-import xml.etree.ElementTree as ET
+from std_msgs.msg import ColorRGBA, Header
+from visualization_msgs.msg import InteractiveMarker, InteractiveMarkerControl, Marker
 import yaml
 
 
@@ -46,11 +47,15 @@ class MagicWand(Node):
         # Load configuration from YAML
         app_pkg = get_package_share_directory('hold_and_weld_application')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
-        objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
+        objects_yaml_path = os.path.join(
+            app_pkg, 'config', 'collision_objects', 'objects.yaml'
+        )
 
         with open(objects_yaml_path, 'r') as file:
             objects_yaml_dict = yaml.safe_load(file)
-        objects_config = objects_yaml_dict.get('/**', {}).get('ros__parameters', {})
+        objects_config = objects_yaml_dict.get('/**', {}).get(
+            'ros__parameters', {}
+        )
 
         # Get configuration
         self.frame_id = objects_config.get('frame_id', 'world')
@@ -63,21 +68,29 @@ class MagicWand(Node):
         )
 
         # Create interactive marker server for torch tips
-        self.get_logger().info('Creating interactive marker server for torch tips...')
+        self.get_logger().info(
+            'Creating interactive marker server for torch tips...'
+        )
         self.marker_server = InteractiveMarkerServer(self, 'torch_tips')
 
         # Wait for MoveIt subscribers (with timeout)
-        self.get_logger().info('Waiting for collision_object subscribers (max 5 seconds)...')
+        self.get_logger().info(
+            'Waiting for collision_object subscribers (max 5 seconds)...'
+        )
         wait_count = 0
         max_wait = 50  # 5 seconds
-        while self.collision_pub.get_subscription_count() < 1 and wait_count < max_wait:
+        while (
+            self.collision_pub.get_subscription_count() < 1
+            and wait_count < max_wait
+        ):
             rclpy.spin_once(self, timeout_sec=0.1)
             wait_count += 1
 
         if self.collision_pub.get_subscription_count() < 1:
             self.get_logger().warn(
                 'No collision_object subscribers found. '
-                'Skipping child_link spawn. Launch MoveIt to enable collision objects.'
+                'Skipping child_link spawn. Launch MoveIt to enable '
+                'collision objects.'
             )
         else:
             # Spawn base_link
@@ -108,12 +121,13 @@ class MagicWand(Node):
         # Load and visualize torch tips from latest trajectory JSON
         self.load_and_visualize_latest_json()
 
-
-    def spawn_collision_object(self, urdf_path, object_id, object_config, desc_pkg, is_end_pose=False):
+    def spawn_collision_object(
+        self, urdf_path, object_id, object_config, desc_pkg, is_end_pose=False
+    ):
         """Spawn collision object at the specified pose."""
         # Extract pose and orientation based on config structure
         if is_end_pose:
-            pose_config = object_config  # end_pose already contains position/orientation
+            pose_config = object_config
         else:
             pose_config = object_config.get('pose', {})
             orientation_config = object_config.get('orientation', {})
@@ -148,17 +162,23 @@ class MagicWand(Node):
         # Extract collision geometry from first link
         link = root.find('.//link')
         if link is None:
-            self.get_logger().error(f'No link found in URDF for {object_id}')
+            self.get_logger().error(
+                f'No link found in URDF for {object_id}'
+            )
             return
 
         collision = link.find('collision')
         if collision is None:
-            self.get_logger().error(f'No collision geometry found for {object_id}')
+            self.get_logger().error(
+                f'No collision geometry found for {object_id}'
+            )
             return
 
         geometry = collision.find('geometry')
         if geometry is None:
-            self.get_logger().error(f'No geometry found in collision for {object_id}')
+            self.get_logger().error(
+                f'No geometry found in collision for {object_id}'
+            )
             return
 
         # Parse geometry (box, sphere, cylinder)
@@ -199,15 +219,20 @@ class MagicWand(Node):
         collision_obj.operation = CollisionObject.ADD
 
         self.get_logger().info(
-            f'Spawning {object_id} at end_pose: position({pose.position.x:.3f}, '
-            f'{pose.position.y:.3f}, {pose.position.z:.3f}), orientation({pose.orientation.x:.3f}, '
-            f'{pose.orientation.y:.3f}, {pose.orientation.z:.3f}, {pose.orientation.w:.3f})'
+            f'Spawning {object_id} at end_pose: '
+            f'position({pose.position.x:.3f}, '
+            f'{pose.position.y:.3f}, {pose.position.z:.3f}), '
+            f'orientation({pose.orientation.x:.3f}, '
+            f'{pose.orientation.y:.3f}, {pose.orientation.z:.3f}, '
+            f'{pose.orientation.w:.3f})'
         )
 
         if self.collision_pub.get_subscription_count() > 0:
             self.collision_pub.publish(collision_obj)
             rclpy.spin_once(self, timeout_sec=0.5)
-            self.get_logger().info(f'{object_id} spawned at end_pose successfully!')
+            self.get_logger().info(
+                f'{object_id} spawned at end_pose successfully!'
+            )
         else:
             self.get_logger().warn(
                 f'{object_id} not spawned - no MoveIt subscribers available'
@@ -219,8 +244,12 @@ class MagicWand(Node):
         search_dirs = []
 
         # Add trajectories folder
-        trajectories_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))), 'trajectories')
+        trajectories_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            )),
+            'trajectories'
+        )
         if os.path.exists(trajectories_dir):
             search_dirs.append(trajectories_dir)
 
@@ -236,17 +265,27 @@ class MagicWand(Node):
         for search_dir in search_dirs:
             json_files = glob.glob(os.path.join(search_dir, '*.json'))
             # Filter out files that don't exist or can't be accessed
-            valid_files = [f for f in json_files if os.path.exists(f) and os.path.isfile(f)]
+            valid_files = [
+                f for f in json_files
+                if os.path.exists(f) and os.path.isfile(f)
+            ]
             all_json_files.extend(valid_files)
-            self.get_logger().info(f'Found {len(valid_files)} valid JSON files in {search_dir}')
+            self.get_logger().info(
+                f'Found {len(valid_files)} valid JSON files in {search_dir}'
+            )
 
         if not all_json_files:
-            self.get_logger().error('No valid JSON files found in any search directory!')
+            self.get_logger().error(
+                'No valid JSON files found in any search directory!'
+            )
             return
 
         # Get the latest file by modification time (with error handling)
         try:
-            latest_json = max(all_json_files, key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0)
+            latest_json = max(
+                all_json_files,
+                key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0
+            )
             self.get_logger().info(f'Loading latest JSON file: {latest_json}')
         except (OSError, ValueError) as e:
             self.get_logger().error(f'Error finding latest JSON file: {e}')
@@ -256,17 +295,22 @@ class MagicWand(Node):
         try:
             with open(latest_json, 'r') as f:
                 data = json.load(f)
-            self.get_logger().info(f'Successfully loaded JSON')
+            self.get_logger().info('Successfully loaded JSON')
         except Exception as e:
             self.get_logger().error(f'Failed to load JSON file: {e}')
             return
 
         # Only process trajectory JSON
         if 'seams' in data:
-            self.get_logger().info('Detected trajectory JSON - creating torch tip markers')
+            self.get_logger().info(
+                'Detected trajectory JSON - creating torch tip markers'
+            )
             self.create_torch_tip_markers(data)
         else:
-            self.get_logger().error('Not a trajectory JSON! Use add_collision_objects.py for surfaces.')
+            self.get_logger().error(
+                'Not a trajectory JSON! '
+                'Use add_collision_objects.py for surfaces.'
+            )
 
     def create_torch_tip_markers(self, data):
         """Create interactive markers for torch tips from trajectory JSON."""
@@ -285,7 +329,9 @@ class MagicWand(Node):
         marker_count = 0
         for seam_name, seam_data in seams.items():
             poses = seam_data.get('poses', [])
-            self.get_logger().info(f'Processing {seam_name}: {len(poses)} poses')
+            self.get_logger().info(
+                f'Processing {seam_name}: {len(poses)} poses'
+            )
 
             # Sample poses (every 5th pose to avoid clutter)
             sample_step = max(1, len(poses) // 20)  # Max 20 markers per seam
@@ -299,7 +345,9 @@ class MagicWand(Node):
                 int_marker = InteractiveMarker()
                 int_marker.header.frame_id = coordinate_frame
                 int_marker.name = f'{seam_name}_pose_{i*sample_step}'
-                int_marker.description = f'{seam_name} Torch Tip {i*sample_step}'
+                int_marker.description = (
+                    f'{seam_name} Torch Tip {i*sample_step}'
+                )
                 int_marker.pose.position.x = float(position[0])
                 int_marker.pose.position.y = float(position[1])
                 int_marker.pose.position.z = float(position[2])
@@ -338,13 +386,22 @@ class MagicWand(Node):
                 int_marker.controls.append(marker_control)
 
                 # Insert marker
-                self.marker_server.insert(int_marker, feedback_callback=self.marker_feedback)
+                self.marker_server.insert(
+                    int_marker, feedback_callback=self.marker_feedback
+                )
                 marker_count += 1
 
-        self.get_logger().info(f'Inserted {marker_count} markers, calling applyChanges()...')
+        self.get_logger().info(
+            f'Inserted {marker_count} markers, calling applyChanges()...'
+        )
         self.marker_server.applyChanges()
-        self.get_logger().info(f'✓ Created {marker_count} torch tip markers and applied changes!')
-        self.get_logger().info(f'Check RViz InteractiveMarkers display with topic: /torch_tips/update')
+        self.get_logger().info(
+            f'✓ Created {marker_count} torch tip markers and applied changes!'
+        )
+        self.get_logger().info(
+            'Check RViz InteractiveMarkers display with topic: '
+            '/torch_tips/update'
+        )
 
     def hsv_to_rgb(self, h, s, v):
         """Convert HSV to RGB."""

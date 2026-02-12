@@ -31,7 +31,7 @@ class Surface:
     """Represent a workpiece surface with geometry and coordinate frame.
 
     Attributes:
-        id: Unique identifier (e.g., "base_link:0:top")
+        surface_id: Unique identifier (e.g., 'base_link:0:top')
         center: Center point [x, y, z] in world coordinates
         normal: Surface normal vector [nx, ny, nz] (unit vector)
         corners: List of corner points defining the surface boundary (N corners)
@@ -41,7 +41,7 @@ class Surface:
         bounds: Surface bounds in local UV coordinates
     """
 
-    id: str
+    surface_id: str
     center: NDArray
     normal: NDArray
     corners: List[NDArray]
@@ -51,21 +51,25 @@ class Surface:
     bounds: Dict[str, float]
 
     @staticmethod
-    def compute_boundary_edges(corners: List[NDArray]) -> List[Tuple[NDArray, NDArray]]:
+    def compute_boundary_edges(
+        corners: List[NDArray]
+    ) -> List[Tuple[NDArray, NDArray]]:
         """Compute boundary edges from ordered corner points.
 
         Args:
-            corners: List of N corner points in order (clockwise or counter-clockwise).
+            corners: List of N corner points in order.
 
         Returns:
-            List of N edges as (start, end) tuples, connecting consecutive corners.
+            List of N edges as (start, end) tuples.
 
         Example:
             For 4 corners [A, B, C, D], returns:
             [(A, B), (B, C), (C, D), (D, A)]
         """
         if len(corners) < 3:
-            raise ValueError(f"Need at least 3 corners to form edges, got {len(corners)}")
+            raise ValueError(
+                f'Need at least 3 corners to form edges, got {len(corners)}'
+            )
 
         edges = []
         n = len(corners)
@@ -81,15 +85,7 @@ class Surface:
         """Create Surface from dictionary representation.
 
         Args:
-            surface_dict: Dictionary containing surface data with keys:
-                - id: Surface identifier string
-                - center: [x, y, z] as list or array
-                - normal: [nx, ny, nz] as list or array
-                - corners: List of [x, y, z] points
-                - u_axis: [ux, uy, uz] as list or array
-                - v_axis: [vx, vy, vz] as list or array
-                - bounds: Dict with u_min, u_max, v_min, v_max
-                - edges: (Optional) List of edge tuples, computed if not provided
+            surface_dict: Dictionary containing surface data.
 
         Returns:
             Surface instance with computed edges if not provided.
@@ -114,8 +110,10 @@ class Surface:
         else:
             edges = cls.compute_boundary_edges(corners)
 
+        surface_id = surface_dict.get('surface_id', surface_dict.get('id', ''))
+
         return cls(
-            id=surface_dict['id'],
+            surface_id=surface_id,
             center=center,
             normal=normal,
             corners=corners,
@@ -129,11 +127,11 @@ class Surface:
         """Convert Surface to dictionary representation.
 
         Returns:
-            Dictionary with all surface data, with numpy arrays converted to lists.
-            Compatible with JSON serialization and classical planner interface.
+            Dictionary with all surface data, with numpy arrays converted to
+            lists. Compatible with JSON serialization and classical planner.
         """
         return {
-            'id': self.id,
+            'id': self.surface_id,  # Keep as 'id' for compatibility
             'center': self.center.tolist(),
             'normal': self.normal.tolist(),
             'corners': [c.tolist() for c in self.corners],
@@ -176,4 +174,4 @@ class Surface:
         Returns:
             String showing surface ID and corner count.
         """
-        return f"Surface(id='{self.id}', corners={self.num_corners()})"
+        return f'Surface(id=\'{self.surface_id}\', corners={self.num_corners()})'

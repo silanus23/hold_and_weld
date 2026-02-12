@@ -18,8 +18,8 @@ Complete hold_and_weld system launch file.
 Launches: Gazebo, MoveIt, RViz, and application nodes.
 """
 
-import os
 import math
+import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -37,6 +37,7 @@ from launch.substitutions import (
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -230,10 +231,6 @@ def generate_launch_description():
     )
 
     # GAZEBO SIMULATION
-    # Build gz_args conditionally: add -s flag for headless mode (no GUI)
-    from launch.substitutions import PythonExpression
-    gz_args_with_gui = ['-r -v 4 ', world_path]
-    gz_args_headless = ['-r -v 4 -s ', world_path]  # -s for server-only/headless mode
 
     gz_args = PythonExpression([
         "'", '-r -v 4 ', "' if '", use_gazebo_gui, "' == 'true' else '", '-r -v 4 -s ', "'"
