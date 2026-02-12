@@ -162,30 +162,22 @@ void WelderActionServer::initialize_moveit()
 std::string WelderActionServer::find_latest_json()
 {
   std::string generated_dir;
-  
+
   try {
-    std::string pkg_share = ament_index_cpp::get_package_share_directory("hold_and_weld_application");
-    
-    // CURRENT STRUCTURE:
-    // pkg_share = /home/berkan/ros2_yaskawa/install/hold_and_weld_application/share/hold_and_weld_application
-    
+    std::string pkg_share =
+      ament_index_cpp::get_package_share_directory("hold_and_weld_application");
+
     std::filesystem::path share_path(pkg_share);
-    
-    // Go up 4 levels to reach the workspace root:
-    // 1: .../share/
-    // 2: .../hold_and_weld_application/
-    // 3: .../install/
-    // 4: /home/berkan/ros2_yaskawa/ (Workspace Root)
-    std::filesystem::path ws_root = share_path.parent_path().parent_path().parent_path().parent_path();
-    
-    // Navigate to source trajectory directory (build-independent)
-    std::filesystem::path src_path = ws_root / "src" / "hold_and_weld" / "hold_and_weld_application" / "trajectories";
-    
+    std::filesystem::path ws_root =
+      share_path.parent_path().parent_path().parent_path().parent_path();
+
+    std::filesystem::path src_path = ws_root / "src" / "hold_and_weld" /
+      "hold_and_weld_application" / "trajectories";
+
     if (std::filesystem::exists(src_path)) {
       generated_dir = src_path.string();
       RCLCPP_INFO(get_logger(), "Using source trajectory dir: %s", generated_dir.c_str());
     } else {
-      // Fallback to install directory if source isn't found
       generated_dir = pkg_share + "/trajectories";
       RCLCPP_WARN(get_logger(), "Source dir not found, using install: %s", generated_dir.c_str());
     }
@@ -308,7 +300,8 @@ rclcpp_action::CancelResponse WelderActionServer::handle_cancel(
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void WelderActionServer::handle_accepted(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle)
+void WelderActionServer::handle_accepted(
+  const std::shared_ptr<GoalHandleTriggerWelder> goal_handle)
 {
   {
     std::lock_guard<std::mutex> lock(work_mutex_);

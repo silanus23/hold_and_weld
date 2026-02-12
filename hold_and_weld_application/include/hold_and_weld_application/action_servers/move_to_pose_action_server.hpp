@@ -157,7 +157,7 @@ private:
   // Cached move groups (created on-demand per move_group_name)
   std::mutex move_group_cache_mutex_;
   std::map<std::string, std::shared_ptr<moveit::planning_interface::MoveGroupInterface>>
-    move_group_cache_;
+  move_group_cache_;
 };
 
 }  // namespace hold_and_weld

@@ -39,14 +39,14 @@ class AddCollisionObjects(Node):
         app_pkg = get_package_share_directory('hold_and_weld_application')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
         objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
-        
+
         with open(objects_yaml_path, 'r') as file:
             objects_yaml_dict = yaml.safe_load(file)
         objects_config = objects_yaml_dict.get('/**', {}).get('ros__parameters', {})
 
         # Get configuration
         frame_id = objects_config.get('frame_id', 'world')
-        
+
         self.collision_pub = self.create_publisher(
             CollisionObject, '/collision_object', 10
         )
@@ -81,7 +81,7 @@ class AddCollisionObjects(Node):
         pose_config = object_config.get('pose', {})
         orientation_config = object_config.get('orientation', {})
         full_urdf_path = os.path.join(desc_pkg, urdf_path)
-        
+
         # Process xacro to get URDF
         try:
             result = subprocess.run(
@@ -134,7 +134,7 @@ class AddCollisionObjects(Node):
                 primitive.type = SolidPrimitive.BOX
                 primitive.dimensions = sizes
                 collision_obj.primitives = [primitive]
-        
+
         # Set pose
         pose = Pose()
         pose.position.x = pose_config.get('x', 0.0)
@@ -144,7 +144,7 @@ class AddCollisionObjects(Node):
         pose.orientation.y = orientation_config.get('y', 0.0)
         pose.orientation.z = orientation_config.get('z', 0.0)
         pose.orientation.w = orientation_config.get('w', 1.0)
-        
+
         collision_obj.primitive_poses = [pose]
         collision_obj.operation = CollisionObject.ADD
 

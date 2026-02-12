@@ -74,9 +74,10 @@ void GripperActionServer::load_object_config()
       "/config/collision_objects/objects.yaml";
 
     YAML::Node config = YAML::LoadFile(objects_yaml_path);
-    
-    if (config["/**"] && config["/**"]["ros__parameters"] && 
-        config["/**"]["ros__parameters"]["base_link"]) {
+
+    if (config["/**"] && config["/**"]["ros__parameters"] &&
+      config["/**"]["ros__parameters"]["base_link"])
+    {
       auto base_link = config["/**"]["ros__parameters"]["base_link"];
       if (base_link["id"]) {
         base_link_id_ = base_link["id"].as<std::string>();
@@ -84,7 +85,7 @@ void GripperActionServer::load_object_config()
       }
     }
   } catch (const std::exception & e) {
-    RCLCPP_WARN(get_logger(), "Could not load object config, using default base_link_id: %s", 
+    RCLCPP_WARN(get_logger(), "Could not load object config, using default base_link_id: %s",
                 e.what());
   }
 }
@@ -113,19 +114,20 @@ void GripperActionServer::initialize_moveit()
   }
 
   action_server_ = rclcpp_action::create_server<TriggerGripper>(
-    this,
-    "trigger_gripper",
-    [this](const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TriggerGripper::Goal> goal) {
+      this,
+      "trigger_gripper",
+    [this](const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const TriggerGripper::Goal> goal)
+    {
       return this->handle_goal(uuid, goal);
-    },
-    [this](const std::shared_ptr<GoalHandleTriggerGripper> goal_handle) {
-      return this->handle_cancel(goal_handle);
-    },
-    [this](const std::shared_ptr<GoalHandleTriggerGripper> goal_handle) {
-      this->handle_accepted(goal_handle);
-    }
+      },
+    [this](const std::shared_ptr<GoalHandleTriggerGripper> handle) {
+      return this->handle_cancel(handle);
+      },
+    [this](const std::shared_ptr<GoalHandleTriggerGripper> handle) {
+      this->handle_accepted(handle);
+      }
   );
-
   initialized_ = true;
   RCLCPP_INFO(get_logger(), "Gripper Action Server ready!");
 
@@ -141,23 +143,23 @@ void GripperActionServer::initialize_moveit()
   if (auto_trigger && job_loaded_) {
     double delay = get_parameter("auto_trigger_delay_sec").as_double();
     RCLCPP_INFO(get_logger(), "Auto-trigger enabled, will start in %.1f seconds", delay);
-    
+
     auto_trigger_timer_ = create_wall_timer(
       std::chrono::milliseconds(static_cast<int>(delay * 1000)),
       [this]() {
         auto_trigger_timer_->cancel();
         RCLCPP_INFO(get_logger(), "Auto-triggering gripper action...");
-        
+
         // Execute the job directly in a new thread
         std::lock_guard<std::mutex> exec_lock(execution_mutex_);
         if (execution_thread_ && execution_thread_->joinable()) {
           execution_thread_->join();
         }
-        
+
         execution_thread_ = std::make_shared<std::thread>(
           [this]() {
             auto feedback = std::make_shared<TriggerGripper::Feedback>();
-            
+
             GripperJob job;
             {
               std::lock_guard<std::mutex> lock(config_mutex_);
@@ -168,10 +170,10 @@ void GripperActionServer::initialize_moveit()
             const int total_steps = 6;
 
             auto update_feedback = [&](const std::string & step_name) {
-                RCLCPP_INFO(get_logger(), "[Auto-Step %d/%d] %s", 
+              RCLCPP_INFO(get_logger(), "[Auto-Step %d/%d] %s",
                            current_step_index + 1, total_steps, step_name.c_str());
-                current_step_index++;
-              };
+              current_step_index++;
+            };
 
             update_feedback("opening_gripper");
             if (!set_gripper_position(open_position_)) {
@@ -249,7 +251,8 @@ void GripperActionServer::load_job_from_yaml(const std::string & yaml_path)
 
     YAML::Node config = YAML::LoadFile(yaml_path);
 
-    auto load_pose = [this](const YAML::Node & pose_node, geometry_msgs::msg::Pose & pose) -> bool {
+    auto load_pose = [this](
+      const YAML::Node & pose_node, geometry_msgs::msg::Pose & pose) -> bool {
         if (!pose_node || !pose_node["position"] || !pose_node["orientation"]) {
           return false;
         }
@@ -519,7 +522,7 @@ bool GripperActionServer::move_to_pose(
 
       if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
         RCLCPP_ERROR(get_logger(), "[%s] Execution failed!", step_name.c_str());
-        
+
         if (attempt < max_planning_retries_) {
           RCLCPP_WARN(get_logger(), "[%s] Retrying execution (attempt %d/%d)",
                       step_name.c_str(), attempt, max_planning_retries_);
@@ -535,7 +538,7 @@ bool GripperActionServer::move_to_pose(
     } else {
       RCLCPP_WARN(get_logger(), "[%s] Planning attempt %d/%d failed",
                   step_name.c_str(), attempt, max_planning_retries_);
-      
+
       if (attempt < max_planning_retries_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }

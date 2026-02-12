@@ -140,15 +140,15 @@ def main():
 
         if args.verbose:
             print(f'  Detected {len(generated_seams)} seam segment(s)')
-            
+
             num_edge = sum(1 for s in generated_seams if s.config.get('is_edge_joint', False))
             num_flat = len(generated_seams) - num_edge
-            
+
             if num_edge > 0:
                 print(f'  Edge joints (edge-on-edge): {num_edge}')
             if num_flat > 0:
                 print(f'  Flat joints (edge-on-surface): {num_flat}')
-            
+
             for idx, seam in enumerate(generated_seams):
                 seam_length_mm = seam.line_segment.length() * 1000
                 num_poses = len(seam.poses) if seam.poses else 0
@@ -183,13 +183,13 @@ def main():
 
         for idx, seam in enumerate(generated_seams):
             seam_id = f'segment_{idx:03d}'
-            
+
             seam.is_generated = True
             seam_dict = seam.to_dict()
-            
+
             seam_dict['is_edge_joint'] = bool(seam.config.get('is_edge_joint', False))
             seam_dict['on_surface'] = str(seam.config.get('on_surface', 'unknown'))
-            
+
             output_data['seams'][seam_id] = seam_dict
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

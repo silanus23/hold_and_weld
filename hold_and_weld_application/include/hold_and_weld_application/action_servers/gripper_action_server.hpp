@@ -201,7 +201,7 @@ private:
 
   // Object IDs from shared config
   std::string base_link_id_ = "base_link";  // base_link ID from URDF
-  
+
   // Gripper position limits [m]
   double open_position_ = 0.15;
   double close_position_ = 0.0;

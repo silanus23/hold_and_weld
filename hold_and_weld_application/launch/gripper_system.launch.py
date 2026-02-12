@@ -67,7 +67,6 @@ def generate_launch_description():
 
     use_rviz = LaunchConfiguration('use_rviz')
 
-    # FILE PATHS
     controller_config = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_description'), 'config', 'robot1_controllers.yaml']
     )
@@ -168,7 +167,7 @@ def generate_launch_description():
     child_link_urdf_path = objects_config.get('child_link', {}).get('urdf_path', '')
     child_link_spawn_name = objects_config.get('child_link', {}).get('spawn_name', 'child_link')
     child_link_pose = objects_config.get('child_link', {}).get('pose', {})
-    
+
     child_link_xacro_file = PathJoinSubstitution([
         FindPackageShare('hold_and_weld_description'),
         child_link_urdf_path,
@@ -197,7 +196,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # ROS-GAZEBO BRIDGE
     ros_gz_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -216,7 +214,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ROBOT STATE PUBLISHER
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -224,7 +221,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}, robot_description],
     )
 
-    # SPAWN ENTITIES IN GAZEBO
     spawn_robot = Node(
         package='ros_gz_sim',
         executable='create',
@@ -322,7 +318,6 @@ def generate_launch_description():
         ],
     )
 
-    # RVIZ
     rviz = Node(
         package='rviz2',
         executable='rviz2',
@@ -393,7 +388,6 @@ def generate_launch_description():
     delay_add_collision_objects = TimerAction(period=15.0, actions=[add_collision_objects])
     delay_gripper_server = TimerAction(period=18.0, actions=[gripper_action_server])
 
-    # ASSEMBLE LAUNCH DESCRIPTION
     nodes = [
         gz_sim,
         ros_gz_bridge,

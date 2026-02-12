@@ -27,7 +27,7 @@ class Seam:
     """Represent a weld seam.
 
     Wraps a LineSegment for geometry and holds weld-specific state (poses).
-    
+
     Attributes:
         line_segment: LineSegment containing start, end, and away_from_wall_vector.
         poses: List of generated pose dictionaries, None if not generated yet.
@@ -66,7 +66,7 @@ class Seam:
 
             away_vec = seam_dict.get('away_from_wall_vector', None)
             self.line_segment = LineSegment(
-                seam_dict['start'], 
+                seam_dict['start'],
                 seam_dict['end'],
                 away_from_wall_vector=away_vec
             )
@@ -81,14 +81,14 @@ class Seam:
         """Convert seam to dictionary for JSON export.
 
         Returns:
-            Dictionary with 'start', 'end', 'length_m', 'away_from_wall_vector', 
+            Dictionary with 'start', 'end', 'length_m', 'away_from_wall_vector',
             'poses', and 'num_poses' keys.
 
         Raises:
             RuntimeError: If poses not generated yet.
         """
         if not self.is_generated:
-            raise RuntimeError('Cannot export seam - poses not generated yet')
+            raise RuntimeError("Cannot export seam - poses not generated yet")
 
         result = {
             'start': self.line_segment.start.tolist(),
@@ -98,7 +98,6 @@ class Seam:
             'num_poses': len(self.poses) if self.poses else 0
         }
 
-        # Include away_from_wall_vector for debugging if it's set
         if self.line_segment.away_from_wall_vector is not None:
             result['away_from_wall_vector'] = self.line_segment.away_from_wall_vector.tolist()
 

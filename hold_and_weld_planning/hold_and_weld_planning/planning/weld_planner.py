@@ -151,12 +151,12 @@ class WeldPlanner:
         surface_normal: NDArray
     ) -> None:
         """Validate seam geometry and position relative to surface.
-        
+
         Args:
             line: LineSegment object to validate.
             surface_center: Center point of surface.
             surface_normal: Normal vector of surface.
-            
+
         Raises:
             ValueError: If seam is degenerate, too long, or not on surface plane.
         """

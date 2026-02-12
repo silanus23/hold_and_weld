@@ -29,17 +29,17 @@ class LineSegment:
 
     Pure geometry class - no application-specific logic.
     Reusable for mesh edges, rays, seams, etc.
-    
+
     Attributes:
         start: Start point as numpy array [x, y, z].
         end: End point as numpy array [x, y, z].
-        away_from_wall_vector: Optional normalized vector [x, y, z] pointing away 
+        away_from_wall_vector: Optional normalized vector [x, y, z] pointing away
             from wall/material. None if not set yet.
     """
 
     def __init__(
-        self, 
-        start: List[float] | NDArray, 
+        self,
+        start: List[float] | NDArray,
         end: List[float] | NDArray,
         away_from_wall_vector: List[float] | NDArray | None = None
     ) -> None:
@@ -65,7 +65,9 @@ class LineSegment:
             if away_from_wall_vector.shape != (3,):
                 raise ValueError('away_from_wall_vector must be 3D vector [x, y, z]')
             # Normalize it
-            self.away_from_wall_vector = away_from_wall_vector / np.linalg.norm(away_from_wall_vector)
+            self.away_from_wall_vector = (
+            away_from_wall_vector / np.linalg.norm(away_from_wall_vector)
+            )
         else:
             self.away_from_wall_vector = None
 
@@ -116,5 +118,7 @@ class LineSegment:
         Returns:
             String showing segment length and whether away_from_wall_vector is set.
         """
-        has_away = 'with away_vector' if self.away_from_wall_vector is not None else 'no away_vector'
+        has_away = (
+            'with away_vector' if self.away_from_wall_vector is not None else 'no away_vector'
+        )
         return f'LineSegment(length={self.length():.3f}m, {has_away})'

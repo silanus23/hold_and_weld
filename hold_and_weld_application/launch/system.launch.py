@@ -50,19 +50,19 @@ def quaternion_to_euler(qx, qy, qz, qw):
     sinr_cosp = 2.0 * (qw * qx + qy * qz)
     cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
     roll = math.atan2(sinr_cosp, cosr_cosp)
-    
+
     # Pitch (y-axis rotation)
     sinp = 2.0 * (qw * qy - qz * qx)
     if abs(sinp) >= 1:
         pitch = math.copysign(math.pi / 2, sinp)
     else:
         pitch = math.asin(sinp)
-    
+
     # Yaw (z-axis rotation)
     siny_cosp = 2.0 * (qw * qz + qx * qy)
     cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
     yaw = math.atan2(siny_cosp, cosy_cosp)
-    
+
     return roll, pitch, yaw
 
 
@@ -198,11 +198,11 @@ def generate_launch_description():
     child_link_urdf_path = objects_config.get('child_link', {}).get('urdf_path', '')
     child_link_spawn_name = objects_config.get('child_link', {}).get('spawn_name', 'child_link')
     child_link_pose = objects_config.get('child_link', {}).get('pose', {})
-    
+
     base_link_urdf_path = objects_config.get('base_link', {}).get('urdf_path', '')
     base_link_spawn_name = objects_config.get('base_link', {}).get('spawn_name', 'base_link')
     base_link_pose = objects_config.get('base_link', {}).get('pose', {})
-    
+
     child_link_xacro_file = PathJoinSubstitution([
         FindPackageShare('hold_and_weld_description'),
         child_link_urdf_path,
@@ -234,11 +234,11 @@ def generate_launch_description():
     from launch.substitutions import PythonExpression
     gz_args_with_gui = ['-r -v 4 ', world_path]
     gz_args_headless = ['-r -v 4 -s ', world_path]  # -s for server-only/headless mode
-    
+
     gz_args = PythonExpression([
         "'", '-r -v 4 ', "' if '", use_gazebo_gui, "' == 'true' else '", '-r -v 4 -s ', "'"
     ])
-    
+
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
@@ -303,7 +303,7 @@ def generate_launch_description():
         child_link_pose.get('qz', 0.0),
         child_link_pose.get('qw', 1.0)
     )
-    
+
     spawn_child_link = Node(
         package='ros_gz_sim',
         executable='create',

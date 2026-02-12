@@ -135,7 +135,7 @@ void MoveToPoseActionServer::worker_thread_func()
 
     {
       std::unique_lock<std::mutex> lock(queue_mutex_);
-      queue_cv_.wait(lock, [this] { return pending_goal_ != nullptr || shutdown_; });
+      queue_cv_.wait(lock, [this] {return pending_goal_ != nullptr || shutdown_;});
 
       if (shutdown_) {
         break;

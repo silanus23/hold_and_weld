@@ -27,7 +27,7 @@ from numpy.typing import NDArray
 
 class SurfaceExtractor:
     """Extract planar surfaces from URDF collision geometries.
-    
+
     Supports box and cylinder geometries. Returns surfaces as dictionaries
     with world-frame coordinates.
     """
