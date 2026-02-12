@@ -14,7 +14,6 @@ find_package(urdf REQUIRED)
 # Install directories
 install(DIRECTORY
   config
-  launch
   meshes
   urdf
   worlds
