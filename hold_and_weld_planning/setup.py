@@ -44,11 +44,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'seam_generator = '
-            'hold_and_weld_planning.hold_and_weld_planning.seam_generator:main',
             'urdf_seam_generator = '
-            'hold_and_weld_planning.hold_and_weld_planning.'
-            'urdf_seam_generator:main'
+            'hold_and_weld_planning.urdf_seam_generator:main'
         ],
     },
 )

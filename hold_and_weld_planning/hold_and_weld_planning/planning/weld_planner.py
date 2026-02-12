@@ -15,9 +15,9 @@
 
 """Weld path planner - handles all geometric calculations for trajectory generation.
 
-This module generates weld torch poses along seam paths based on joint type and
-welding parameters. It handles coordinate frame construction, work/travel angle
-application, and gap offset calculations for various joint configurations.
+This module generates weld torch poses along seam paths using surface normal and
+away_from_wall_vector geometry. It handles coordinate frame construction, work/travel
+angle application, and gap offset calculations.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -28,42 +28,34 @@ from scipy.spatial.transform import Rotation
 
 
 class WeldPlanner:
-    """Generate weld poses for seams based on joint type and weld parameters.
+    """Generate weld poses for seams using surface geometry vectors.
 
     Modifies seam objects in-place following the Mutable State pattern.
+    Uses surface_normal and away_from_wall_vector directly without
+    joint type classification for torch orientation.
     """
-
-    SUPPORTED_JOINT_TYPES = [
-        't_joint', 'butt_joint', 'corner_joint', 'lap_joint', 'edge_joint'
-    ]
 
     def __init__(self, parameters: Dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
 
         Args:
             parameters: Dictionary with keys:
-                - joint_type: Type of weld joint (str)
                 - work_angle_deg: Work angle in degrees (float)
                 - travel_angle_deg: Travel angle in degrees (float)
                 - gap_mm: Gap distance in millimeters (float)
                 - num_points: Number of poses to generate per seam (int)
-                
+
         Raises:
-            ValueError: If joint_type unsupported, num_points out of range,
-                or gap_mm is non-positive.
+            ValueError: If num_points out of range or gap_mm is non-positive.
         """
-        self.joint_type = parameters['joint_type'].lower()
         self.work_angle_rad = np.radians(parameters['work_angle_deg'])
         self.travel_angle_rad = np.radians(parameters['travel_angle_deg'])
         self.gap_m = parameters['gap_mm'] / 1000.0
         self.num_points = parameters['num_points']
 
-        if self.joint_type not in self.SUPPORTED_JOINT_TYPES:
-            raise ValueError(f'Unsupported joint type: {self.joint_type}')
         if not (1 <= self.num_points <= 1000):
             raise ValueError(
-                f'num_points must be between 1 and 1000, '
-                f'got {self.num_points}'
+                f'num_points must be between 1 and 1000, got {self.num_points}'
             )
         if self.gap_m <= 0:
             raise ValueError(
@@ -73,102 +65,84 @@ class WeldPlanner:
     def generate_seam(
         self,
         seam: Any,
-        surface_info: Dict[str, List[float]],
-        away_from_wall_vector: List[float] | NDArray | None = None,
-        lean_sign: int = 1
-    ) -> bool:
+        surface_info: Dict[str, List[float]]
+    ) -> None:
         """Generate poses for a seam. Modifies seam object in place.
 
         Args:
-            seam: Seam object with line_segment attribute to process.
+            seam: Seam object with line_segment attribute containing away_from_wall_vector.
             surface_info: Dictionary with 'center' and 'normal' keys (lists of floats).
-            away_from_wall_vector: Vector pointing away from wall/material. If None,
-                raises error (manual users must provide this).
-            lean_sign: Sign for lean/away direction (+1 or -1), used for
-                lap_joint and corner_joint variants (default 1).
 
-        Returns:
-            True if successful, False if error occurred.
-            
         Raises:
-            ValueError: If away_from_wall_vector is None (required for all seams).
+            RuntimeError: If away_from_wall_vector not set in seam.line_segment.
+            ValueError: If seam geometry is invalid or not on surface plane.
         """
-        try:
-            if away_from_wall_vector is None:
-                raise ValueError(
-                    "away_from_wall_vector is required. "
-                    "For URDF workflow, this is auto-calculated. "
-                    "For manual workflow, you must specify it in your seam config."
-                )
-            
-            surface_center = np.array(surface_info['center'], dtype=float)
-            surface_normal = np.array(surface_info['normal'], dtype=float)
-            surface_normal = surface_normal / np.linalg.norm(surface_normal)
-
-            line = seam.line_segment
-
-            self._validate_seam(line, surface_center, surface_normal)
-
-            tangent = line.tangent()
-            
-            # Use the provided away_from_wall_vector
-            away_vec = np.array(away_from_wall_vector, dtype=float)
-            away_vec = away_vec / np.linalg.norm(away_vec)  # Normalize
-
-            main_direction = self._get_main_direction(
-                surface_normal, away_vec
-            )
-            lean_direction = self._get_lean_direction(
-                surface_normal, away_vec, lean_sign
+        if seam.line_segment.away_from_wall_vector is None:
+            raise RuntimeError(
+                f'away_from_wall_vector not set for seam {seam}. '
+                'For manual workflow: specify it in YAML config. '
+                'For URDF workflow: ensure auto-detection calculates it.'
             )
 
-            tangent_base, binormal_base, normal_base = (
-                self._build_base_frame(tangent, main_direction)
+        surface_center = np.array(surface_info['center'], dtype=float)
+        surface_normal = np.array(surface_info['normal'], dtype=float)
+        surface_normal = surface_normal / np.linalg.norm(surface_normal)
+
+        line = seam.line_segment
+        self._validate_seam(line, surface_center, surface_normal)
+
+        tangent = line.tangent()
+        away_from_wall_vector = line.away_from_wall_vector
+        is_edge_joint = seam.config.get('is_edge_joint', False)
+
+        # Calculate directions based on joint type
+        # Directions point WHERE the torch should point (toward the work)
+        if is_edge_joint:
+            # Edge joint: point toward material, lean toward surface
+            main_direction = -away_from_wall_vector
+            lean_direction = -surface_normal
+        else:
+            # Flat joint: point toward surface, lean toward wall
+            main_direction = -surface_normal
+            lean_direction = -away_from_wall_vector
+
+        tangent_base, binormal_base, normal_base = (
+            self._build_base_frame(tangent, main_direction)
+        )
+
+        normal_work, binormal_work, tangent_work = (
+            self._apply_work_angle(
+                normal_base, tangent_base, binormal_base, lean_direction
             )
+        )
 
-            normal_work, binormal_work, tangent_work = (
-                self._apply_work_angle(
-                    normal_base, tangent_base, binormal_base, lean_direction
-                )
+        normal_final, binormal_final, tangent_final = (
+            self._apply_travel_angle(
+                normal_work, binormal_work, tangent_work
             )
+        )
 
-            normal_final, binormal_final, tangent_final = (
-                self._apply_travel_angle(
-                    normal_work, binormal_work, tangent_work
-                )
+        if is_edge_joint:
+            # Edge joint: offset along bisector (normal + away direction)
+            gap_component = self.gap_m / np.sqrt(2.0)
+            gap_offset = gap_component * (-surface_normal + away_from_wall_vector)
+        else:
+            # Flat joint: offset perpendicular to surface and away from other part
+            gap_component = self.gap_m / np.sqrt(2.0)
+            gap_offset = gap_component * (-surface_normal - away_from_wall_vector)
+
+        poses = []
+        for i in range(self.num_points):
+            t = i / max(1, self.num_points - 1)
+            position = line.point_at(t) + gap_offset
+
+            pose = self._build_pose_data(
+                position, tangent_final, binormal_final, normal_final, i
             )
+            poses.append(pose)
 
-            gap_offset = self._calculate_gap_offset(
-                surface_normal, away_vec, lean_sign
-            )
-
-            poses = []
-            for i in range(self.num_points):
-                t = i / max(1, self.num_points - 1)
-                position = line.point_at(t) + gap_offset
-
-                pose = self._build_pose_data(
-                    position, tangent_final, binormal_final, normal_final, i
-                )
-                poses.append(pose)
-
-            seam.poses = poses
-            seam.is_generated = True
-
-            return True
-
-        except Exception as e:
-            print(f'Error generating seam: {e}')
-            seam.is_generated = False
-            return False
-
-    def requires_variants(self) -> bool:
-        """Check if this joint type requires generating both +/- lean variants.
-
-        Returns:
-            True if lap_joint or corner_joint, False otherwise.
-        """
-        return self.joint_type in ['lap_joint', 'corner_joint']
+        seam.poses = poses
+        seam.is_generated = True
 
     def _validate_seam(
         self,
@@ -201,65 +175,14 @@ class WeldPlanner:
 
         if dist_start > tolerance:
             raise ValueError(
-                f'Seam start is {dist_start*1000:.1f}mm from surface plane'
+                f'Seam start is {dist_start*1000:.1f}mm from surface plane '
+                f'(tolerance: {tolerance*1000:.1f}mm)'
             )
         if dist_end > tolerance:
             raise ValueError(
-                f'Seam end is {dist_end*1000:.1f}mm from surface plane'
+                f'Seam end is {dist_end*1000:.1f}mm from surface plane '
+                f'(tolerance: {tolerance*1000:.1f}mm)'
             )
-
-    def _get_main_direction(
-        self, surface_normal: NDArray, away_from_wall_vector: NDArray
-    ) -> NDArray:
-        """Calculate main torch direction (base orientation before work angle).
-
-        Args:
-            surface_normal: Normal vector of surface.
-            away_from_wall_vector: Vector pointing away from wall/material.
-
-        Returns:
-            Main direction vector (where torch points by default).
-            
-        Raises:
-            ValueError: If joint_type is unknown.
-        """
-        if self.joint_type in [
-            't_joint', 'butt_joint', 'lap_joint', 'corner_joint'
-        ]:
-            return -surface_normal
-        elif self.joint_type == 'edge_joint':
-            return -away_from_wall_vector
-        else:
-            raise ValueError(f'Unknown joint type: {self.joint_type}')
-
-    def _get_lean_direction(
-        self,
-        surface_normal: NDArray,
-        away_from_wall_vector: NDArray,
-        lean_sign: int = 1
-    ) -> NDArray:
-        """Calculate lean direction (direction to apply work angle tilt).
-
-        Args:
-            surface_normal: Normal vector of surface.
-            away_from_wall_vector: Vector pointing away from wall/material.
-            lean_sign: Sign multiplier for away direction (+1 or -1), used
-                for lap/corner variants (default 1).
-
-        Returns:
-            Lean direction vector (which way to tilt torch).
-            
-        Raises:
-            ValueError: If joint_type is unknown.
-        """
-        if self.joint_type in ['t_joint', 'butt_joint']:
-            return away_from_wall_vector
-        elif self.joint_type == 'edge_joint':
-            return -surface_normal
-        elif self.joint_type in ['lap_joint', 'corner_joint']:
-            return lean_sign * away_from_wall_vector
-        else:
-            raise ValueError(f'Unknown joint type: {self.joint_type}')
 
     def _build_base_frame(
         self,
@@ -303,15 +226,11 @@ class WeldPlanner:
         Returns:
             Tuple of rotated (normal, binormal, tangent).
         """
-        work_rot_positive = Rotation.from_rotvec(
-            self.work_angle_rad * tangent
-        )
+        work_rot_positive = Rotation.from_rotvec(self.work_angle_rad * tangent)
         normal_test_pos = work_rot_positive.apply(normal)
         dot_positive = np.dot(normal_test_pos, lean_direction)
 
-        work_rot_negative = Rotation.from_rotvec(
-            -self.work_angle_rad * tangent
-        )
+        work_rot_negative = Rotation.from_rotvec(-self.work_angle_rad * tangent)
         normal_test_neg = work_rot_negative.apply(normal)
         dot_negative = np.dot(normal_test_neg, lean_direction)
 
@@ -349,49 +268,6 @@ class WeldPlanner:
 
         return normal_final, binormal_final, tangent_final
 
-    def _calculate_gap_offset(
-        self,
-        surface_normal: NDArray,
-        away_from_wall_vector: NDArray,
-        lean_sign: int = 1,
-    ) -> NDArray:
-        """Calculate gap offset from seam based on joint type.
-
-        Args:
-            surface_normal: Normal vector of surface.
-            away_from_wall_vector: Vector pointing away from wall/material.
-            lean_sign: Sign multiplier for away direction (+1 or -1), used
-                for lap/corner variants (default 1).
-
-        Returns:
-            Gap offset vector.
-            
-        Raises:
-            ValueError: If joint_type is unknown.
-        """
-        gap_component = self.gap_m / np.sqrt(2.0)
-
-        if self.joint_type in ['t_joint', 'butt_joint']:
-            return (
-                surface_normal * gap_component -
-                away_from_wall_vector * gap_component
-            )
-
-        elif self.joint_type == 'edge_joint':
-            return (
-                -surface_normal * gap_component +
-                (-away_from_wall_vector) * gap_component
-            )
-
-        elif self.joint_type in ['lap_joint', 'corner_joint']:
-            return (
-                surface_normal * gap_component +
-                (lean_sign * away_from_wall_vector) * gap_component
-            )
-
-        else:
-            raise ValueError(f'Unknown joint type: {self.joint_type}')
-
     def _build_pose_data(
         self,
         position: NDArray,
@@ -405,14 +281,14 @@ class WeldPlanner:
         Args:
             position: 3D position vector.
             tangent: Tangent vector (X-axis).
-            binormal: Binormal vector (Y-axis will be -binormal).
-            normal: Normal vector (Z-axis will be -normal).
+            binormal: Binormal vector (Y-axis).
+            normal: Normal vector (Z-axis - torch pointing direction).
             index: Point index in sequence.
 
         Returns:
             Dictionary with 'index', 'position', 'quaternion', and 'matrix' keys.
         """
-        rot_matrix = np.column_stack([tangent, -binormal, -normal])
+        rot_matrix = np.column_stack([tangent, binormal, normal])
 
         quat = Rotation.from_matrix(rot_matrix).as_quat()
 

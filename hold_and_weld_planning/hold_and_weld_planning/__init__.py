@@ -16,7 +16,13 @@
 
 from .core import LineSegment, Seam, Surface
 from .planning import WeldPlanner
-from .urdf import SurfaceProcessor, URDFProcessor, URDFSeamPlanner
+from .urdf import (
+    URDFProcessor,
+    SurfaceExtractor,
+    SurfaceAnalyzer,
+    SeamDetector,
+    URDFSeamPlanner
+)
 from .utils import (
     auto_generate_output_path,
     export_to_json,
@@ -25,13 +31,16 @@ from .utils import (
 )
 
 __version__ = '0.1.0'
+
 __all__ = [
     'LineSegment',
     'Seam',
     'Surface',
     'WeldPlanner',
     'URDFProcessor',
-    'SurfaceProcessor',
+    'SurfaceExtractor',
+    'SurfaceAnalyzer',
+    'SeamDetector',
     'URDFSeamPlanner',
     'load_weld_job',
     'export_to_json',

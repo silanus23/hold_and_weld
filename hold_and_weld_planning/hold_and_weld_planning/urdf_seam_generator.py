@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""URDF-based seam generator - auto-detects surfaces and joint types from geometry.
+"""URDF-based seam generator - auto-detects seams from geometry.
 
-This module provides a command-line interface for generating weld seam trajectories
-by automatically analyzing URDF geometry files. It detects joint types (butt, lap,
-T-joint, etc.) and generates appropriate seam paths with configurable welding parameters.
+Geometry-driven seam generation without joint type classification.
+Generates weld trajectories from URDF analysis with configurable parameters.
 """
 
 import argparse
@@ -32,22 +31,14 @@ if __name__ == '__main__':
 from hold_and_weld_planning.urdf import URDFSeamPlanner
 from hold_and_weld_planning.utils import (
     auto_generate_output_path,
-    export_to_json,
     load_urdf_config,
 )
 
 
 def parse_arguments():
-    """Parse command line arguments for URDF-based seam generation.
-
-    Returns:
-        argparse.Namespace: Parsed arguments containing:
-            - input: Path to input YAML configuration file
-            - output: Optional path to output JSON file
-            - verbose: Flag for detailed output
-    """
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Generate weld seams using URDF geometry (auto-detect surfaces)',
+        description='Generate weld seams using URDF geometry',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -90,15 +81,7 @@ Examples:
 
 
 def main():
-    """Orchestrate URDF-based seam generation workflow.
-
-    Loads URDF configuration, analyzes workpiece geometry to detect joint types,
-    generates seam trajectories with specified welding parameters, and exports
-    results to JSON format.
-
-    Returns:
-        int: Exit code (0 for success, 1 for error)
-    """
+    """Run URDF-based seam generation workflow."""
     args = parse_arguments()
 
     if args.input is None:
@@ -108,166 +91,112 @@ def main():
 
     try:
         if args.verbose:
-            print(f'Loading URDF-based configuration from: {args.input}')
+            print(f'Loading configuration from: {args.input}')
 
         seams, parameters, workpiece_config = load_urdf_config(args.input)
 
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
-            print(f'  Number of seams: {len(seams)}')
             print(f'  Points per seam: {parameters["num_points"]}')
             print(f'  Work angle: {parameters["work_angle_deg"]}°')
             print(f'  Travel angle: {parameters["travel_angle_deg"]}°')
             print(f'  Gap: {parameters["gap_mm"]}mm')
             print()
 
-        planner = URDFSeamPlanner(workpiece_config)
+        main_urdf = workpiece_config['main_part']['urdf_path']
+        secondary_urdf = workpiece_config['secondary_part']['urdf_path']
+
+        main_world_pose = workpiece_config['main_part'].get('world_pose')
+        secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
+
+        planner = URDFSeamPlanner(
+            main_urdf_path=main_urdf,
+            secondary_urdf_path=secondary_urdf,
+            main_world_pose=main_world_pose,
+            secondary_world_pose=secondary_world_pose
+        )
 
         main_link = workpiece_config['main_part']['link_name']
         secondary_link = workpiece_config['secondary_part']['link_name']
-        auto_detect = workpiece_config.get('auto_detect_seams', False)
 
         if args.verbose:
-            print(
-                f'  Main part URDF: '
-                f'{workpiece_config["main_part"]["urdf_path"]}'
-            )
+            print(f'  Main part URDF: {main_urdf}')
             print(f'  Main link: {main_link}')
-            print(
-                f'  Secondary part URDF: '
-                f'{workpiece_config["secondary_part"]["urdf_path"]}'
-            )
+            print(f'  Secondary part URDF: {secondary_urdf}')
             print(f'  Secondary link: {secondary_link}')
-            print(f'  Auto-detect seams: {auto_detect}')
+            print()
+            print('Auto-detecting seams from geometry...')
+
+        generated_seams = planner.auto_detect_and_generate_seams(
+            main_link=main_link,
+            secondary_link=secondary_link,
+            parameters=parameters,
+            min_seam_length_m=0.01
+        )
+
+        if not generated_seams:
+            print('ERROR: No seams detected from geometry')
+            return 1
+
+        if args.verbose:
+            print(f'  Detected {len(generated_seams)} seam segment(s)')
+            
+            num_edge = sum(1 for s in generated_seams if s.config.get('is_edge_joint', False))
+            num_flat = len(generated_seams) - num_edge
+            
+            if num_edge > 0:
+                print(f'  Edge joints (edge-on-edge): {num_edge}')
+            if num_flat > 0:
+                print(f'  Flat joints (edge-on-surface): {num_flat}')
+            
+            for idx, seam in enumerate(generated_seams):
+                seam_length_mm = seam.line_segment.length() * 1000
+                num_poses = len(seam.poses) if seam.poses else 0
+                joint_type = 'EDGE' if seam.config.get('is_edge_joint') else 'FLAT'
+                print(f'  Segment {idx}: {seam_length_mm:.1f}mm with {num_poses} poses [{joint_type}]')
             print()
 
-        # Use different workflow based on auto_detect_seams setting
-        if auto_detect:
+        print(f'Generated {len(generated_seams)} seam segment(s)')
+        print()
+
+        if args.output is None:
+            output_path = auto_generate_output_path(args.input)
             if args.verbose:
-                print('Auto-detecting seams from geometry...')
-
-            seams_data, success = planner.auto_detect_and_generate_seams(
-                parameters
-            )
-
-            if not success or not seams_data:
-                print('ERROR: Failed to auto-detect or generate seams')
-                return 1
-
-            # Extract joint type from first seam (all should have same joint type)
-            joint_type = seams_data[0]['joint_type']
-
-            if args.verbose:
-                print(f'  Detected {len(seams_data)} seam(s)')
-                print(f'  Detected joint type: {joint_type}')
-                for idx, seam_data in enumerate(seams_data):
-                    seam_length_mm = seam_data['length'] * 1000
-                    num_poses = len(seam_data['poses'])
-                    print(
-                        f'  Seam {idx}: {seam_length_mm:.1f}mm '
-                        f'with {num_poses} poses'
-                    )
-                print()
-
-            print(
-                f'Auto-detected and generated {len(seams_data)} seam(s) '
-                f'with joint type: {joint_type}'
-            )
-            print()
-
-            # Build metadata from auto-detected data
-            metadata = {
-                'input_file': str(Path(args.input).resolve()),
-                'joint_type': joint_type,
-                'joint_type_auto_detected': True,
-                'seams_auto_detected': True,
-                'work_angle_deg': parameters['work_angle_deg'],
-                'travel_angle_deg': parameters['travel_angle_deg'],
-                'gap_mm': parameters['gap_mm']
-            }
-
-            if args.output is None:
-                output_path = auto_generate_output_path(args.input)
-                if args.verbose:
-                    print(f'Auto-generated output path: {output_path}')
-            else:
-                output_path = Path(args.output)
-
-            # Convert seams_data to JSON-compatible format
-            output_data = {
-                'metadata': metadata,
-                'seams': {}
-            }
-
-            for seam_data in seams_data:
-                seam_id = seam_data['seam_id']
-                output_data['seams'][seam_id] = {
-                    'start': seam_data['start'],
-                    'end': seam_data['end'],
-                    'length_m': seam_data['length'],
-                    'poses': seam_data['poses'],
-                    'num_poses': len(seam_data['poses']),
-                    'joint_type': seam_data['joint_type'],
-                    'main_surface_id': seam_data['main_surface_id'],
-                    'secondary_surface_id': seam_data['secondary_surface_id']
-                }
-
-            # Write JSON file
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w') as f:
-                json.dump(output_data, f, indent=2)
-
+                print(f'Auto-generated output path: {output_path}')
         else:
-            # Manual seams workflow
-            if not seams:
-                print(
-                    'ERROR: No seams specified and auto_detect_seams '
-                    'is disabled'
-                )
-                return 1
+            output_path = Path(args.output)
 
-            joint_type, surface_info, success = planner.generate_seams(
-                seams, parameters
-            )
+        metadata = {
+            'input_file': str(Path(args.input).resolve()),
+            'work_angle_deg': parameters['work_angle_deg'],
+            'travel_angle_deg': parameters['travel_angle_deg'],
+            'gap_mm': parameters['gap_mm'],
+            'num_segments': len(generated_seams),
+            'geometry_driven': True,
+            'note': 'Seams split at surface boundaries, edge vs flat determined by boundary positions'
+        }
 
-            if not success:
-                print('ERROR: Failed to generate seams')
-                return 1
+        output_data = {
+            'metadata': metadata,
+            'seams': {}
+        }
 
-            if args.verbose:
-                print(f'  Detected joint type: {joint_type}')
-                print(f'  Surface center: {surface_info["center"]}')
-                print(f'  Surface normal: {surface_info["normal"]}')
-                print()
+        for idx, seam in enumerate(generated_seams):
+            seam_id = f'segment_{idx:03d}'
+            
+            seam.is_generated = True
+            seam_dict = seam.to_dict()
+            
+            seam_dict['is_edge_joint'] = bool(seam.config.get('is_edge_joint', False))
+            seam_dict['on_surface'] = str(seam.config.get('on_surface', 'unknown'))
+            
+            output_data['seams'][seam_id] = seam_dict
 
-            print(
-                f'Generated {len(seams)} seam(s) with joint type: '
-                f'{joint_type}'
-            )
-            print()
-
-            if args.output is None:
-                output_path = auto_generate_output_path(args.input)
-                if args.verbose:
-                    print(f'Auto-generated output path: {output_path}')
-            else:
-                output_path = Path(args.output)
-
-            metadata = {
-                'input_file': str(Path(args.input).resolve()),
-                'joint_type': joint_type,
-                'joint_type_auto_detected': True,
-                'work_angle_deg': parameters['work_angle_deg'],
-                'travel_angle_deg': parameters['travel_angle_deg'],
-                'gap_mm': parameters['gap_mm'],
-                'surface_center': surface_info['center'],
-                'surface_normal': surface_info['normal']
-            }
-
-            export_to_json(seams, output_path, metadata)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(output_data, f, indent=2)
 
         print(f'Exported to: {output_path}')
-
         return 0
 
     except FileNotFoundError as e:

@@ -14,8 +14,16 @@
 
 """URDF-based geometry processing and weld planning."""
 
-from .surface_processor import SurfaceProcessor
 from .urdf_processor import URDFProcessor
+from .surface_extractor import SurfaceExtractor
+from .surface_analyzer import SurfaceAnalyzer
+from .seam_detector import SeamDetector
 from .urdf_seam_planner import URDFSeamPlanner
 
-__all__ = ['URDFProcessor', 'SurfaceProcessor', 'URDFSeamPlanner']
+__all__ = [
+    'URDFProcessor',
+    'SurfaceExtractor',
+    'SurfaceAnalyzer',
+    'SeamDetector',
+    'URDFSeamPlanner'
+]
