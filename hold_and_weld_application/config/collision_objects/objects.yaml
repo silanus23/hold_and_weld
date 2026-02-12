@@ -1,38 +1,37 @@
+# Test 4: T-joint 45° rotation (around Y-axis)
 /**:
   ros__parameters:
-    # Environment object configuration
-    # base_link: Object held by gripper during welding
-    # child_link: Target object for gripper manipulation
-    
-    # URDF paths (relative to hold_and_weld_description package)
-    # Link names in URDFs MUST be 'base_link' and 'child_link'
     base_link:
       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
       id: 'base_link'
-      spawn_name: 'base_link'
+      spawn_name: 'workpiece_tjoint_45deg'
       pose:
         x: 1.2
         y: -0.5
         z: 0.65
+      orientation:
+        x: 0.0
+        y: 0.3826834
+        z: 0.0
+        w: 0.9238795
       
     child_link:
       urdf_path: 'urdf/environment/cube.urdf.xacro'
       id: 'child_link'
-      spawn_name: 'child_link'
+      spawn_name: 'cube_tjoint_45deg'
       pose:
         x: 1.2
-        y: 0.3
+        y: -0.5
         z: 0.125
       end_pose:
         position:
-          x: 1.2
+          x: 1.394
           y: -0.5
-          z: 0.935
+          z: 0.844
         orientation:
           x: 0.0
-          y: 0.7071068
+          y: 0.3826834
           z: 0.0
-          w: 0.7071068
+          w: 0.9238795
     
-    # Frame ID for collision objects
     frame_id: 'world'

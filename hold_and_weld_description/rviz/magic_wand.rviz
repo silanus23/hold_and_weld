@@ -41,9 +41,9 @@ Visualization Manager:
       Enable Transparency: true
       Enabled: true
       Name: TorchTips
-      Show Axes: false
+      Show Axes: true
       Show Descriptions: true
-      Show Visual Aids: false
+      Show Visual Aids: true
       Update Topic:
         Depth: 5
         Durability Policy: Volatile

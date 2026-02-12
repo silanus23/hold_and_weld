@@ -61,7 +61,7 @@ class AddCollisionObjects(Node):
         self.add_object_from_urdf(
             child_link_config.get('urdf_path', ''),
             child_link_config.get('id', 'child_link'),
-            child_link_config.get('pose', {}),
+            child_link_config,
             frame_id,
             desc_pkg
         )
@@ -71,13 +71,15 @@ class AddCollisionObjects(Node):
         self.add_object_from_urdf(
             base_link_config.get('urdf_path', ''),
             base_link_config.get('id', 'base_link'),
-            base_link_config.get('pose', {}),
+            base_link_config,
             frame_id,
             desc_pkg
         )
 
-    def add_object_from_urdf(self, urdf_path, object_id, pose_config, frame_id, desc_pkg):
+    def add_object_from_urdf(self, urdf_path, object_id, object_config, frame_id, desc_pkg):
         """Add collision object by parsing URDF file."""
+        pose_config = object_config.get('pose', {})
+        orientation_config = object_config.get('orientation', {})
         full_urdf_path = os.path.join(desc_pkg, urdf_path)
         
         # Process xacro to get URDF
@@ -138,7 +140,10 @@ class AddCollisionObjects(Node):
         pose.position.x = pose_config.get('x', 0.0)
         pose.position.y = pose_config.get('y', 0.0)
         pose.position.z = pose_config.get('z', 0.0)
-        pose.orientation.w = 1.0
+        pose.orientation.x = orientation_config.get('x', 0.0)
+        pose.orientation.y = orientation_config.get('y', 0.0)
+        pose.orientation.z = orientation_config.get('z', 0.0)
+        pose.orientation.w = orientation_config.get('w', 1.0)
         
         collision_obj.primitive_poses = [pose]
         collision_obj.operation = CollisionObject.ADD

@@ -19,6 +19,7 @@ Launches: Gazebo, MoveIt, RViz, and application nodes.
 """
 
 import os
+import math
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -43,6 +44,28 @@ from launch_ros.substitutions import FindPackageShare
 import yaml
 
 
+def quaternion_to_euler(qx, qy, qz, qw):
+    """Convert quaternion to euler angles (roll, pitch, yaw)."""
+    # Roll (x-axis rotation)
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    
+    # Pitch (y-axis rotation)
+    sinp = 2.0 * (qw * qy - qz * qx)
+    if abs(sinp) >= 1:
+        pitch = math.copysign(math.pi / 2, sinp)
+    else:
+        pitch = math.asin(sinp)
+    
+    # Yaw (z-axis rotation)
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    
+    return roll, pitch, yaw
+
+
 def generate_launch_description():
     """Launch main system with full stack."""
     # PACKAGE DIRECTORIES
@@ -63,9 +86,15 @@ def generate_launch_description():
             default_value='true',
             description='Launch RViz visualization',
         ),
+        DeclareLaunchArgument(
+            'use_gazebo_gui',
+            default_value='true',
+            description='Launch Gazebo with GUI (set to false for headless mode)',
+        ),
     ]
 
     use_rviz = LaunchConfiguration('use_rviz')
+    use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
 
     # FILE PATHS
     controller_config = PathJoinSubstitution(
@@ -172,7 +201,7 @@ def generate_launch_description():
     
     base_link_urdf_path = objects_config.get('base_link', {}).get('urdf_path', '')
     base_link_spawn_name = objects_config.get('base_link', {}).get('spawn_name', 'base_link')
-    base_link_pose = objects_config.get('base_link_collision', {}).get('pose', {})
+    base_link_pose = objects_config.get('base_link', {}).get('pose', {})
     
     child_link_xacro_file = PathJoinSubstitution([
         FindPackageShare('hold_and_weld_description'),
@@ -201,6 +230,15 @@ def generate_launch_description():
     )
 
     # GAZEBO SIMULATION
+    # Build gz_args conditionally: add -s flag for headless mode (no GUI)
+    from launch.substitutions import PythonExpression
+    gz_args_with_gui = ['-r -v 4 ', world_path]
+    gz_args_headless = ['-r -v 4 -s ', world_path]  # -s for server-only/headless mode
+    
+    gz_args = PythonExpression([
+        "'", '-r -v 4 ', "' if '", use_gazebo_gui, "' == 'true' else '", '-r -v 4 -s ', "'"
+    ])
+    
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
@@ -209,10 +247,10 @@ def generate_launch_description():
                 'gz_sim.launch.py',
             ])
         ),
-        launch_arguments={
-            'gz_args': ('-r -v 4 ', world_path),
-            'on_exit_shutdown': 'true',
-        }.items(),
+        launch_arguments=[
+            ('gz_args', [gz_args, ' ', world_path]),
+            ('on_exit_shutdown', 'true'),
+        ],
     )
 
     # ROS-GAZEBO BRIDGE
@@ -258,6 +296,14 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Convert child_link quaternion to euler
+    child_roll, child_pitch, child_yaw = quaternion_to_euler(
+        child_link_pose.get('qx', 0.0),
+        child_link_pose.get('qy', 0.0),
+        child_link_pose.get('qz', 0.0),
+        child_link_pose.get('qw', 1.0)
+    )
+    
     spawn_child_link = Node(
         package='ros_gz_sim',
         executable='create',
@@ -268,8 +314,19 @@ def generate_launch_description():
             '-x', str(child_link_pose.get('x', 1.2)),
             '-y', str(child_link_pose.get('y', 0.3)),
             '-z', str(child_link_pose.get('z', 0.125)),
+            '-R', str(child_roll),
+            '-P', str(child_pitch),
+            '-Y', str(child_yaw),
         ],
         output='screen',
+    )
+
+    # Convert base_link quaternion to euler
+    base_roll, base_pitch, base_yaw = quaternion_to_euler(
+        base_link_pose.get('qx', 0.0),
+        base_link_pose.get('qy', 0.0),
+        base_link_pose.get('qz', 0.0),
+        base_link_pose.get('qw', 1.0)
     )
 
     spawn_base_link = Node(
@@ -282,6 +339,9 @@ def generate_launch_description():
             '-x', str(base_link_pose.get('x', 1.2)),
             '-y', str(base_link_pose.get('y', -0.5)),
             '-z', str(base_link_pose.get('z', 0.65)),
+            '-R', str(base_roll),
+            '-P', str(base_pitch),
+            '-Y', str(base_yaw),
             '-static',
         ],
         output='screen',

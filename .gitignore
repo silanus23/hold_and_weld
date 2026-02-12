@@ -32,7 +32,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
-
+tempCodeRunnerFile.py
 
 # Firmware images
 *.elf

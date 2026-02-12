@@ -87,7 +87,7 @@ class MagicWand(Node):
                 self.spawn_collision_object(
                     base_link_config.get('urdf_path', ''),
                     base_link_config.get('id', 'base_link'),
-                    base_pose,
+                    base_link_config,
                     desc_pkg
                 )
             
@@ -107,9 +107,16 @@ class MagicWand(Node):
 
         # Load and visualize torch tips from latest trajectory JSON
         self.load_and_visualize_latest_json()
+        
 
-    def spawn_collision_object(self, urdf_path, object_id, pose_config, desc_pkg, is_end_pose=False):
+    def spawn_collision_object(self, urdf_path, object_id, object_config, desc_pkg, is_end_pose=False):
         """Spawn collision object at the specified pose."""
+        # Extract pose and orientation based on config structure
+        if is_end_pose:
+            pose_config = object_config  # end_pose already contains position/orientation
+        else:
+            pose_config = object_config.get('pose', {})
+            orientation_config = object_config.get('orientation', {})
         full_urdf_path = os.path.join(desc_pkg, urdf_path)
         
         # Process xacro to get URDF
@@ -169,8 +176,8 @@ class MagicWand(Node):
         pose = Pose()
         if is_end_pose:
             # end_pose has position/orientation sub-dicts
-            position = pose_config.get('position', {})
-            orientation = pose_config.get('orientation', {})
+            position = object_config.get('position', {})
+            orientation = object_config.get('orientation', {})
             pose.position.x = position.get('x', 0.0)
             pose.position.y = position.get('y', 0.0)
             pose.position.z = position.get('z', 0.0)
@@ -179,11 +186,14 @@ class MagicWand(Node):
             pose.orientation.z = orientation.get('z', 0.0)
             pose.orientation.w = orientation.get('w', 1.0)
         else:
-            # regular pose has x/y/z directly
+            # regular pose has x/y/z in pose dict, orientation as sibling
             pose.position.x = pose_config.get('x', 0.0)
             pose.position.y = pose_config.get('y', 0.0)
             pose.position.z = pose_config.get('z', 0.0)
-            pose.orientation.w = 1.0
+            pose.orientation.x = orientation_config.get('x', 0.0)
+            pose.orientation.y = orientation_config.get('y', 0.0)
+            pose.orientation.z = orientation_config.get('z', 0.0)
+            pose.orientation.w = orientation_config.get('w', 1.0)
         
         collision_obj.primitive_poses = [pose]
         collision_obj.operation = CollisionObject.ADD
@@ -225,16 +235,22 @@ class MagicWand(Node):
         all_json_files = []
         for search_dir in search_dirs:
             json_files = glob.glob(os.path.join(search_dir, '*.json'))
-            all_json_files.extend(json_files)
-            self.get_logger().info(f'Found {len(json_files)} JSON files in {search_dir}')
+            # Filter out files that don't exist or can't be accessed
+            valid_files = [f for f in json_files if os.path.exists(f) and os.path.isfile(f)]
+            all_json_files.extend(valid_files)
+            self.get_logger().info(f'Found {len(valid_files)} valid JSON files in {search_dir}')
         
         if not all_json_files:
-            self.get_logger().error('No JSON files found in any search directory!')
+            self.get_logger().error('No valid JSON files found in any search directory!')
             return
 
-        # Get the latest file by modification time
-        latest_json = max(all_json_files, key=os.path.getmtime)
-        self.get_logger().info(f'Loading latest JSON file: {latest_json}')
+        # Get the latest file by modification time (with error handling)
+        try:
+            latest_json = max(all_json_files, key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0)
+            self.get_logger().info(f'Loading latest JSON file: {latest_json}')
+        except (OSError, ValueError) as e:
+            self.get_logger().error(f'Error finding latest JSON file: {e}')
+            return
 
         # Load JSON data
         try:
@@ -257,17 +273,23 @@ class MagicWand(Node):
         seams = data.get('seams', {})
         metadata = data.get('metadata', {})
         
+        if not seams:
+            self.get_logger().error('No seams found in JSON!')
+            return
+        
         # Use coordinate system from metadata
         coordinate_frame = metadata.get('coordinate_system', 'world')
-        self.get_logger().info(f'Using coordinate frame from JSON: {coordinate_frame}')
-        self.get_logger().info(f'Creating torch tip markers for {len(seams)} seams')
+        self.get_logger().info(f'Using coordinate frame: {coordinate_frame}')
+        self.get_logger().info(f'Found {len(seams)} seams in JSON')
         
         marker_count = 0
         for seam_name, seam_data in seams.items():
             poses = seam_data.get('poses', [])
+            self.get_logger().info(f'Processing {seam_name}: {len(poses)} poses')
             
             # Sample poses (every 5th pose to avoid clutter)
             sample_step = max(1, len(poses) // 20)  # Max 20 markers per seam
+            self.get_logger().info(f'Sampling every {sample_step} poses')
             
             for i, pose_data in enumerate(poses[::sample_step]):
                 position = pose_data.get('position', [0, 0, 0])
@@ -275,16 +297,16 @@ class MagicWand(Node):
                 
                 # Create interactive marker for this torch tip
                 int_marker = InteractiveMarker()
-                int_marker.header.frame_id = metadata.get('coordinate_system', 'world')
+                int_marker.header.frame_id = coordinate_frame
                 int_marker.name = f'{seam_name}_pose_{i*sample_step}'
                 int_marker.description = f'{seam_name} Torch Tip {i*sample_step}'
-                int_marker.pose.position.x = position[0]
-                int_marker.pose.position.y = position[1]
-                int_marker.pose.position.z = position[2]
-                int_marker.pose.orientation.x = quaternion[0]
-                int_marker.pose.orientation.y = quaternion[1]
-                int_marker.pose.orientation.z = quaternion[2]
-                int_marker.pose.orientation.w = quaternion[3]
+                int_marker.pose.position.x = float(position[0])
+                int_marker.pose.position.y = float(position[1])
+                int_marker.pose.position.z = float(position[2])
+                int_marker.pose.orientation.x = float(quaternion[0])
+                int_marker.pose.orientation.y = float(quaternion[1])
+                int_marker.pose.orientation.z = float(quaternion[2])
+                int_marker.pose.orientation.w = float(quaternion[3])
                 
                 # Create marker control (non-interactive, just visualization)
                 marker_control = InteractiveMarkerControl()
@@ -294,9 +316,9 @@ class MagicWand(Node):
                 # Create torch tip visual (small axis)
                 axis_marker = Marker()
                 axis_marker.type = Marker.ARROW
-                axis_marker.scale.x = 0.05  # Shaft diameter
-                axis_marker.scale.y = 0.008  # Head diameter
-                axis_marker.scale.z = 0.008  # Head length
+                axis_marker.scale.x = 0.01  # Shaft diameter
+                axis_marker.scale.y = 0.015  # Head diameter
+                axis_marker.scale.z = 0.015  # Head length
                 
                 # Color based on seam (rainbow effect)
                 color = ColorRGBA()
@@ -309,7 +331,7 @@ class MagicWand(Node):
                 start_point = Point()
                 start_point.x, start_point.y, start_point.z = 0.0, 0.0, 0.0
                 end_point = Point()
-                end_point.x, end_point.y, end_point.z = 0.0, 0.0, 0.05
+                end_point.x, end_point.y, end_point.z = 0.0, 0.0, 0.1
                 axis_marker.points = [start_point, end_point]
                 
                 marker_control.markers.append(axis_marker)
@@ -319,8 +341,10 @@ class MagicWand(Node):
                 self.marker_server.insert(int_marker, feedback_callback=self.marker_feedback)
                 marker_count += 1
         
+        self.get_logger().info(f'Inserted {marker_count} markers, calling applyChanges()...')
         self.marker_server.applyChanges()
-        self.get_logger().info(f'Created {marker_count} torch tip markers successfully!')
+        self.get_logger().info(f'✓ Created {marker_count} torch tip markers and applied changes!')
+        self.get_logger().info(f'Check RViz InteractiveMarkers display with topic: /torch_tips/update')
 
     def hsv_to_rgb(self, h, s, v):
         """Convert HSV to RGB."""
