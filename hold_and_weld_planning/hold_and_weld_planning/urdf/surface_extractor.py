@@ -1,4 +1,4 @@
-# Copyright 2026 Berkan Tali
+# Copyright 2025 Berkan Tali
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -15,20 +15,22 @@
 """Surface extractor - extracts planar surfaces from URDF collision geometries.
 
 This module provides tools for extracting planar surfaces from URDF collision
-geometries (boxes and cylinders). Surfaces are represented as dictionaries
+geometries (boxes and cylinders). Surfaces are represented as Surface objects
 containing center, normal, axes, bounds, and area information.
 """
 
-from typing import Any, Dict, List
+from typing import Any, List
 
 import numpy as np
 from numpy.typing import NDArray
+
+from ..core.surface import Surface
 
 
 class SurfaceExtractor:
     """Extract planar surfaces from URDF collision geometries.
 
-    Supports box and cylinder geometries. Returns surfaces as dictionaries
+    Supports box and cylinder geometries. Returns surfaces as Surface objects
     with world-frame coordinates.
     """
 
@@ -43,14 +45,14 @@ class SurfaceExtractor:
 
     def extract_all_surfaces_from_links(
         self, link_names: List[str]
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Surface]:
         """Extract all planar surfaces from multiple links.
 
         Args:
             link_names: List of link names to process.
 
         Returns:
-            List of surface dictionaries from all links.
+            List of Surface objects from all links.
         """
         all_surfaces = []
 
@@ -60,22 +62,22 @@ class SurfaceExtractor:
 
         return all_surfaces
 
-    def extract_all_surfaces(self, link_name: str) -> List[Dict[str, Any]]:
+    def extract_all_surfaces(self, link_name: str) -> List[Surface]:
         """Extract all planar surfaces from a link's collision geometries.
 
         Args:
             link_name: Name of the link to analyze.
 
         Returns:
-            List of surface dictionaries, each containing:
+            List of Surface objects, each containing:
+                - surface_id: identifier string (e.g., 'link:0:top')
                 - center: np.array [x, y, z] in world frame
                 - normal: np.array [x, y, z] unit vector in world frame
-                - u_axis: np.array [x, y, z] first bound direction
-                - v_axis: np.array [x, y, z] second bound direction
-                - area: surface area in m²
-                - bounds: [dim1, dim2] dimensions along u_axis and v_axis
-                - face_id: identifier string (e.g., 'link:0:top')
-                - is_circular: bool indicating if surface is circular (cylinder cap)
+                - corners: list of corner points (N corners for N-gon)
+                - edges: list of (start, end) point pairs
+                - u_axis: np.array [x, y, z] first basis vector
+                - v_axis: np.array [x, y, z] second basis vector
+                - bounds: dict with u_min, u_max, v_min, v_max keys
 
         Raises:
             ValueError: If link not found or geometry not supported.
@@ -125,7 +127,7 @@ class SurfaceExtractor:
         world_transform: NDArray,
         link_name: str,
         collision_idx: int
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Surface]:
         """Extract 6 planar surfaces from a box geometry.
 
         Args:
@@ -135,7 +137,7 @@ class SurfaceExtractor:
             collision_idx: Index of collision within link.
 
         Returns:
-            List of 6 surface dictionaries.
+            List of 6 Surface objects.
         """
         length, width, height = geometry.size
 
@@ -176,7 +178,7 @@ class SurfaceExtractor:
         world_transform: NDArray,
         link_name: str,
         collision_idx: int
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Surface]:
         """Extract 2 planar cap surfaces from a cylinder geometry.
 
         Args:
@@ -186,7 +188,7 @@ class SurfaceExtractor:
             collision_idx: Index of collision within link.
 
         Returns:
-            List of 2 surface dictionaries (top and bottom caps).
+            List of 2 Surface objects (top and bottom caps).
         """
         radius = geometry.radius
         length = geometry.length
@@ -210,18 +212,18 @@ class SurfaceExtractor:
 
         # Mark as circular and override area calculation
         for surface in surfaces:
-            surface['area'] = cap_area
-            surface['is_circular'] = True
+            surface.area = cap_area
+            surface.is_circular = True
 
         return surfaces
 
     def _transform_faces_to_world(
         self,
-        local_faces: Dict[str, Dict[str, Any]],
+        local_faces: dict,
         world_transform: NDArray,
         link_name: str,
         collision_idx: int
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Surface]:
         """Transform local face data to world frame surfaces.
 
         Args:
@@ -231,7 +233,7 @@ class SurfaceExtractor:
             collision_idx: Index of collision within link.
 
         Returns:
-            List of surface dictionaries in world frame.
+            List of Surface objects in world frame.
         """
         surfaces = []
         rot_matrix = world_transform[:3, :3]
@@ -250,17 +252,39 @@ class SurfaceExtractor:
             world_v = rot_matrix @ np.array(face['v_axis'])
             world_v = world_v / np.linalg.norm(world_v)
 
-            area = face['dims'][0] * face['dims'][1]
-            face_id = f'{link_name}:{collision_idx}:{face_name}'
+            surface_id = f'{link_name}:{collision_idx}:{face_name}'
 
-            surfaces.append({
-                'center': world_center,
-                'normal': world_normal,
-                'u_axis': world_u,
-                'v_axis': world_v,
-                'area': area,
-                'bounds': face['dims'],
-                'face_id': face_id,
-                'is_circular': False
-            })
+            #TODO: (@silanus23) make this use surface analyzer
+            # Calculate 4 corners for rectangular surfaces
+            half_u = face['dims'][0] / 2.0
+            half_v = face['dims'][1] / 2.0
+            corners = [
+                world_center + half_u * world_u + half_v * world_v,
+                world_center + half_u * world_u - half_v * world_v,
+                world_center - half_u * world_u - half_v * world_v,
+                world_center - half_u * world_u + half_v * world_v,
+            ]
+
+            # Compute edges from corners
+            edges = Surface.compute_boundary_edges(corners)
+
+            # Create bounds dict
+            bounds = {
+                'u_min': -half_u,
+                'u_max': half_u,
+                'v_min': -half_v,
+                'v_max': half_v
+            }
+
+            surfaces.append(Surface(
+                surface_id=surface_id,
+                center=world_center,
+                normal=world_normal,
+                corners=corners,
+                edges=edges,
+                u_axis=world_u,
+                v_axis=world_v,
+                bounds=bounds
+            ))
+
         return surfaces

@@ -18,11 +18,11 @@ Provides a reusable geometric primitive for representing line segments in 3D spa
 Useful for mesh edges, rays, seam paths, and other linear geometric entities.
 """
 
-from typing import List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
-
+from .surface import Surface
 
 class LineSegment:
     """Represent a 3D line segment defined by start and end points.
@@ -33,26 +33,27 @@ class LineSegment:
     Attributes:
         start: Start point as numpy array [x, y, z].
         end: End point as numpy array [x, y, z].
-        away_from_wall_vector: Optional normalized vector [x, y, z] pointing away
-            from wall/material. None if not set yet.
+        main_surface: Surface that contains seam lines.
+        secondary_surface: Surface sittng on top of main.
     """
 
     def __init__(
         self,
         start: List[float] | NDArray,
         end: List[float] | NDArray,
-        away_from_wall_vector: List[float] | NDArray | None = None
+        main_surface: Optional[Surface] = None,
+        secondary_surface: Optional[Surface] = None
     ) -> None:
         """Initialize line segment from start and end points.
 
         Args:
             start: Start point [x, y, z] as list or numpy array.
             end: End point [x, y, z] as list or numpy array.
-            away_from_wall_vector: Optional vector [x, y, z] pointing away.
-                Will be normalized if provided.
+            main_surface: Main surface associated with this segment.
+            secondary_surface: Secondary surface associated with this segment.
 
         Raises:
-            ValueError: If points are not 3D or away_from_wall_vector is not 3D.
+            ValueError: If points are not 3D.
         """
         self.start = np.array(start, dtype=float)
         self.end = np.array(end, dtype=float)
@@ -60,18 +61,8 @@ class LineSegment:
         if self.start.shape != (3,) or self.end.shape != (3,):
             raise ValueError('Start and end must be 3D points [x, y, z]')
 
-        if away_from_wall_vector is not None:
-            away_from_wall_vector = np.array(away_from_wall_vector, dtype=float)
-            if away_from_wall_vector.shape != (3,):
-                raise ValueError(
-                    'away_from_wall_vector must be 3D vector [x, y, z]'
-                )
-            # Normalize it
-            self.away_from_wall_vector = (
-                away_from_wall_vector / np.linalg.norm(away_from_wall_vector)
-            )
-        else:
-            self.away_from_wall_vector = None
+        self.main_surface = main_surface
+        self.secondary_surface = secondary_surface
 
     def length(self) -> float:
         """Calculate segment length in meters.

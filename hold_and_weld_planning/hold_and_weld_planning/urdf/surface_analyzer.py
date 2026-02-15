@@ -14,62 +14,39 @@
 
 """Surface analyzer - geometric queries and calculations on surfaces.
 
-This module provides pure geometric operations on surface dictionaries,
+This module provides pure geometric operations on Surface objects,
 including containment checks, overlap calculations, projections, and
 surface relationship analysis.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 
 import numpy as np
 from numpy.typing import NDArray
+
+from ..core.surface import Surface
 
 
 class SurfaceAnalyzer:
     """Perform geometric queries and calculations on surfaces."""
 
     @staticmethod
-    def get_surface_corners(surface: Dict[str, Any]) -> List[NDArray]:
-        """Get the 4 corner points of a rectangular surface.
-
-        Args:
-            surface: Surface dictionary with center, u_axis, v_axis, bounds.
-
-        Returns:
-            4 corner points as np.arrays in clockwise order.
-        """
-        center = surface['center']
-        u_axis = surface['u_axis']
-        v_axis = surface['v_axis']
-        half_u = surface['bounds'][0] / 2.0
-        half_v = surface['bounds'][1] / 2.0
-
-        corners = [
-            center + half_u * u_axis + half_v * v_axis,
-            center + half_u * u_axis - half_v * v_axis,
-            center - half_u * u_axis - half_v * v_axis,
-            center - half_u * u_axis + half_v * v_axis,
-        ]
-
-        return corners
-
-    @staticmethod
     def project_point_to_surface(
-        point: List[float] | NDArray, surface: Dict[str, Any]
+        point: List[float] | NDArray, surface: Surface
     ) -> Tuple[float, float]:
         """Project a point onto a surface plane and get UV coordinates.
 
         Args:
             point: [x, y, z] point to project.
-            surface: Surface dictionary.
+            surface: Surface object.
 
         Returns:
             (u_coord, v_coord) tuple in surface local coordinates.
         """
         point = np.array(point)
-        center = surface['center']
-        u_axis = surface['u_axis']
-        v_axis = surface['v_axis']
+        center = surface.center
+        u_axis = surface.u_axis
+        v_axis = surface.v_axis
 
         vec = point - center
         u_coord = np.dot(vec, u_axis)
@@ -78,60 +55,9 @@ class SurfaceAnalyzer:
         return u_coord, v_coord
 
     @staticmethod
-    def is_point_inside_surface(
-        point: NDArray,
-        surface: Dict[str, Any],
-        tolerance_m: float = 0.001
-    ) -> bool:
-        """Check if a point lies inside a surface's bounds.
-
-        Args:
-            point: Point to check [x, y, z].
-            surface: Surface dictionary.
-            tolerance_m: Tolerance for bounds check (default 1mm).
-
-        Returns:
-            True if point is inside surface bounds.
-        """
-        u, v = SurfaceAnalyzer.project_point_to_surface(point, surface)
-        half_u = surface['bounds'][0] / 2.0
-        half_v = surface['bounds'][1] / 2.0
-
-        return (abs(u) <= half_u + tolerance_m and abs(v) <= half_v + tolerance_m)
-
-    @staticmethod
-    def check_containment(
-        inner_surface: Dict[str, Any],
-        outer_surface: Dict[str, Any],
-        tolerance_m: float = 0.001
-    ) -> bool:
-        """Check if inner_surface is completely contained within outer_surface.
-
-        Args:
-            inner_surface: Surface that might be inside.
-            outer_surface: Surface that might contain the other.
-            tolerance_m: Edge tolerance (default 1mm).
-
-        Returns:
-            True if inner_surface fits completely inside outer_surface.
-        """
-        inner_corners = SurfaceAnalyzer.get_surface_corners(inner_surface)
-        outer_half_u = outer_surface['bounds'][0] / 2.0
-        outer_half_v = outer_surface['bounds'][1] / 2.0
-
-        for corner in inner_corners:
-            u, v = SurfaceAnalyzer.project_point_to_surface(corner, outer_surface)
-            if abs(u) > outer_half_u + tolerance_m:
-                return False
-            if abs(v) > outer_half_v + tolerance_m:
-                return False
-
-        return True
-
-    @staticmethod
     def check_edge_alignment(
-        surface_a: Dict[str, Any],
-        surface_b: Dict[str, Any],
+        surface_a: Surface,
+        surface_b: Surface,
         tolerance_m: float = 0.01
     ) -> str:
         """Check if surface edges align or one extends past the other.
@@ -144,11 +70,11 @@ class SurfaceAnalyzer:
         Returns:
             'aligned' if edges meet, 'partial' otherwise.
         """
-        corners_a = SurfaceAnalyzer.get_surface_corners(surface_a)
-        corners_b = SurfaceAnalyzer.get_surface_corners(surface_b)
+        corners_a = surface_a.corners()
+        corners_b = surface_b.corners()
 
-        half_u_b = surface_b['bounds'][0] / 2.0
-        half_v_b = surface_b['bounds'][1] / 2.0
+        half_u_b = surface_b.bounds[0] / 2.0
+        half_v_b = surface_b.bounds[1] / 2.0
 
         coords_a = []
         for corner in corners_a:
@@ -162,8 +88,8 @@ class SurfaceAnalyzer:
             abs(v) >= half_v_b - tolerance_m for u, v in coords_a
         )
 
-        half_u_a = surface_a['bounds'][0] / 2.0
-        half_v_a = surface_a['bounds'][1] / 2.0
+        half_u_a = surface_a.bounds[0] / 2.0
+        half_v_a = surface_a.bounds[1] / 2.0
 
         coords_b = []
         for corner in corners_b:
@@ -182,72 +108,12 @@ class SurfaceAnalyzer:
         return 'partial'
 
     @staticmethod
-    def get_overlap_surface(
-        main_surface: Dict[str, Any],
-        secondary_surface: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Compute the overlapping region between two touching surfaces.
-
-        Args:
-            main_surface: Surface dict from main part.
-            secondary_surface: Surface dict from secondary part.
-
-        Returns:
-            Overlap surface dictionary.
-
-        Raises:
-            ValueError: If surfaces don't overlap.
-        """
-        secondary_corners = SurfaceAnalyzer.get_surface_corners(secondary_surface)
-
-        u_coords = []
-        v_coords = []
-        for corner in secondary_corners:
-            u, v = SurfaceAnalyzer.project_point_to_surface(corner, main_surface)
-            u_coords.append(u)
-            v_coords.append(v)
-
-        sec_u_min, sec_u_max = min(u_coords), max(u_coords)
-        sec_v_min, sec_v_max = min(v_coords), max(v_coords)
-
-        main_half_u = main_surface['bounds'][0] / 2.0
-        main_half_v = main_surface['bounds'][1] / 2.0
-
-        overlap_u_min = max(sec_u_min, -main_half_u)
-        overlap_u_max = min(sec_u_max, main_half_u)
-        overlap_v_min = max(sec_v_min, -main_half_v)
-        overlap_v_max = min(sec_v_max, main_half_v)
-
-        if overlap_u_min >= overlap_u_max or overlap_v_min >= overlap_v_max:
-            raise ValueError('Surfaces do not overlap')
-
-        overlap_dim_u = overlap_u_max - overlap_u_min
-        overlap_dim_v = overlap_v_max - overlap_v_min
-        overlap_center_u = (overlap_u_min + overlap_u_max) / 2.0
-        overlap_center_v = (overlap_v_min + overlap_v_max) / 2.0
-
-        overlap_center = (
-            main_surface['center']
-            + overlap_center_u * main_surface['u_axis']
-            + overlap_center_v * main_surface['v_axis']
-        )
-
-        return {
-            'center': overlap_center,
-            'normal': main_surface['normal'].copy(),
-            'u_axis': main_surface['u_axis'].copy(),
-            'v_axis': main_surface['v_axis'].copy(),
-            'bounds': [overlap_dim_u, overlap_dim_v],
-            'area': overlap_dim_u * overlap_dim_v
-        }
-
-    @staticmethod
     def find_touching_pairs(
-        main_surfaces: List[Dict[str, Any]],
-        secondary_surfaces: List[Dict[str, Any]],
+        main_surfaces: List[Surface],
+        secondary_surfaces: List[Surface],
         distance_tol_m: float = 0.015,
         angle_tol_deg: float = 5.0
-    ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    ) -> List[Tuple[Surface, Surface]]:
         """Find pairs of surfaces that are touching between two parts.
 
         Args:
@@ -266,20 +132,17 @@ class SurfaceAnalyzer:
             for secondary_surface in secondary_surfaces:
                 # Check if normals are anti-parallel (facing each other)
                 dot_product = np.dot(
-                    main_surface['normal'], secondary_surface['normal']
+                    main_surface.normal, secondary_surface.normal
                 )
 
                 if dot_product > -cos_tol:
-                    # Normals not facing each other
                     continue
 
-                # Check distance between planes
-                vec_between = secondary_surface['center'] - main_surface['center']
-                distance = abs(np.dot(vec_between, main_surface['normal']))
+                vec_between = secondary_surface.center - main_surface.center
+                distance = abs(np.dot(vec_between, main_surface.normal))
 
                 if distance <= distance_tol_m:
                     touching_pairs.append((main_surface, secondary_surface))
-
         return touching_pairs
 
     @staticmethod
@@ -347,3 +210,361 @@ class SurfaceAnalyzer:
         """
         vec = np.array(point) - np.array(plane_center)
         return abs(np.dot(vec, plane_normal))
+
+    @staticmethod
+    def is_point_inside_polygon(
+        point: NDArray,
+        corners: List[NDArray],
+        normal: NDArray,
+        tolerance_m: float = 0.001
+    ) -> bool:
+        """Check if point inside N-sided polygon using ray casting.
+
+        Args:
+            point: Point to test [x, y, z]
+            corners: List of N corner points defining polygon boundary
+            normal: Surface normal (for 2D projection)
+            tolerance_m: Tolerance for on-edge points
+
+        Returns:
+            True if point is inside or on boundary of polygon
+        """
+        n = len(corners)
+        if n < 3:
+            raise ValueError('Polygon must have at least 3 corners')
+
+        # Create 2D coordinate system in polygon plane
+        u_axis = corners[1] - corners[0]
+        u_axis = u_axis / np.linalg.norm(u_axis)
+        v_axis = np.cross(normal, u_axis)
+        v_axis = v_axis / np.linalg.norm(v_axis)
+
+        # Project to 2D
+        origin = corners[0]
+        point_2d = np.array([
+            np.dot(point - origin, u_axis),
+            np.dot(point - origin, v_axis)
+        ])
+
+        corners_2d = []
+        for corner in corners:
+            corners_2d.append(np.array([
+                np.dot(corner - origin, u_axis),
+                np.dot(corner - origin, v_axis)
+            ]))
+
+        # Ray casting: cast ray to the right, count intersections
+        inside = False
+
+        for i in range(n):
+            p1 = corners_2d[i]
+            p2 = corners_2d[(i + 1) % n]
+
+            # Check if ray crosses this edge
+            if ((p1[1] > point_2d[1]) != (p2[1] > point_2d[1])):
+                # Calculate X coordinate of intersection
+                x_intersect = (
+                    p1[0] + (point_2d[1] - p1[1]) / (p2[1] - p1[1]) * (p2[0] - p1[0])
+                )
+                # If intersection is to the right of point, toggle inside
+                if point_2d[0] < x_intersect:
+                    inside = not inside
+
+        return inside
+
+    @staticmethod
+    def is_point_inside_surface(
+        point: NDArray,
+        surface: Surface,
+        tolerance_m: float = 0.001
+    ) -> bool:
+        """Check if point inside surface (works for rectangles and polygons).
+
+        Dispatches to appropriate algorithm based on surface data.
+
+        Args:
+            point: Point [x, y, z]
+            surface: Surface object
+            tolerance_m: Tolerance (default 1mm)
+
+        Returns:
+            True if point inside surface
+        """
+        if surface.corners is not None and len(surface.corners) > 0:
+            corners = [np.array(c) for c in surface.corners]
+            normal = np.array(surface.normal)
+            return SurfaceAnalyzer.is_point_inside_polygon(
+                point, corners, normal, tolerance_m
+            )
+        else:
+            # Rectangle fallback using UV projection
+            u, v = SurfaceAnalyzer.project_point_to_surface(point, surface)
+            half_u = surface.bounds[0] / 2.0
+            half_v = surface.bounds[1] / 2.0
+            return (abs(u) <= half_u + tolerance_m and abs(v) <= half_v + tolerance_m)
+
+    @staticmethod
+    def get_surface_corners(
+        center: NDArray,
+        u_axis: NDArray,
+        v_axis: NDArray,
+        bounds: Dict[str, float]
+    ) -> List[NDArray]:
+        """Compute corner points from center, axes, and bounds.
+
+        Args:
+            center: Center point [x, y, z] in world coordinates
+            u_axis: First basis vector in surface plane (unit vector)
+            v_axis: Second basis vector in surface plane (unit vector)
+            bounds: Surface bounds with UV coordinate pairs. Keys should be
+                'u0', 'v0', 'u1', 'v1', ..., 'uN', 'vN' for N corners.
+
+        Returns:
+            List of N corner points in order.
+
+        Raises:
+            ValueError: If bounds don't contain matching UV pairs.
+        """
+        # Extract UV pairs from bounds
+        uv_pairs = []
+        i = 0
+        while f'u{i}' in bounds and f'v{i}' in bounds:
+            uv_pairs.append((bounds[f'u{i}'], bounds[f'v{i}']))
+            i += 1
+
+        if len(uv_pairs) < 3:
+            raise ValueError(
+                f'Need at least 3 UV pairs to form corners, got {len(uv_pairs)}'
+            )
+
+        # Compute corner points
+        corners = []
+        for u, v in uv_pairs:
+            corner = center + u * u_axis + v * v_axis
+            corners.append(corner)
+
+        return corners
+
+    @staticmethod
+    def get_overlap_polygon(
+        main_surface: Surface,
+        secondary_surface: Surface
+    ) -> Surface:
+        """Compute overlap between two polygonal surfaces using clipping.
+
+        Uses Sutherland-Hodgman polygon clipping algorithm.
+
+        Args:
+            main_surface: Main surface with corners
+            secondary_surface: Secondary surface with corners
+
+        Returns:
+            Overlap Surface object with clipped polygon
+
+        Raises:
+            ValueError: If surfaces don't overlap
+        """
+        print("things come here")
+        main_corners = [np.array(c) for c in main_surface.corners]
+        secondary_corners = [np.array(c) for c in secondary_surface.corners]
+
+        # Clip secondary polygon against main polygon
+        clipped = SurfaceAnalyzer.clip_polygon_sutherland_hodgman(
+            secondary_corners,
+            main_corners,
+            main_surface.normal
+        )
+
+        if len(clipped) < 3:
+            raise ValueError('Surfaces do not overlap')
+
+        # Compute overlap surface properties
+        overlap_center = np.mean(clipped, axis=0)
+
+        # Compute bounds in main's UV space
+        u_coords = []
+        v_coords = []
+        for corner in clipped:
+            u, v = SurfaceAnalyzer.project_point_to_surface(corner, main_surface)
+            u_coords.append(u)
+            v_coords.append(v)
+
+        # TODO: (@silanus23) consider deleting these or see if there is a problem
+        overlap_dim_u = max(u_coords) - min(u_coords)
+        overlap_dim_v = max(v_coords) - min(v_coords)
+
+        # Compute edges from clipped corners
+        edges = Surface.compute_boundary_edges(clipped)
+
+        # Create bounds dict
+        u_min = min(u_coords)
+        u_max = max(u_coords)
+        v_min = min(v_coords)
+        v_max = max(v_coords)
+        bounds = {
+            'u_min': u_min,
+            'u_max': u_max,
+            'v_min': v_min,
+            'v_max': v_max
+        }
+        print(overlap_center, main_surface.normal, clipped, edges, main_surface.u_axis, main_surface.v_axis, sep="\n")
+        print("done")
+        return Surface(
+            surface_id='overlap',
+            center=overlap_center,
+            normal=main_surface.normal.copy(),
+            corners=clipped,
+            edges=edges,
+            u_axis=main_surface.u_axis.copy(),
+            v_axis=main_surface.v_axis.copy(),
+            bounds=bounds
+        )
+
+    @staticmethod
+    def clip_polygon_sutherland_hodgman(
+        subject: List[NDArray],
+        clip: List[NDArray],
+        normal: NDArray
+    ) -> List[NDArray]:
+        if len(subject) < 3 or len(clip) < 3:
+            return []
+
+        # Instead of calculating axes from clip[0]/clip[1], which can be unstable,
+        # use the normal to build a consistent frame.
+        def get_axes(n):
+            # Find a vector not parallel to n
+            v = np.array([1, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 1, 0])
+            u = np.cross(v, n)
+            u /= np.linalg.norm(u)
+            v = np.cross(n, u)
+            return u, v
+
+        u_axis, v_axis = get_axes(normal)
+        origin = clip[0]
+
+        def to_2d(p):
+            return np.array([np.dot(p - origin, u_axis), np.dot(p - origin, v_axis)])
+
+        def to_3d(p2):
+            return origin + p2[0] * u_axis + p2[1] * v_axis
+
+        subject_2d = [to_2d(p) for p in subject]
+        clip_2d = [to_2d(p) for p in clip]
+
+        # Ensure clipping polygon is Counter-Clockwise (CCW)
+        area = 0
+        for i in range(len(clip_2d)):
+            p1 = clip_2d[i]
+            p2 = clip_2d[(i + 1) % len(clip_2d)]
+            area += (p2[0] - p1[0]) * (p2[1] + p1[1])
+        if area > 0:  # It's Clockwise, reverse it
+            clip_2d = clip_2d[::-1]
+
+        output = subject_2d
+        epsilon = 1e-9
+
+        for i in range(len(clip_2d)):
+            if not output: break
+
+            edge_start = clip_2d[i]
+            edge_end = clip_2d[(i + 1) % len(clip_2d)]
+
+            # Inward normal for CCW polygon
+            edge_vec = edge_end - edge_start
+            edge_normal = np.array([-edge_vec[1], edge_vec[0]])
+
+            input_list = output
+            output = []
+
+            for j in range(len(input_list)):
+                current = input_list[j]
+                previous = input_list[j - 1]
+
+                # Use epsilon to prevent points on the edge from being clipped
+                curr_dot = np.dot(current - edge_start, edge_normal)
+                prev_dot = np.dot(previous - edge_start, edge_normal)
+
+                current_inside = curr_dot >= -epsilon
+                previous_inside = prev_dot >= -epsilon
+
+                if current_inside:
+                    if not previous_inside:
+                        inter = SurfaceAnalyzer.line_intersection_2d(previous, current, edge_start, edge_end)
+                        if inter is not None: output.append(inter)
+                    output.append(current)
+                elif previous_inside:
+                    inter = SurfaceAnalyzer.line_intersection_2d(previous, current, edge_start, edge_end)
+                    if inter is not None: output.append(inter)
+
+        return [to_3d(p) for p in output]
+
+    @staticmethod
+    def line_intersection_2d(
+        p1: NDArray,
+        p2: NDArray,
+        p3: NDArray,
+        p4: NDArray
+    ) -> Optional[NDArray]:
+        """Find intersection point of two 2D line segments.
+
+        Args:
+            p1, p2: First line segment endpoints
+            p3, p4: Second line segment endpoints
+
+        Returns:
+            Intersection point or None if lines don't intersect
+        """
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+        x4, y4 = p4
+
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+
+        if abs(denom) < 1e-10:
+            return None
+
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+
+        return np.array([x1 + t * (x2 - x1), y1 + t * (y2 - y1)])
+
+    @staticmethod
+    def compute_polygon_area(
+        corners: List[NDArray],
+        normal: NDArray
+    ) -> float:
+        """Compute area of N-sided polygon using shoelace formula.
+
+        Args:
+            corners: List of vertices in order (CCW or CW)
+            normal: Surface normal vector
+
+        Returns:
+            Area in square meters
+        """
+        n = len(corners)
+        if n < 3:
+            return 0.0
+
+        # Create 2D coordinate system
+        u_axis = corners[1] - corners[0]
+        u_axis = u_axis / np.linalg.norm(u_axis)
+        v_axis = np.cross(normal, u_axis)
+        v_axis = v_axis / np.linalg.norm(v_axis)
+        origin = corners[0]
+
+        # Shoelace formula in 2D projection
+        area = 0.0
+
+        for i in range(n):
+            p1 = corners[i] - origin
+            p2 = corners[(i + 1) % n] - origin
+
+            u1 = np.dot(p1, u_axis)
+            v1 = np.dot(p1, v_axis)
+            u2 = np.dot(p2, u_axis)
+            v2 = np.dot(p2, v_axis)
+
+            area += u1 * v2 - u2 * v1
+
+        return abs(area) / 2.0

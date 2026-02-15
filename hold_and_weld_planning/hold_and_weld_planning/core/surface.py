@@ -111,7 +111,6 @@ class Surface:
             edges = cls.compute_boundary_edges(corners)
 
         surface_id = surface_dict.get('surface_id', surface_dict.get('id', ''))
-
         return cls(
             surface_id=surface_id,
             center=center,
@@ -131,7 +130,7 @@ class Surface:
             lists. Compatible with JSON serialization and classical planner.
         """
         return {
-            'id': self.surface_id,  # Keep as 'id' for compatibility
+            'id': self.surface_id,
             'center': self.center.tolist(),
             'normal': self.normal.tolist(),
             'corners': [c.tolist() for c in self.corners],

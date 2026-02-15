@@ -26,6 +26,8 @@ from numpy.typing import NDArray
 
 from .surface_analyzer import SurfaceAnalyzer
 from .surface_extractor import SurfaceExtractor
+from ..core.surface import Surface
+from ..core.line_segment import LineSegment
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +66,8 @@ class SeamDetector:
 
         Returns:
             List of seam dictionaries, each containing:
-                - start: [x, y, z] start point
-                - end: [x, y, z] end point
-                - away_from_wall_vector: [x, y, z] vector for torch orientation
-                - reference_surface: dict with 'center' and 'normal'
+                - line_segment: LineSegment object with surfaces
                 - is_edge_joint: bool (True if edges meet at boundary)
-                - length: seam length in meters
                 - on_surface: 'main', 'secondary', 'both', or 'none'
         """
         if secondary_extractor is None:
@@ -83,41 +81,27 @@ class SeamDetector:
             main_surfaces, secondary_surfaces
         )
 
-        print(f'\nDEBUG: Main has {len(main_surfaces)} surfaces')
-        print(f'DEBUG: Secondary has {len(secondary_surfaces)} surfaces')
-        print(f'DEBUG: Found {len(touching_pairs)} touching pairs')
         if not touching_pairs:
-            print('\nDEBUG: Checking why no matches...')
-            for i, m in enumerate(main_surfaces):
-                for j, s in enumerate(secondary_surfaces):
-                    dot = np.dot(m['normal'], s['normal'])
-                    vec = s['center'] - m['center']
-                    dist = abs(np.dot(vec, m['normal']))
-                    print(
-                        f'  Main[{i}] vs Sec[{j}]: '
-                        f'dot={dot:.3f}, dist={dist*1000:.1f}mm'
-                    )
-                    if dot < -0.99:
-                        print('    ^^ Normals face each other!')
-                    if dist < 0.020:
-                        print('    ^^ Distance OK!')
-
-        if not touching_pairs:
+            logger.warning(
+                f'No touching surfaces found. '
+                f'Main: {len(main_surfaces)} surfaces, '
+                f'Secondary: {len(secondary_surfaces)} surfaces'
+            )
             return []
 
         all_seams = []
 
         for main_surface, secondary_surface in touching_pairs:
             try:
-                overlap_surface = self.analyzer.get_overlap_surface(
+                overlap_surface = self.analyzer.get_overlap_polygon(
                     main_surface, secondary_surface
                 )
             except ValueError as e:
                 logger.warning(
                     f'Skipping surface pair (main: '
-                    f'{main_surface.get("face_id", "unknown")}, '
+                    f'{main_surface.surface_id}, '
                     f'secondary: '
-                    f'{secondary_surface.get("face_id", "unknown")}): {e}'
+                    f'{secondary_surface.surface_id}): {e}'
                 )
                 continue
 
@@ -136,154 +120,44 @@ class SeamDetector:
                     start, end, main_surface, secondary_surface
                 )
 
-                # Calculate vectors per segment
+                # Create LineSegment for each valid segment
                 for seg in segments:
                     if (seg['length'] < min_seam_length_m or
                             seg['on_surface'] == 'none'):
                         continue
 
-                    # Calculate reference surface, away_from_wall_vector,
-                    # and edge joint flag
-                    ref_surface, away_vec, is_edge_joint = (
-                        self._calculate_segment_vectors(
-                            seg['start'], seg['end'],
-                            main_surface, secondary_surface,
-                            overlap_surface,
-                            seg['on_surface']
-                        )
+                    # Determine if this is an edge joint
+                    seam_on_main_boundary = self._is_seam_on_surface_boundary(
+                        seg['start'], seg['end'], main_surface
+                    )
+                    seam_on_sec_boundary = self._is_seam_on_surface_boundary(
+                        seg['start'], seg['end'], secondary_surface
                     )
 
+                    is_edge_joint = seam_on_main_boundary and seam_on_sec_boundary
+
                     all_seams.append({
-                        'start': seg['start'].tolist(),
-                        'end': seg['end'].tolist(),
-                        'away_from_wall_vector': away_vec.tolist(),
-                        'reference_surface': {
-                            'center': ref_surface['center'].tolist(),
-                            'normal': ref_surface['normal'].tolist()
-                        },
+                        'line_segment': LineSegment(
+                            start=seg['start'],
+                            end=seg['end'],
+                            main_surface=main_surface,
+                            secondary_surface=secondary_surface
+                        ),
                         'is_edge_joint': is_edge_joint,
-                        'length': float(seg['length']),
                         'on_surface': seg['on_surface']
                     })
 
         logger.info(f'Detected {len(all_seams)} seam segments')
         return all_seams
 
-    def _calculate_segment_vectors(
-        self,
-        seg_start: NDArray,
-        seg_end: NDArray,
-        main_surface: Dict[str, Any],
-        secondary_surface: Dict[str, Any],
-        overlap_surface: Dict[str, Any],
-        on_surface: str
-    ) -> Tuple[Dict[str, Any], NDArray, bool]:
-        """Calculate reference surface, away_from_wall_vector, and edge joint flag for a segment.
-
-        Uses boundary line detection to determine joint type.
-        Edge joint = seam lies on boundary edge of BOTH surfaces.
-        Flat joint = seam lies on boundary edge of ONE surface only.
-
-        Args:
-            seg_start: Segment start point.
-            seg_end: Segment end point.
-            main_surface: Main surface dict.
-            secondary_surface: Secondary surface dict.
-            overlap_surface: Overlap surface dict.
-            on_surface: Which surface segment is on.
-
-        Returns:
-            Tuple of (reference_surface, away_from_wall_vector,
-            is_edge_joint).
-        """
-        # Calculate perpendicular to seam
-        seg_length = np.linalg.norm(seg_end - seg_start)
-        tangent = (seg_end - seg_start) / seg_length
-        overlap_normal = np.array(overlap_surface['normal'])
-        perpendicular = np.cross(overlap_normal, tangent)
-        perpendicular = perpendicular / np.linalg.norm(perpendicular)
-
-        # Check if ENTIRE seam line lies on surface boundary edges
-        seam_on_main_boundary = self._is_seam_on_surface_boundary(
-            seg_start, seg_end, main_surface
-        )
-        seam_on_sec_boundary = self._is_seam_on_surface_boundary(
-            seg_start, seg_end, secondary_surface
-        )
-
-        # Determine joint type and reference surface based on boundary
-        # positions
-        if seam_on_main_boundary and seam_on_sec_boundary:
-            # CASE 1: Edge-on-edge (seam lies on boundary edge of BOTH
-            # surfaces)
-            # This is where two edges meet exactly - true edge joint
-            is_edge_joint = True
-            reference_surface = overlap_surface
-            # Point away from secondary
-            test_point = (seg_start + seg_end) / 2.0 + perpendicular * 0.01
-            if self.analyzer.is_point_inside_surface(
-                test_point, secondary_surface, tolerance_m=0.01
-            ):
-                away_vec = -perpendicular
-            else:
-                away_vec = perpendicular
-
-        elif seam_on_main_boundary and not seam_on_sec_boundary:
-            # CASE 2: Main's boundary edge lies on secondary's surface
-            # (flat joint)
-            # Main's edge is on top of secondary's surface
-            is_edge_joint = False
-            reference_surface = main_surface
-            # Point away from secondary
-            test_point = (seg_start + seg_end) / 2.0 + perpendicular * 0.01
-            if self.analyzer.is_point_inside_surface(
-                test_point, secondary_surface, tolerance_m=0.01
-            ):
-                away_vec = -perpendicular
-            else:
-                away_vec = perpendicular
-
-        elif seam_on_sec_boundary and not seam_on_main_boundary:
-            # CASE 3: Secondary's boundary edge lies on main's surface
-            # (flat joint)
-            # Secondary's edge is on top of main's surface
-            is_edge_joint = False
-            reference_surface = secondary_surface
-            # Point away from main
-            test_point = (seg_start + seg_end) / 2.0 + perpendicular * 0.01
-            if self.analyzer.is_point_inside_surface(
-                test_point, main_surface, tolerance_m=0.01
-            ):
-                away_vec = -perpendicular
-            else:
-                away_vec = perpendicular
-
-        else:
-            # CASE 4: Internal segment (neither lies on boundaries, use
-            # overlap)
-            # This shouldn't happen often - might be internal weld or
-            # detection artifact
-            is_edge_joint = False
-            reference_surface = overlap_surface
-            # Point away from secondary by default
-            test_point = (seg_start + seg_end) / 2.0 + perpendicular * 0.01
-            if self.analyzer.is_point_inside_surface(
-                test_point, secondary_surface, tolerance_m=0.01
-            ):
-                away_vec = -perpendicular
-            else:
-                away_vec = perpendicular
-
-        return reference_surface, away_vec, is_edge_joint
-
     def _is_seam_on_surface_boundary(
         self,
         seg_start: NDArray,
         seg_end: NDArray,
-        surface: Dict[str, Any],
+        surface: Surface,
         tolerance_m: float = 0.005
     ) -> bool:
-        """Check if ENTIRE seam line lies on a surface boundary edge.
+        """Check if entire seam line lies on a surface boundary edge.
 
         The seam must lie along a boundary edge, not just have endpoints
         near boundaries.
@@ -291,7 +165,7 @@ class SeamDetector:
         Args:
             seg_start: Segment start point [x, y, z].
             seg_end: Segment end point [x, y, z].
-            surface: Surface dictionary.
+            surface: Surface object.
             tolerance_m: Boundary tolerance (default 5mm).
 
         Returns:
@@ -306,8 +180,11 @@ class SeamDetector:
             seg_end, surface
         )
 
-        half_u = surface['bounds'][0] / 2.0
-        half_v = surface['bounds'][1] / 2.0
+        width_u = surface.bounds['u_max'] - surface.bounds['u_min']
+        half_u = width_u / 2.0
+
+        width_v = surface.bounds['v_max'] - surface.bounds['v_min']
+        half_v = width_v / 2.0
 
         # Check if line lies along U boundary (left or right edge)
         # Both points must be at same U boundary and have consistent U
@@ -333,32 +210,31 @@ class SeamDetector:
         self,
         seam_start: NDArray,
         seam_end: NDArray,
-        main_surface: Dict[str, Any],
-        secondary_surface: Dict[str, Any]
+        main_surface: Surface,
+        secondary_surface: Surface
     ) -> List[Dict[str, Any]]:
         """Split seam at surface boundaries.
 
         Args:
             seam_start: Start point of seam (3D).
             seam_end: End point of seam (3D).
-            main_surface: Main surface dict.
-            secondary_surface: Secondary surface dict.
+            main_surface: Main surface.
+            secondary_surface: Secondary surface.
 
         Returns:
             List of segment dicts with 'start', 'end', 'on_surface',
             'length'.
         """
-        main_corners = self.analyzer.get_surface_corners(main_surface)
-        secondary_corners = self.analyzer.get_surface_corners(
-            secondary_surface
-        )
+        main_corners = main_surface.corners
+        secondary_corners = secondary_surface.corners
 
         main_edges = [
-            (main_corners[i], main_corners[(i + 1) % 4]) for i in range(4)
+            (main_corners[i], main_corners[(i + 1) % len(main_corners)])
+            for i in range(len(main_corners))
         ]
         secondary_edges = [
-            (secondary_corners[i], secondary_corners[(i + 1) % 4])
-            for i in range(4)
+            (secondary_corners[i], secondary_corners[(i + 1) % len(secondary_corners)])
+            for i in range(len(secondary_corners))
         ]
 
         seam_start_2d = seam_start[:2]
@@ -461,17 +337,17 @@ class SeamDetector:
 
     def _extract_seam_lines_from_overlap(
         self,
-        overlap_surface: Dict[str, Any],
-        main_surface: Dict[str, Any],
-        secondary_surface: Dict[str, Any],
+        overlap_surface: Surface,
+        main_surface: Surface,
+        secondary_surface: Surface,
         min_seam_length_m: float
     ) -> List[Tuple[NDArray, NDArray]]:
         """Extract seam lines from overlap edges."""
-        overlap_corners = self.analyzer.get_surface_corners(overlap_surface)
+        overlap_corners = overlap_surface.corners
 
         edges = [
-            (overlap_corners[i], overlap_corners[(i + 1) % 4])
-            for i in range(4)
+            (overlap_corners[i], overlap_corners[(i + 1) % len(overlap_corners)])
+            for i in range(len(overlap_corners))
         ]
         seam_lines = []
 
@@ -517,12 +393,15 @@ class SeamDetector:
         self,
         edge_start: NDArray,
         edge_end: NDArray,
-        surface: Dict[str, Any],
+        surface: Surface,
         tolerance_m: float = 0.005
     ) -> bool:
         """Check if edge lies on surface boundary."""
-        half_u = surface['bounds'][0] / 2.0
-        half_v = surface['bounds'][1] / 2.0
+        width_u = surface.bounds['u_max'] - surface.bounds['u_min']
+        half_u = width_u / 2.0
+
+        width_v = surface.bounds['v_max'] - surface.bounds['v_min']
+        half_v = width_v / 2.0
 
         u_start, v_start = self.analyzer.project_point_to_surface(
             edge_start, surface

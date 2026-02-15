@@ -20,11 +20,14 @@ away_from_wall_vector geometry. It handles coordinate frame construction, work/t
 angle application, and gap offset calculations.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
+
+from ..core.surface import Surface
+from ..urdf.surface_analyzer import SurfaceAnalyzer
 
 
 class WeldPlanner:
@@ -35,7 +38,7 @@ class WeldPlanner:
     joint type classification for torch orientation.
     """
 
-    def __init__(self, parameters: Dict[str, Any]) -> None:
+    def __init__(self, analyzer: SurfaceAnalyzer, parameters: Dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
 
         Args:
@@ -52,6 +55,8 @@ class WeldPlanner:
         self.travel_angle_rad = np.radians(parameters['travel_angle_deg'])
         self.gap_m = parameters['gap_mm'] / 1000.0
         self.num_points = parameters['num_points']
+        self.surface_analyzer = SurfaceAnalyzer()
+        self.analyzer = analyzer
 
         if not (1 <= self.num_points <= 1000):
             raise ValueError(
@@ -65,38 +70,27 @@ class WeldPlanner:
     def generate_seam(
         self,
         seam: Any,
-        surface_info: Dict[str, List[float]]
     ) -> None:
         """Generate poses for a seam. Modifies seam object in place.
 
         Args:
-            seam: Seam object with line_segment attribute containing away_from_wall_vector.
-            surface_info: Dictionary with 'center' and 'normal' keys (lists of floats).
+            seam: Seam object with line_segment with other attributes.
 
         Raises:
             RuntimeError: If away_from_wall_vector not set in seam.line_segment.
             ValueError: If seam geometry is invalid or not on surface plane.
         """
-        if seam.line_segment.away_from_wall_vector is None:
-            raise RuntimeError(
-                f'away_from_wall_vector not set for seam {seam}. '
-                'For manual workflow: specify it in YAML config. '
-                'For URDF workflow: ensure auto-detection calculates it.'
-            )
-
-        surface_center = np.array(surface_info['center'], dtype=float)
-        surface_normal = np.array(surface_info['normal'], dtype=float)
-        surface_normal = surface_normal / np.linalg.norm(surface_normal)
-
         line = seam.line_segment
-        self._validate_seam(line, surface_center, surface_normal)
 
         tangent = line.tangent()
-        away_from_wall_vector = line.away_from_wall_vector
+        unit_tangent =tangent / np.linalg.norm(tangent)
         is_edge_joint = seam.config.get('is_edge_joint', False)
 
+        point_A = line.main_surface.center + (unit_tangent * 0.001)
+        point_B = line.main_surface.center - (unit_tangent * 0.001)
+
         # Calculate directions based on joint type
-        # Directions point WHERE the torch should point (toward the work)
+        # Directions point where the torch should point (toward the work)
         if is_edge_joint:
             # Edge joint: point toward material, lean toward surface
             main_direction = -away_from_wall_vector
