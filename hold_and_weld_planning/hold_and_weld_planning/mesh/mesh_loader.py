@@ -35,11 +35,13 @@ class MeshLoader:
     ) -> None:
         """Initialize mesh loader and build manifold.
 
-        @param mesh_path: Path to mesh file (supports package:// URIs)
-        @param world_transform: Global pose matrix (4x4) to apply after loading
-        @param refine_iterations: Number of mesh subdivision iterations (default: 32)
-        @throws ValueError: If mesh loading or conversion fails
-        @throws FileNotFoundError: If file doesn't exist
+        Args:
+            mesh_path: Path to mesh file (supports package:// URIs)
+            world_transform: Global pose matrix (4x4) to apply after loading
+            refine_iterations: Number of mesh subdivision iterations (default: 32)
+        Raises:
+            ValueError: If mesh loading or conversion fails
+            FileNotFoundError: If file doesn't exist
         """
         if world_transform.shape != (4, 4):
             raise ValueError(
@@ -61,10 +63,13 @@ class MeshLoader:
     def _resolve_package_path(self, path_str: str | Path) -> Path:
         """Resolve package:// URI to absolute path.
 
-        @param path_str: Path string, either absolute or package:// URI
-        @return Resolved absolute path as Path object
-        @throws FileNotFoundError: If package not found or file doesn't exist
-        @throws ValueError: If package path format is invalid
+        Args:
+            path_str: Path string, either absolute or package:// URI
+        Returns:
+            Resolved absolute path as Path object
+        Raises:
+            FileNotFoundError: If package not found or file doesn't exist
+            ValueError: If package path format is invalid
         """
         path_str = str(path_str)
 
@@ -97,9 +102,12 @@ class MeshLoader:
     def _build_manifold(self, mesh: trimesh.Trimesh) -> manifold3d.Manifold:
         """Convert trimesh to manifold, refine, and apply world transform.
 
-        @param mesh: Loaded trimesh object
-        @return Transformed and refined manifold
-        @throws ValueError: If conversion fails
+        Args:
+            mesh: Loaded trimesh object
+        Returns:
+            Transformed and refined manifold
+        Raises:
+            ValueError: If conversion fails
         """
         try:
             manifold_obj = manifold3d.Manifold(

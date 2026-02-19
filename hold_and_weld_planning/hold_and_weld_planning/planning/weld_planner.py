@@ -37,13 +37,15 @@ class WeldPlanner:
     def __init__(self, parameters: Dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
 
-        @param parameters: Dictionary with keys:
             - work_angle_deg: Work angle in degrees (float)
             - travel_angle_deg: Travel angle in degrees (float)
             - gap_mm: Gap distance in millimeters (float)
             - up_vector: World up vector [x, y, z] (default [0, 0, 1])
 
-        @throws ValueError: If gap_mm is non-positive
+        Args:
+            parameters: Dictionary with keys:
+        Raises:
+            ValueError: If gap_mm is non-positive
         """
         self.work_angle_rad = np.radians(parameters['work_angle_deg'])
         self.travel_angle_rad = np.radians(parameters['travel_angle_deg'])
@@ -59,9 +61,11 @@ class WeldPlanner:
     def generate_seam(self, seam: Any) -> None:
         """Generate poses for a seam. Modifies seam object in place.
 
-        @param seam: Seam object with smoothed points and normals in config
-        @throws RuntimeError: If required data missing from seam.config
-        @throws ValueError: If seam geometry is invalid
+        Args:
+            seam: Seam object with smoothed points and normals in config
+        Raises:
+            RuntimeError: If required data missing from seam.config
+            ValueError: If seam geometry is invalid
         """
         # Extract data from seam config
         if 'smoothed_points' not in seam.config:
@@ -147,9 +151,11 @@ class WeldPlanner:
         The normal most aligned with the world up vector belongs to the
         main (base/flat) surface. The other is the secondary (edge piece).
 
-        @param normal_1: Normal from mesh_1
-        @param normal_2: Normal from mesh_2
-        @return Tuple of (main_normal, secondary_normal)
+        Args:
+            normal_1: Normal from mesh_1
+            normal_2: Normal from mesh_2
+        Returns:
+            Tuple of (main_normal, secondary_normal)
         """
         dot_1 = np.dot(normal_1, self.up_vector)
         dot_2 = np.dot(normal_2, self.up_vector)
@@ -169,9 +175,11 @@ class WeldPlanner:
         The bisector points into the corner between the two surfaces,
         which is the correct gap offset direction.
 
-        @param normal_1: First normal vector
-        @param normal_2: Second normal vector
-        @return Normalized bisector vector
+        Args:
+            normal_1: First normal vector
+            normal_2: Second normal vector
+        Returns:
+            Normalized bisector vector
         """
         bisector = normal_1 + normal_2
         norm = np.linalg.norm(bisector)
@@ -185,9 +193,11 @@ class WeldPlanner:
     def _compute_tangent(self, points: NDArray, index: int) -> NDArray:
         """Compute tangent vector at point index.
 
-        @param points: Array of points (N, 3)
-        @param index: Index of point
-        @return Normalized tangent vector
+        Args:
+            points: Array of points (N, 3)
+            index: Index of point
+        Returns:
+            Normalized tangent vector
         """
         if index == 0:
             tangent = points[1] - points[0]
@@ -210,10 +220,12 @@ class WeldPlanner:
         Perpendicular to tangent in main surface plane, pointing away
         from secondary mesh.
 
-        @param tangent: Tangent vector along seam
-        @param main_normal: Normal from main surface
-        @param secondary_normal: Normal from secondary mesh
-        @return Normalized away vector
+        Args:
+            tangent: Tangent vector along seam
+            main_normal: Normal from main surface
+            secondary_normal: Normal from secondary mesh
+        Returns:
+            Normalized away vector
         """
         # Perpendicular to tangent in main surface plane
         perpendicular = np.cross(main_normal, tangent)
@@ -242,9 +254,11 @@ class WeldPlanner:
     ) -> tuple[NDArray, NDArray, NDArray]:
         """Build orthonormal frame from tangent and main direction.
 
-        @param tangent: Direction along seam (travel direction)
-        @param main_direction: Main torch direction
-        @return Tuple of (tangent, binormal, normal)
+        Args:
+            tangent: Direction along seam (travel direction)
+            main_direction: Main torch direction
+        Returns:
+            Tuple of (tangent, binormal, normal)
         """
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
@@ -265,11 +279,13 @@ class WeldPlanner:
     ) -> tuple[NDArray, NDArray, NDArray]:
         """Apply work angle rotation toward lean direction.
 
-        @param normal: Normal vector (torch direction)
-        @param tangent: Tangent vector (travel direction)
-        @param binormal: Binormal vector
-        @param lean_direction: Target direction for tilting
-        @return Tuple of rotated (normal, binormal, tangent)
+        Args:
+            normal: Normal vector (torch direction)
+            tangent: Tangent vector (travel direction)
+            binormal: Binormal vector
+            lean_direction: Target direction for tilting
+        Returns:
+            Tuple of rotated (normal, binormal, tangent)
         """
         # Determine rotation sign by checking which side of the tangent axis
         # lean_direction falls on relative to normal — avoids testing both directions.
@@ -290,10 +306,12 @@ class WeldPlanner:
     ) -> tuple[NDArray, NDArray, NDArray]:
         """Apply travel angle rotation around binormal axis.
 
-        @param normal: Normal vector
-        @param binormal: Binormal vector
-        @param tangent: Tangent vector
-        @return Tuple of rotated (normal, binormal, tangent)
+        Args:
+            normal: Normal vector
+            binormal: Binormal vector
+            tangent: Tangent vector
+        Returns:
+            Tuple of rotated (normal, binormal, tangent)
         """
         travel_rot = Rotation.from_rotvec(self.travel_angle_rad * binormal)
         tangent_final = travel_rot.apply(tangent)
@@ -312,12 +330,14 @@ class WeldPlanner:
     ) -> Dict[str, Any]:
         """Build pose data dictionary.
 
-        @param position: 3D position vector
-        @param tangent: Tangent vector (X-axis)
-        @param binormal: Binormal vector (Y-axis)
-        @param normal: Normal vector (Z-axis - torch pointing)
-        @param index: Point index
-        @return Dictionary with pose data
+        Args:
+            position: 3D position vector
+            tangent: Tangent vector (X-axis)
+            binormal: Binormal vector (Y-axis)
+            normal: Normal vector (Z-axis - torch pointing)
+            index: Point index
+        Returns:
+            Dictionary with pose data
         """
         rot_matrix = np.column_stack([tangent, binormal, normal])
         quat = Rotation.from_matrix(rot_matrix).as_quat()

@@ -36,10 +36,12 @@ class ShellGenerator:
     ) -> None:
         """Initialize shell generator.
 
-        @param robot_object: The self.robot object from URDFProcessor
-        @param world_transform: The global starting pose matrix (4x4)
-        @param refine_iterations: Number of mesh subdivision iterations (default: 32)
-        @throws ValueError: If world_transform is not 4x4
+        Args:
+            robot_object: The self.robot object from URDFProcessor
+            world_transform: The global starting pose matrix (4x4)
+            refine_iterations: Number of mesh subdivision iterations (default: 32)
+        Raises:
+            ValueError: If world_transform is not 4x4
         """
         if world_transform.shape != (4, 4):
             raise ValueError(
@@ -54,8 +56,10 @@ class ShellGenerator:
     def _get_collision_transform(self, collision) -> list:
         """Extract transform from collision element.
 
-        @param collision: URDF collision element
-        @return 4x4 transform matrix as nested list
+        Args:
+            collision: URDF collision element
+        Returns:
+            4x4 transform matrix as nested list
         """
         origin = collision.origin if collision.origin else None
 
@@ -87,8 +91,10 @@ class ShellGenerator:
         Iterates through all links in the URDF, converts collision geometry
         to manifold primitives, applies transforms, and unions them together.
 
-        @return Combined manifold representing entire robot shell
-        @throws RuntimeError: If manifold union operation fails
+        Returns:
+            Combined manifold representing entire robot shell
+        Raises:
+            RuntimeError: If manifold union operation fails
         """
         for link in self.robot.links:
             collisions = (
@@ -113,10 +119,13 @@ class ShellGenerator:
     def create_link_shell(self, link: Any) -> manifold3d.Manifold:
         """Create combined manifold for all collision elements in a link.
 
-        @param link: URDF link object
-        @return Manifold representing union of all collision geometries
-        @throws ValueError: If geometry type is unsupported
-        @throws RuntimeError: If mesh loading or transform fails
+        Args:
+            link: URDF link object
+        Returns:
+            Manifold representing union of all collision geometries
+        Raises:
+            ValueError: If geometry type is unsupported
+            RuntimeError: If mesh loading or transform fails
         """
         link_combined = manifold3d.Manifold()
 

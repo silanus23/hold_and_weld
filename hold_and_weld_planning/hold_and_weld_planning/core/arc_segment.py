@@ -46,11 +46,13 @@ class ArcSegment:
     ) -> None:
         """Initialize arc segment from PathCreator geometry output.
 
-        @param points: Discretized points along arc (N x 3) - smoothed path
-        @param center: Center point [x, y, z] from circle fit
-        @param radius: Radius in meters from circle fit
-        @param away_from_wall_vector: Optional vector [x, y, z] pointing away
-        @throws ValueError: If points are not 3D or radius is non-positive
+        Args:
+            points: Discretized points along arc (N x 3) - smoothed path
+            center: Center point [x, y, z] from circle fit
+            radius: Radius in meters from circle fit
+            away_from_wall_vector: Optional vector [x, y, z] pointing away
+        Raises:
+            ValueError: If points are not 3D or radius is non-positive
         """
         self.points = np.array(points, dtype=float)
         self.center = np.array(center, dtype=float)
@@ -88,10 +90,13 @@ class ArcSegment:
     ) -> 'ArcSegment':
         """Create ArcSegment from PathCreator geometry output.
 
-        @param geometry: Geometry dict with 'type'='arc', 'points', 'center', 'radius'
-        @param away_from_wall_vector: Optional away vector
-        @return ArcSegment instance
-        @throws ValueError: If geometry type is not 'arc' or missing required fields
+        Args:
+            geometry: Geometry dict with 'type'='arc', 'points', 'center', 'radius'
+            away_from_wall_vector: Optional away vector
+        Returns:
+            ArcSegment instance
+        Raises:
+            ValueError: If geometry type is not 'arc' or missing required fields
         """
         if geometry['type'] != 'arc':
             raise ValueError(f"Expected geometry type 'arc', got '{geometry['type']}'")
@@ -108,7 +113,8 @@ class ArcSegment:
 
         Uses sum of distances between consecutive discretized points.
 
-        @return Arc length in meters
+        Returns:
+            Arc length in meters
         """
         if len(self.points) < 2:
             return 0.0
@@ -119,10 +125,13 @@ class ArcSegment:
     def tangent_at(self, index: int) -> NDArray:
         """Calculate tangent vector at a discretized point.
 
-        @param index: Index of point in points array
-        @return Normalized tangent vector at that point
-        @throws IndexError: If index out of bounds
-        @throws ValueError: If cannot compute tangent
+        Args:
+            index: Index of point in points array
+        Returns:
+            Normalized tangent vector at that point
+        Raises:
+            IndexError: If index out of bounds
+            ValueError: If cannot compute tangent
         """
         if index < 0 or index >= len(self.points):
             raise IndexError(
@@ -146,7 +155,8 @@ class ArcSegment:
     def midpoint(self) -> NDArray:
         """Get middle point of the arc.
 
-        @return Point at approximately middle of arc
+        Returns:
+            Point at approximately middle of arc
         """
         mid_index = len(self.points) // 2
         return self.points[mid_index]
@@ -154,8 +164,10 @@ class ArcSegment:
     def point_at(self, t: float) -> NDArray:
         """Get point along arc at parameter t.
 
-        @param t: Parameter value (0 = start, 1 = end)
-        @return Point at parameter t (linear interpolation through points)
+        Args:
+            t: Parameter value (0 = start, 1 = end)
+        Returns:
+            Point at parameter t (linear interpolation through points)
         """
         if t <= 0:
             return self.points[0]
@@ -176,14 +188,16 @@ class ArcSegment:
 
         Compatible with LineSegment interface.
 
-        @return Normalized tangent vector at start
+        Returns:
+            Normalized tangent vector at start
         """
         return self.tangent_at(0)
 
     def __repr__(self) -> str:
         """Return string representation of ArcSegment.
 
-        @return String showing arc length, radius, and whether away_vector is set
+        Returns:
+            String showing arc length, radius, and whether away_vector is set
         """
         has_away = (
             'with away_vector'

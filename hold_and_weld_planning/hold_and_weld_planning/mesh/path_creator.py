@@ -59,14 +59,16 @@ class PathCreator:
         3. Detect geometry type (line/arc/complex)
         4. Flatten complex into arc and line segments
 
-        @param points: (N, 3) raw chained path points
-        @param is_closed: True for closed loops
-        @param num_points: Number of points per smoothed sub-path
-        @param angle_threshold_deg: Corner angle threshold for splitting
-        @param corner_window: Half-window size for local maximum search
-        @param line_error_threshold: Max mean squared error for line fit (m^2)
-        @param circle_error_threshold: Max mean squared error for circle fit (m^2)
-        @return List of dicts with 'type', 'points', and geometry parameters
+        Args:
+            points: (N, 3) raw chained path points
+            is_closed: True for closed loops
+            num_points: Number of points per smoothed sub-path
+            angle_threshold_deg: Corner angle threshold for splitting
+            corner_window: Half-window size for local maximum search
+            line_error_threshold: Max mean squared error for line fit (m^2)
+            circle_error_threshold: Max mean squared error for circle fit (m^2)
+        Returns:
+            List of dicts with 'type', 'points', and geometry parameters
         """
         smoothed = self._apply_spline_smoothing(
             points, is_closed=is_closed, num_points=num_points
@@ -96,8 +98,10 @@ class PathCreator:
     def _extract_segments(self, geometry: Dict) -> tuple[list[Dict], list[Dict]]:
         """Recursively extract arc and line segments from complex geometry.
 
-        @param geometry: Complex geometry dict with nested segments
-        @return Tuple of (arc_segments, line_segments)
+        Args:
+            geometry: Complex geometry dict with nested segments
+        Returns:
+            Tuple of (arc_segments, line_segments)
         """
         arcs = []
         lines = []
@@ -128,12 +132,15 @@ class PathCreator:
         each corner is detected once at its sharpest point, not at every
         point in the turn.
 
-        @param points: (N, 3) array of path points
-        @param angle_threshold_deg: Minimum angle to consider a corner
-        @param corner_window: Half-window size for local maximum search.
                               Larger = more tolerant of spread-out corners.
-        @param min_sub_path_length: Minimum points per sub-path
-        @return List of (M, 3) arrays, one per sub-path
+
+        Args:
+            points: (N, 3) array of path points
+            angle_threshold_deg: Minimum angle to consider a corner
+            corner_window: Half-window size for local maximum search.
+            min_sub_path_length: Minimum points per sub-path
+        Returns:
+            List of (M, 3) arrays, one per sub-path
         """
         if len(points) < 3:
             return [points]
@@ -245,11 +252,13 @@ class PathCreator:
     ) -> np.ndarray:
         """Apply B-spline smoothing to remove mesh tessellation artifacts.
 
-        @param points: (N, 3) array of 3D points
-        @param is_closed: True for closed loops, False for open paths
-        @param num_points: Number of points in smoothed output
-        @param smoothing_factor: Spline smoothing (0=interpolate exactly)
-        @return Array of smoothed 3D points (num_points, 3)
+        Args:
+            points: (N, 3) array of 3D points
+            is_closed: True for closed loops, False for open paths
+            num_points: Number of points in smoothed output
+            smoothing_factor: Spline smoothing (0=interpolate exactly)
+        Returns:
+            Array of smoothed 3D points (num_points, 3)
         """
         vertices = np.asarray(points, dtype=np.float64)
 
@@ -274,8 +283,10 @@ class PathCreator:
     def _fit_line(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
         """Fit a 3D line to points using Principal Component Analysis.
 
-        @param points: Array of 3D points (N, 3)
-        @return Tuple of (point_on_line, direction_vector, fit_error)
+        Args:
+            points: Array of 3D points (N, 3)
+        Returns:
+            Tuple of (point_on_line, direction_vector, fit_error)
         """
         if len(points) < 2:
             return points[0], np.array([1, 0, 0]), 0.0
@@ -297,8 +308,10 @@ class PathCreator:
     def _fit_circle(self, points: np.ndarray) -> tuple[np.ndarray, float, float]:
         """Fit a circle to 3D points using least squares optimization.
 
-        @param points: Array of 3D points (N, 3)
-        @return Tuple of (center_3d, radius, fit_error)
+        Args:
+            points: Array of 3D points (N, 3)
+        Returns:
+            Tuple of (center_3d, radius, fit_error)
         """
         if len(points) < 3:
             return None, None, float('inf')
@@ -348,11 +361,13 @@ class PathCreator:
         halves the path and recurses on each half independently, building
         a tree of segments until each piece fits a primitive.
 
-        @param points: Array of 3D points (N, 3)
-        @param line_error_threshold: Max error for line fit (m^2)
-        @param circle_error_threshold: Max error for circle fit (m^2)
-        @param min_segment_points: Don't subdivide below this size
-        @return Dict with 'type' ('line'/'arc'/'complex') and parameters
+        Args:
+            points: Array of 3D points (N, 3)
+            line_error_threshold: Max error for line fit (m^2)
+            circle_error_threshold: Max error for circle fit (m^2)
+            min_segment_points: Don't subdivide below this size
+        Returns:
+            Dict with 'type' ('line'/'arc'/'complex') and parameters
         """
         if len(points) < 3:
             return {'type': 'line', 'points': points}

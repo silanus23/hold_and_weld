@@ -1,8 +1,7 @@
 workpiece:
   auto_detect_seams: true
   main_part:
-    urdf_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
-    link_name: "base_link"
+    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:
       xyz:
       - 1.2
@@ -13,8 +12,7 @@ workpiece:
       - 0.785398
       - 0
   secondary_part:
-    urdf_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
-    link_name: "child_link"
+    secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
     world_pose:
       xyz:
       - 1.394
@@ -25,7 +23,7 @@ workpiece:
       - 0.785398
       - 0
 parameters:
-  num_points: 20
+  num_smooth_points: 200
   gap_mm: 25.0
   work_angle_deg: 45.0
   travel_angle_deg: 5.0

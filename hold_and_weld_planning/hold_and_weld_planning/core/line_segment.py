@@ -23,8 +23,6 @@ from typing import List, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from .surface import Surface
-
 
 class LineSegment:
     """Represent a 3D line segment defined by start and end points.
@@ -35,24 +33,18 @@ class LineSegment:
     Attributes:
         start: Start point as numpy array [x, y, z].
         end: End point as numpy array [x, y, z].
-        main_surface: Surface that contains seam lines.
-        secondary_surface: Surface sittng on top of main.
     """
 
     def __init__(
         self,
         start: List[float] | NDArray,
         end: List[float] | NDArray,
-        main_surface: Optional[Surface] = None,
-        secondary_surface: Optional[Surface] = None,
     ) -> None:
         """Initialize line segment from start and end points.
 
         Args:
             start: Start point [x, y, z] as list or numpy array.
             end: End point [x, y, z] as list or numpy array.
-            main_surface: Main surface associated with this segment.
-            secondary_surface: Secondary surface associated with this segment.
 
         Raises:
             ValueError: If points are not 3D.
@@ -62,9 +54,6 @@ class LineSegment:
 
         if self.start.shape != (3,) or self.end.shape != (3,):
             raise ValueError('Start and end must be 3D points [x, y, z]')
-
-        self.main_surface = main_surface
-        self.secondary_surface = secondary_surface
 
     def length(self) -> float:
         """Calculate segment length in meters.

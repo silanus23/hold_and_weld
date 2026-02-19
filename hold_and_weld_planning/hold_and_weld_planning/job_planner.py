@@ -55,18 +55,21 @@ class JobPlanner:
     ) -> None:
         """Initialize job planner with input paths and poses.
 
-        @param main_path: Path to main part URDF or STL (supports package://)
-        @param secondary_path: Path to secondary part URDF or STL
-        @param main_world_pose: Dict with 'xyz' and 'rpy' for main part pose
-        @param secondary_world_pose: Dict with 'xyz' and 'rpy' for secondary
-        @param parameters: Welding parameters dict with keys:
             - work_angle_deg: Work angle in degrees
             - travel_angle_deg: Travel angle in degrees
             - gap_mm: Gap distance in millimeters
             - epsilon: Contact detection tolerance (default 0.01m)
             - num_smooth_points: Points per seam (default 100)
             - refine_iterations: Mesh subdivision iterations (default 32)
-        @throws ValueError: If required parameters are missing
+
+        Args:
+            main_path: Path to main part URDF or STL (supports package://)
+            secondary_path: Path to secondary part URDF or STL
+            main_world_pose: Dict with 'xyz' and 'rpy' for main part pose
+            secondary_world_pose: Dict with 'xyz' and 'rpy' for secondary
+            parameters: Welding parameters dict with keys:
+        Raises:
+            ValueError: If required parameters are missing
         """
         self.main_path = main_path
         self.secondary_path = secondary_path
@@ -86,8 +89,10 @@ class JobPlanner:
     def plan_job(self) -> list:
         """Execute complete planning pipeline.
 
-        @return List of Seam objects with generated poses
-        @throws RuntimeError: If any pipeline stage fails
+        Returns:
+            List of Seam objects with generated poses
+        Raises:
+            RuntimeError: If any pipeline stage fails
         """
         print('Generating mesh shells...')
         mesh_main, mesh_secondary = self._generate_shells()
@@ -121,8 +126,10 @@ class JobPlanner:
     def _generate_shells(self) -> tuple:
         """Generate trimesh shells for both parts, handling URDF and STL inputs.
 
-        @return Tuple of (main_mesh, secondary_mesh) as trimesh objects
-        @throws RuntimeError: If shell generation fails
+        Returns:
+            Tuple of (main_mesh, secondary_mesh) as trimesh objects
+        Raises:
+            RuntimeError: If shell generation fails
         """
         mesh_main = self._load_input(self.main_path, self.main_world_transform)
         mesh_secondary = self._load_input(
@@ -151,10 +158,13 @@ class JobPlanner:
         STL files are loaded via MeshLoader. URDF files are processed
         via URDFProcessor and ShellGenerator.
 
-        @param path: Path to URDF or STL file
-        @param world_transform: 4x4 world pose matrix to apply
-        @return Trimesh object ready for seam extraction
-        @throws RuntimeError: If loading or conversion fails
+        Args:
+            path: Path to URDF or STL file
+            world_transform: 4x4 world pose matrix to apply
+        Returns:
+            Trimesh object ready for seam extraction
+        Raises:
+            RuntimeError: If loading or conversion fails
         """
         refine_iterations = self.parameters['refine_iterations']
 
@@ -181,8 +191,10 @@ class JobPlanner:
     def _pose_to_matrix(self, pose: Optional[Dict[str, list]]) -> np.ndarray:
         """Convert xyz/rpy pose dict to 4x4 transform matrix.
 
-        @param pose: Dict with 'xyz' and 'rpy' keys, or None for identity
-        @return 4x4 homogeneous transform matrix
+        Args:
+            pose: Dict with 'xyz' and 'rpy' keys, or None for identity
+        Returns:
+            4x4 homogeneous transform matrix
         """
         if pose is None:
             return np.eye(4)

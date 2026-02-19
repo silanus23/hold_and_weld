@@ -92,6 +92,11 @@ def main():
             print(f'Loading configuration from: {args.input}')
 
         seams, parameters, workpiece_config = load_urdf_config(args.input)
+        main_path = workpiece_config['main_part']['main_path']
+        secondary_path = workpiece_config['secondary_part']['secondary_path']
+
+        main_world_pose = workpiece_config['main_part'].get('world_pose')
+        secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
 
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
@@ -101,25 +106,15 @@ def main():
             print(f'  Gap: {parameters["gap_mm"]}mm')
             print()
 
-        main_urdf = workpiece_config['main_part']['urdf_path']
-        secondary_urdf = workpiece_config['secondary_part']['urdf_path']
-
-        main_world_pose = workpiece_config['main_part'].get('world_pose')
-        secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
-
-        main_link = workpiece_config['main_part']['link_name']
-        secondary_link = workpiece_config['secondary_part']['link_name']
 
         if args.verbose:
-            print(f'  Main part URDF: {main_urdf}')
-            print(f'  Main link: {main_link}')
-            print(f'  Secondary part URDF: {secondary_urdf}')
-            print(f'  Secondary link: {secondary_link}')
+            print(f'  Main part URDF: {main_path}')
+            print(f'  Secondary part URDF: {secondary_path}')
             print()
 
         planner = JobPlanner(
-            main_urdf_path=main_urdf,
-            secondary_urdf_path=secondary_urdf,
+            main_path=main_path,
+            secondary_path=secondary_path,
             main_world_pose=main_world_pose,
             secondary_world_pose=secondary_world_pose,
             parameters=parameters,
@@ -128,9 +123,7 @@ def main():
         print('Starting weld job planning...')
         print()
 
-        generated_seams = planner.plan_job(
-            main_link=main_link, secondary_link=secondary_link
-        )
+        generated_seams = planner.plan_job()
 
         if not generated_seams:
             print('ERROR: No seams generated')

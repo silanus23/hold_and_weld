@@ -54,12 +54,14 @@ class SeamExtractor:
     ) -> None:
         """Initialize seam extractor with two meshes.
 
-        @param mesh_1: First mesh (already transformed to world frame)
-        @param mesh_2: Second mesh (already transformed to world frame)
-        @param params: Dictionary with keys:
             - inflate: Scale factor for mesh inflation to create overlap (default 1.002)
             - num_smooth_points: Points per smoothed path (default 100)
             - min_segment_length: Minimum path length to keep (default 5)
+
+        Args:
+            mesh_1: First mesh (already transformed to world frame)
+            mesh_2: Second mesh (already transformed to world frame)
+            params: Dictionary with keys:
         """
         self.mesh_1 = mesh_1
         self.mesh_2 = mesh_2
@@ -91,7 +93,8 @@ class SeamExtractor:
         4. Compute normals once per path, reuse for joint type and seam wrapping
         5. Wrap in Seam objects
 
-        @return List of Seam objects with geometry and metadata
+        Returns:
+            List of Seam objects with geometry and metadata
         """
         segments = self._compute_intersection_curve()
 
@@ -143,8 +146,10 @@ class SeamExtractor:
         2. Runs CGAL corefinement to extract intersection edges
         3. Returns segments as (P, 2, 3) array
 
-        @return (P, 2, 3) float64 array of intersection edge segments,
                 or empty array if no intersection found
+
+        Returns:
+            (P, 2, 3) float64 array of intersection edge segments,
         """
         verts1 = np.asarray(self.mesh_1.vertices, dtype=np.float64)
         faces1 = np.asarray(self.mesh_1.faces, dtype=np.int32)
@@ -171,8 +176,10 @@ class SeamExtractor:
         it to form continuous paths. Filters out paths shorter than
         min_segment_length.
 
-        @param segments: (P, 2, 3) array of edge segments
-        @return List of (N, 3) point arrays, one per continuous path
+        Args:
+            segments: (P, 2, 3) array of edge segments
+        Returns:
+            List of (N, 3) point arrays, one per continuous path
         """
         if len(segments) == 0:
             return []
@@ -244,8 +251,10 @@ class SeamExtractor:
         Delegates entirely to PathCreator.process_path which handles:
         smooth -> detect -> split lines at corners -> return sub-paths.
 
-        @param points: (N, 3) array of 3D points
-        @return List of dicts, each with 'points', 'geometry', 'is_closed'
+        Args:
+            points: (N, 3) array of 3D points
+        Returns:
+            List of dicts, each with 'points', 'geometry', 'is_closed'
         """
         is_closed = len(points) > 2 and np.linalg.norm(points[0] - points[-1]) < 1e-6
 
@@ -275,9 +284,11 @@ class SeamExtractor:
         nearly parallel (dot product > cos(5°) ≈ 0.996), it's edge-on-edge.
         Otherwise it's a T-joint (edge-on-surface).
 
-        @param normals_1: Normals from mesh_1 (N, 3)
-        @param normals_2: Normals from mesh_2 (N, 3)
-        @return True if edge-on-edge joint, False if edge-on-surface (T-joint)
+        Args:
+            normals_1: Normals from mesh_1 (N, 3)
+            normals_2: Normals from mesh_2 (N, 3)
+        Returns:
+            True if edge-on-edge joint, False if edge-on-surface (T-joint)
         """
         dots = np.abs(np.einsum('ij,ij->i', normals_1, normals_2))
         avg_dot = np.mean(dots)
@@ -301,8 +312,10 @@ class SeamExtractor:
         seam tangent. This gives stable, consistent normals regardless
         of which face the closest point query lands on.
 
-        @param points: Array of 3D points (N, 3)
-        @return Tuple of (normals_from_mesh1, normals_from_mesh2)
+        Args:
+            points: Array of 3D points (N, 3)
+        Returns:
+            Tuple of (normals_from_mesh1, normals_from_mesh2)
         """
         _, _, face_ids_1 = trimesh.proximity.closest_point(self.mesh_1, points)
         raw_normals_1 = self.mesh_1.face_normals[face_ids_1]
@@ -348,9 +361,11 @@ class SeamExtractor:
         Removes the tangent component from the normal, giving a stable
         surface normal that is consistent with the path direction.
 
-        @param normal: Raw face normal
-        @param tangent: Normalized tangent vector along seam
-        @return Projected and normalized normal
+        Args:
+            normal: Raw face normal
+            tangent: Normalized tangent vector along seam
+        Returns:
+            Projected and normalized normal
         """
         projected = normal - np.dot(normal, tangent) * tangent
         norm = np.linalg.norm(projected)
@@ -370,12 +385,15 @@ class SeamExtractor:
     ) -> Seam:
         """Wrap path data into Seam object.
 
-        @param path_dict: Path with points and geometry
-        @param is_edge_joint: Whether edge-on-edge joint
-        @param normals_1: Normals from mesh_1
-        @param normals_2: Normals from mesh_2
-        @return Seam object with LineSegment or ArcSegment
-        @throws ValueError: If geometry type is unsupported
+        Args:
+            path_dict: Path with points and geometry
+            is_edge_joint: Whether edge-on-edge joint
+            normals_1: Normals from mesh_1
+            normals_2: Normals from mesh_2
+        Returns:
+            Seam object with LineSegment or ArcSegment
+        Raises:
+            ValueError: If geometry type is unsupported
         """
         points = path_dict['points']
         geometry = path_dict['geometry']
