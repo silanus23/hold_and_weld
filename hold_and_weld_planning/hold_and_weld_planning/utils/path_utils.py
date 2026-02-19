@@ -26,7 +26,7 @@ from ..core.seam import Seam
 
 
 def load_weld_job(
-    yaml_path: str | Path
+    yaml_path: str | Path,
 ) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
     """Load weld job configuration from a YAML file.
 
@@ -61,7 +61,7 @@ def load_weld_job(
         'work_angle_deg',
         'travel_angle_deg',
         'gap_mm',
-        'num_points'
+        'num_points',
     ]
     for param in required_params:
         if param not in config['parameters']:
@@ -84,7 +84,7 @@ def load_weld_job(
 
 
 def load_urdf_config(
-    yaml_path: str | Path
+    yaml_path: str | Path,
 ) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
     """Load URDF-based weld configuration (URDF workflow).
 
@@ -113,12 +113,10 @@ def load_urdf_config(
         raise ValueError("Config missing 'workpiece' section")
 
     if (
-        'main_part' not in config['workpiece'] or
-        'secondary_part' not in config['workpiece']
+        'main_part' not in config['workpiece']
+        or 'secondary_part' not in config['workpiece']
     ):
-        raise ValueError(
-            "Config must have both 'main_part' and 'secondary_part'"
-        )
+        raise ValueError("Config must have both 'main_part' and 'secondary_part'")
 
     if 'parameters' not in config:
         raise ValueError("Config missing 'parameters' section")
@@ -130,9 +128,7 @@ def load_urdf_config(
     seams = []
     if not auto_detect:
         if 'seams' not in config or not config['seams']:
-            raise ValueError(
-                "Config missing 'seams' or seams list is empty"
-            )
+            raise ValueError("Config missing 'seams' or seams list is empty")
 
         for seam_dict in config['seams']:
             if 'start' not in seam_dict or 'end' not in seam_dict:
@@ -145,7 +141,7 @@ def load_urdf_config(
 def export_to_json(
     seams: List[Seam],
     output_path: str | Path,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Export generated seam poses to a JSON file.
 
@@ -162,17 +158,15 @@ def export_to_json(
 
     for i, seam in enumerate(seams):
         if not seam.is_generated:
-            raise RuntimeError(
-                f'Seam {i} has not been generated yet - cannot export'
-            )
+            raise RuntimeError(f'Seam {i} has not been generated yet - cannot export')
 
     data = {
         'metadata': {
             'generated_at': datetime.now().isoformat(),
             'num_seams': len(seams),
-            'total_poses': sum(len(seam.poses) for seam in seams)
+            'total_poses': sum(len(seam.poses) for seam in seams),
         },
-        'seams': {}
+        'seams': {},
     }
 
     if metadata:
@@ -221,8 +215,11 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
 
     # Direct path to source trajectories directory
     output_dir = (
-        workspace_root / 'src' / 'hold_and_weld' /
-        'hold_and_weld_application' / 'trajectories'
+        workspace_root
+        / 'src'
+        / 'hold_and_weld'
+        / 'hold_and_weld_application'
+        / 'trajectories'
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)

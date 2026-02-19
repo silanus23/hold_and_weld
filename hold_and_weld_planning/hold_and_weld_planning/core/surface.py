@@ -51,9 +51,7 @@ class Surface:
     bounds: Dict[str, float]
 
     @staticmethod
-    def compute_boundary_edges(
-        corners: List[NDArray]
-    ) -> List[Tuple[NDArray, NDArray]]:
+    def compute_boundary_edges(corners: List[NDArray]) -> List[Tuple[NDArray, NDArray]]:
         """Compute boundary edges from ordered corner points.
 
         Args:
@@ -119,7 +117,7 @@ class Surface:
             edges=edges,
             u_axis=u_axis,
             v_axis=v_axis,
-            bounds=surface_dict['bounds']
+            bounds=surface_dict['bounds'],
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -137,7 +135,7 @@ class Surface:
             'edges': [(e[0].tolist(), e[1].tolist()) for e in self.edges],
             'u_axis': self.u_axis.tolist(),
             'v_axis': self.v_axis.tolist(),
-            'bounds': self.bounds
+            'bounds': self.bounds,
         }
 
     def get_surface_info(self) -> Dict[str, List[float]]:
@@ -146,10 +144,7 @@ class Surface:
         Returns:
             Dictionary with 'center' and 'normal' keys for weld_planner.
         """
-        return {
-            'center': self.center.tolist(),
-            'normal': self.normal.tolist()
-        }
+        return {'center': self.center.tolist(), 'normal': self.normal.tolist()}
 
     def num_corners(self) -> int:
         """Get number of corners defining this surface.
@@ -173,4 +168,4 @@ class Surface:
         Returns:
             String showing surface ID and corner count.
         """
-        return f'Surface(id=\'{self.surface_id}\', corners={self.num_corners()})'
+        return f"Surface(id='{self.surface_id}', corners={self.num_corners()})"

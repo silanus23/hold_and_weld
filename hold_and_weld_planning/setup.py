@@ -24,18 +24,12 @@ setup(
     version='0.1.0',
     packages=find_packages(),
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/generated', glob('generated/*.json')),
         ('share/' + package_name + '/config/examples', []),
     ],
-    install_requires=[
-        'setuptools',
-        'numpy',
-        'scipy',
-        'pyyaml'
-    ],
+    install_requires=['setuptools', 'numpy', 'scipy', 'pyyaml'],
     zip_safe=True,
     maintainer='Berkan Tali',
     maintainer_email='berkantali23@outlook.com',
@@ -44,8 +38,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'urdf_seam_generator = '
-            'hold_and_weld_planning.urdf_seam_generator:main'
+            'urdf_seam_generator = hold_and_weld_planning.urdf_seam_generator:main'
         ],
     },
 )

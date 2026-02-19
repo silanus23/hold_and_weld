@@ -1,4 +1,4 @@
-# Copyright 2025 Berkan Tali
+# Copyright 2026 Berkan Tali
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Core geometry primitives for weld planning."""
+from .mesh_loader import MeshLoader
+from .path_creator import PathCreator
+from .seam_extractor import SeamExtractor
+from .shell_generator import ShellGenerator
 
-from .arc_segment import ArcSegment
-from .line_segment import LineSegment
-from .seam import Seam
-from .surface import Surface
-
-__all__ = ['LineSegment', 'Seam', 'Surface', 'ArcSegment']
+__all__ = [
+    'MeshLoader',
+    'ShellGenerator',
+    'PathCreator',
+    'SeamExtractor',
+]

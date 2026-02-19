@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright 2025 Berkan Tali
+# Copyright 2026 Berkan Tali
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""URDF-based seam generator - auto-detects seams from geometry.
+"""Seam generator CLI - Generate weld seams from URDF geometry.
 
-Geometry-driven seam generation without joint type classification.
-Generates weld trajectories from URDF analysis with configurable parameters.
+Command-line interface for automated seam detection and trajectory generation
+from URDF collision geometry.
 """
 
 import argparse
@@ -28,7 +28,7 @@ import sys
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).parent))
 
-from hold_and_weld_planning.urdf import URDFSeamPlanner
+from hold_and_weld_planning.job_planner import JobPlanner
 from hold_and_weld_planning.utils import (
     auto_generate_output_path,
     load_urdf_config,
@@ -38,7 +38,7 @@ from hold_and_weld_planning.utils import (
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Generate weld seams using URDF geometry',
+        description='Generate weld seams from URDF geometry',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -50,38 +50,36 @@ Examples:
 
   # Verbose output
   %(prog)s --input urdf_weld_config.yaml --verbose
-        """
+        """,
     )
 
-    default_config = (
-        Path(__file__).parent.parent / 'config' / 'urdf_welding_conf.yaml'
-    )
+    default_config = Path(__file__).parent.parent / 'config' / 'urdf_welding_conf.yaml'
 
     parser.add_argument(
-        '--input', '-i',
+        '--input',
+        '-i',
         type=str,
         default=str(default_config) if default_config.exists() else None,
-        help='Input YAML configuration file'
+        help='Input YAML configuration file',
     )
 
     parser.add_argument(
-        '--output', '-o',
+        '--output',
+        '-o',
         type=str,
         default=None,
-        help='Output JSON file (default: auto-generated)'
+        help='Output JSON file (default: auto-generated)',
     )
 
     parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Print detailed information'
+        '--verbose', '-v', action='store_true', help='Print detailed information'
     )
 
     return parser.parse_args()
 
 
 def main():
-    """Run URDF-based seam generation workflow."""
+    """Run seam generation workflow."""
     args = parse_arguments()
 
     if args.input is None:
@@ -97,7 +95,7 @@ def main():
 
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
-            print(f'  Points per seam: {parameters["num_points"]}')
+            print(f'  Points per seam: {parameters.get("num_points", 100)}')
             print(f'  Work angle: {parameters["work_angle_deg"]}°')
             print(f'  Travel angle: {parameters["travel_angle_deg"]}°')
             print(f'  Gap: {parameters["gap_mm"]}mm')
@@ -107,16 +105,7 @@ def main():
         secondary_urdf = workpiece_config['secondary_part']['urdf_path']
 
         main_world_pose = workpiece_config['main_part'].get('world_pose')
-        secondary_world_pose = (
-            workpiece_config['secondary_part'].get('world_pose')
-        )
-
-        planner = URDFSeamPlanner(
-            main_urdf_path=main_urdf,
-            secondary_urdf_path=secondary_urdf,
-            main_world_pose=main_world_pose,
-            secondary_world_pose=secondary_world_pose
-        )
+        secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
 
         main_link = workpiece_config['main_part']['link_name']
         secondary_link = workpiece_config['secondary_part']['link_name']
@@ -127,25 +116,31 @@ def main():
             print(f'  Secondary part URDF: {secondary_urdf}')
             print(f'  Secondary link: {secondary_link}')
             print()
-            print('Auto-detecting seams from geometry...')
 
-        generated_seams = planner.auto_detect_and_generate_seams(
-            main_link=main_link,
-            secondary_link=secondary_link,
+        planner = JobPlanner(
+            main_urdf_path=main_urdf,
+            secondary_urdf_path=secondary_urdf,
+            main_world_pose=main_world_pose,
+            secondary_world_pose=secondary_world_pose,
             parameters=parameters,
-            min_seam_length_m=0.01
+        )
+
+        print('Starting weld job planning...')
+        print()
+
+        generated_seams = planner.plan_job(
+            main_link=main_link, secondary_link=secondary_link
         )
 
         if not generated_seams:
-            print('ERROR: No seams detected from geometry')
+            print('ERROR: No seams generated')
             return 1
 
-        if args.verbose:
-            print(f'  Detected {len(generated_seams)} seam segment(s)')
+        print()
 
+        if args.verbose:
             num_edge = sum(
-                1 for s in generated_seams
-                if s.config.get('is_edge_joint', False)
+                1 for s in generated_seams if s.config.get('is_edge_joint', False)
             )
             num_flat = len(generated_seams) - num_edge
 
@@ -153,20 +148,20 @@ def main():
                 print(f'  Edge joints (edge-on-edge): {num_edge}')
             if num_flat > 0:
                 print(f'  Flat joints (edge-on-surface): {num_flat}')
+            print()
 
             for idx, seam in enumerate(generated_seams):
-                seam_length_mm = seam.line_segment.length() * 1000
+                seam_length_mm = seam.length() * 1000
                 num_poses = len(seam.poses) if seam.poses else 0
-                joint_type = (
-                    'EDGE' if seam.config.get('is_edge_joint') else 'FLAT'
-                )
+                joint_type = 'EDGE' if seam.config.get('is_edge_joint') else 'FLAT'
+                seg_type = seam.segment_type.upper()
                 print(
-                    f'  Segment {idx}: {seam_length_mm:.1f}mm '
-                    f'with {num_poses} poses [{joint_type}]'
+                    f'  Seam {idx}: {seg_type}, {seam_length_mm:.1f}mm, '
+                    f'{num_poses} poses [{joint_type}]'
                 )
             print()
 
-        print(f'Generated {len(generated_seams)} seam segment(s)')
+        print(f'Successfully generated {len(generated_seams)} seam(s)')
         print()
 
         if args.output is None:
@@ -182,31 +177,18 @@ def main():
             'travel_angle_deg': parameters['travel_angle_deg'],
             'gap_mm': parameters['gap_mm'],
             'num_segments': len(generated_seams),
-            'geometry_driven': True,
-            'note': (
-                'Seams split at surface boundaries, '
-                'edge vs flat determined by boundary positions'
-            )
+            'pipeline': 'mesh-based geometry detection',
         }
 
-        output_data = {
-            'metadata': metadata,
-            'seams': {}
-        }
+        # Export to JSON
+        output_data = {'metadata': metadata, 'seams': {}}
 
         for idx, seam in enumerate(generated_seams):
-            seam_id = f'segment_{idx:03d}'
+            seam_id = f'seam_{idx:03d}'
 
-            seam.is_generated = True
             seam_dict = seam.to_dict()
 
-            seam_dict['is_edge_joint'] = bool(
-                seam.config.get('is_edge_joint', False)
-            )
-            seam_dict['on_surface'] = str(
-                seam.config.get('on_surface', 'unknown')
-            )
-
+            seam_dict['is_edge_joint'] = bool(seam.config.get('is_edge_joint', False))
             output_data['seams'][seam_id] = seam_dict
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +208,7 @@ def main():
         print(f'ERROR: {e}')
         if args.verbose:
             import traceback
+
             traceback.print_exc()
         return 1
 

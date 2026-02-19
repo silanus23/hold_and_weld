@@ -25,5 +25,5 @@ __all__ = [
     'load_weld_job',
     'export_to_json',
     'auto_generate_output_path',
-    'load_urdf_config'
+    'load_urdf_config',
 ]

@@ -14,15 +14,16 @@
 
 """Hold and Weld Planning Package - Weld seam trajectory generation."""
 
-from .core import LineSegment, Seam, Surface
-from .planning import WeldPlanner
-from .urdf import (
-    SeamDetector,
-    SurfaceAnalyzer,
-    SurfaceExtractor,
-    URDFProcessor,
-    URDFSeamPlanner,
+from .core import ArcSegment, LineSegment, Seam, Surface
+from .job_planner import JobPlanner
+from .mesh import (
+    MeshLoader,
+    PathCreator,
+    SeamExtractor,
+    ShellGenerator,
 )
+from .planning import WeldPlanner
+from .urdf import URDFProcessor
 from .utils import (
     auto_generate_output_path,
     export_to_json,
@@ -30,20 +31,22 @@ from .utils import (
     load_weld_job,
 )
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 __all__ = [
     'LineSegment',
+    'ArcSegment',
     'Seam',
     'Surface',
     'WeldPlanner',
     'URDFProcessor',
-    'SurfaceExtractor',
-    'SurfaceAnalyzer',
-    'SeamDetector',
-    'URDFSeamPlanner',
+    'MeshLoader',
+    'ShellGenerator',
+    'PathCreator',
+    'SeamExtractor',
+    'JobPlanner',
     'load_weld_job',
+    'load_urdf_config',
     'export_to_json',
     'auto_generate_output_path',
-    'load_urdf_config'
 ]

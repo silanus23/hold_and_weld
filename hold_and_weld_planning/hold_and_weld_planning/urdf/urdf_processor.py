@@ -1,4 +1,3 @@
-
 # Copyright 2025 Berkan Tali
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -70,23 +69,6 @@ class URDFProcessor:
         self.world_rpy = np.array(rpy, dtype=float)
         self.world_transform = self._build_transform_matrix(xyz, rpy)
 
-    def get_link(self, link_name: str) -> Any:
-        """Get link by name from the URDF model.
-
-        Args:
-            link_name: Name of the link to retrieve.
-
-        Returns:
-            Link object from URDF.
-
-        Raises:
-            ValueError: If link not found in URDF.
-        """
-        for link in self.robot.links:
-            if link.name == link_name:
-                return link
-        raise ValueError(f"Link '{link_name}' not found in URDF")
-
     def get_collision_transform(self, collision: Any) -> NDArray:
         """Get transformation matrix from collision origin.
 
@@ -134,11 +116,10 @@ class URDFProcessor:
                 from ament_index_python.packages import (
                     get_package_share_directory,
                 )
+
                 package_dir = get_package_share_directory(package_name)
             except Exception as e:
-                raise FileNotFoundError(
-                    f"Package '{package_name}' not found: {e}"
-                )
+                raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
 
             resolved = Path(package_dir) / relative_path
 
@@ -164,6 +145,7 @@ class URDFProcessor:
         """
         try:
             import xacro
+
             doc = xacro.process_file(str(xacro_path))
             return doc.toxml()
         except Exception as e:

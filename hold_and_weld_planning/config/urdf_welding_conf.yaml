@@ -29,3 +29,7 @@ parameters:
   gap_mm: 25.0
   work_angle_deg: 45.0
   travel_angle_deg: 5.0
+  line_error_threshold: 0.002
+  circle_error_threshold: 0.002
+  angle_threshold_deg: 45.0
+  corner_window: 5
