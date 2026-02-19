@@ -31,7 +31,6 @@ from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.seam import Seam
 
-# Import the compiled CGAL pybind11 module
 try:
     from . import mesh_intersection as _mesh_intersection
 except ImportError as e:
@@ -115,19 +114,36 @@ class SeamExtractor:
         seams = []
         for path_points in paths:
             try:
-                smoothed_list = self._smooth_and_detect_geometry(path_points)
+                is_closed = (
+                    len(path_points) > 2 and
+                    np.linalg.norm(path_points[0] - path_points[-1]) < 1e-6
+                )
 
-                for smoothed in smoothed_list:
+                print(
+                    f'DEBUG path: processing {"closed" if is_closed else "open"} '
+                    f'path with {len(path_points)} points'
+                )
+
+                geometries = self.path_creator.process_path(
+                    path_points,
+                    is_closed=is_closed,
+                    num_points=self.num_smooth_points,
+                    angle_threshold_deg=self.angle_threshold_deg,
+                    corner_window=self.corner_window,
+                    line_error_threshold=self.line_error_threshold,
+                    circle_error_threshold=self.circle_error_threshold,
+                )
+
+                for geometry in geometries:
                     try:
-                        # Compute normals once and reuse for both joint type and seam
-                        normals_1, normals_2 = self._get_normals_for_points(
-                            smoothed['points']
-                        )
+                        points = geometry['points']
+                        normals_1, normals_2 = self._get_normals_for_points(points)
                         is_edge_joint = self._determine_joint_type(normals_1, normals_2)
                         seam = self._wrap_in_seam(
-                            smoothed, is_edge_joint, normals_1, normals_2
+                            geometry, is_edge_joint, normals_1, normals_2
                         )
                         seams.append(seam)
+
                     except Exception as e:
                         print(f'Warning: Failed to process sub-path: {e}')
                         continue
@@ -245,34 +261,6 @@ class SeamExtractor:
 
         return paths
 
-    def _smooth_and_detect_geometry(self, points: np.ndarray) -> List[Dict]:
-        """Smooth path, detect geometry, split lines at corners.
-
-        Delegates entirely to PathCreator.process_path which handles:
-        smooth -> detect -> split lines at corners -> return sub-paths.
-
-        Args:
-            points: (N, 3) array of 3D points
-        Returns:
-            List of dicts, each with 'points', 'geometry', 'is_closed'
-        """
-        is_closed = len(points) > 2 and np.linalg.norm(points[0] - points[-1]) < 1e-6
-
-        segments = self.path_creator.process_path(
-            points,
-            is_closed=is_closed,
-            num_points=self.num_smooth_points,
-            angle_threshold_deg=self.angle_threshold_deg,
-            corner_window=self.corner_window,
-            line_error_threshold=self.line_error_threshold,
-            circle_error_threshold=self.circle_error_threshold,
-        )
-
-        return [
-            {'points': seg['points'], 'geometry': seg, 'is_closed': is_closed}
-            for seg in segments
-        ]
-
     def _determine_joint_type(
         self,
         normals_1: np.ndarray,
@@ -378,7 +366,7 @@ class SeamExtractor:
 
     def _wrap_in_seam(
         self,
-        path_dict: Dict,
+        geometry: Dict,  # ← Changed from path_dict to geometry
         is_edge_joint: bool,
         normals_1: np.ndarray,
         normals_2: np.ndarray,
@@ -386,7 +374,7 @@ class SeamExtractor:
         """Wrap path data into Seam object.
 
         Args:
-            path_dict: Path with points and geometry
+            geometry: Geometry dict from PathCreator with 'type', 'points', etc.
             is_edge_joint: Whether edge-on-edge joint
             normals_1: Normals from mesh_1
             normals_2: Normals from mesh_2
@@ -395,8 +383,7 @@ class SeamExtractor:
         Raises:
             ValueError: If geometry type is unsupported
         """
-        points = path_dict['points']
-        geometry = path_dict['geometry']
+        points = geometry['points']
 
         if geometry['type'] == 'line':
             line_segment = LineSegment(start=points[0], end=points[-1])
@@ -404,35 +391,12 @@ class SeamExtractor:
 
         elif geometry['type'] == 'arc':
             arc_segment = ArcSegment(
-                points=points, center=geometry['center'], radius=geometry['radius']
+                points=points,
+                center=geometry['center'],
+                radius=geometry['radius']
             )
             seam = Seam(arc_segment=arc_segment)
 
-        elif geometry['type'] == 'complex':
-            first_segment = geometry['segments'][0]
-
-            if first_segment['type'] == 'line':
-                seg_points = first_segment['points']
-                line_segment = LineSegment(start=seg_points[0], end=seg_points[-1])
-                seam = Seam(line_segment=line_segment)
-
-            elif first_segment['type'] == 'arc':
-                seg_points = first_segment['points']
-                arc_segment = ArcSegment(
-                    points=seg_points,
-                    center=first_segment['center'],
-                    radius=first_segment['radius'],
-                )
-                seam = Seam(arc_segment=arc_segment)
-
-            else:
-                # Unknown sub-segment type — fall back to straight line
-                print(
-                    f"Warning: Unknown complex sub-segment type '{first_segment['type']}', "
-                    'falling back to line'
-                )
-                line_segment = LineSegment(start=points[0], end=points[-1])
-                seam = Seam(line_segment=line_segment)
         else:
             raise ValueError(f'Unknown geometry type: {geometry["type"]}')
 
@@ -440,7 +404,6 @@ class SeamExtractor:
         seam.config['geometry_type'] = geometry['type']
         seam.config['normals_mesh_1'] = normals_1
         seam.config['normals_mesh_2'] = normals_2
-        seam.config['is_closed'] = path_dict['is_closed']
         seam.config['smoothed_points'] = points
         seam.config['source_mesh'] = 1
 

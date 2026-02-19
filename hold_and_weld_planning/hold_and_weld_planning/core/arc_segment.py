@@ -68,7 +68,6 @@ class ArcSegment:
 
         self.radius = float(radius)
 
-        # Start and end are first and last points
         self.start = self.points[0]
         self.end = self.points[-1]
 
@@ -109,13 +108,7 @@ class ArcSegment:
         )
 
     def length(self) -> float:
-        """Calculate arc length in meters.
-
-        Uses sum of distances between consecutive discretized points.
-
-        Returns:
-            Arc length in meters
-        """
+        """Calculate arc length in meters."""
         if len(self.points) < 2:
             return 0.0
 
@@ -125,10 +118,6 @@ class ArcSegment:
     def tangent_at(self, index: int) -> NDArray:
         """Calculate tangent vector at a discretized point.
 
-        Args:
-            index: Index of point in points array
-        Returns:
-            Normalized tangent vector at that point
         Raises:
             IndexError: If index out of bounds
             ValueError: If cannot compute tangent
@@ -138,7 +127,6 @@ class ArcSegment:
                 f'Index {index} out of bounds for {len(self.points)} points'
             )
 
-        # Use forward/backward/central difference
         if index == 0:
             tangent = self.points[1] - self.points[0]
         elif index == len(self.points) - 1:
@@ -153,22 +141,12 @@ class ArcSegment:
         return tangent / norm
 
     def midpoint(self) -> NDArray:
-        """Get middle point of the arc.
-
-        Returns:
-            Point at approximately middle of arc
-        """
+        """Get middle point of the arc."""
         mid_index = len(self.points) // 2
         return self.points[mid_index]
 
     def point_at(self, t: float) -> NDArray:
-        """Get point along arc at parameter t.
-
-        Args:
-            t: Parameter value (0 = start, 1 = end)
-        Returns:
-            Point at parameter t (linear interpolation through points)
-        """
+        """Get point along arc at parameter t."""
         if t <= 0:
             return self.points[0]
         if t >= 1:
@@ -179,26 +157,15 @@ class ArcSegment:
         lower_index = int(np.floor(float_index))
         upper_index = min(lower_index + 1, len(self.points) - 1)
 
-        # Linear interpolation between points
         alpha = float_index - lower_index
         return (1 - alpha) * self.points[lower_index] + alpha * self.points[upper_index]
 
     def tangent(self) -> NDArray:
-        """Calculate normalized tangent vector at start of arc.
-
-        Compatible with LineSegment interface.
-
-        Returns:
-            Normalized tangent vector at start
-        """
+        """Calculate normalized tangent vector at start of arc."""
         return self.tangent_at(0)
 
     def __repr__(self) -> str:
-        """Return string representation of ArcSegment.
-
-        Returns:
-            String showing arc length, radius, and whether away_vector is set
-        """
+        """Return string representation of ArcSegment."""
         has_away = (
             'with away_vector'
             if self.away_from_wall_vector is not None

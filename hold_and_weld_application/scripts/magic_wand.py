@@ -22,7 +22,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point, Pose  # Quaternion kullanılmadığı için (F401) silindi
+from geometry_msgs.msg import Point, Pose
 from interactive_markers import InteractiveMarkerServer
 from moveit_msgs.msg import CollisionObject
 import rclpy
@@ -240,67 +240,51 @@ class MagicWand(Node):
 
     def load_and_visualize_latest_json(self):
         """Load the latest trajectory JSON and create torch tip markers."""
-        # Find the latest JSON file in trajectories AND trajectories folders
-        search_dirs = []
-
-        # Add trajectories folder
         trajectories_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            )),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             'trajectories'
         )
-        if os.path.exists(trajectories_dir):
-            search_dirs.append(trajectories_dir)
 
-        # Add trajectories folder from package
-        app_pkg = get_package_share_directory('hold_and_weld_application')
-        traj_dir = os.path.join(app_pkg, 'trajectories')
-        if os.path.exists(traj_dir):
-            search_dirs.append(traj_dir)
-
-        self.get_logger().info(f'Searching for JSON files in: {search_dirs}')
-
-        all_json_files = []
-        for search_dir in search_dirs:
-            json_files = glob.glob(os.path.join(search_dir, '*.json'))
-            # Filter out files that don't exist or can't be accessed
-            valid_files = [
-                f for f in json_files
-                if os.path.exists(f) and os.path.isfile(f)
-            ]
-            all_json_files.extend(valid_files)
-            self.get_logger().info(
-                f'Found {len(valid_files)} valid JSON files in {search_dir}'
-            )
-
-        if not all_json_files:
+        if not os.path.exists(trajectories_dir):
             self.get_logger().error(
-                'No valid JSON files found in any search directory!'
+                f'Trajectories directory not found: {trajectories_dir}'
             )
             return
 
-        # Get the latest file by modification time (with error handling)
-        try:
-            latest_json = max(
-                all_json_files,
-                key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0
-            )
-            self.get_logger().info(f'Loading latest JSON file: {latest_json}')
-        except (OSError, ValueError) as e:
-            self.get_logger().error(f'Error finding latest JSON file: {e}')
+        self.get_logger().info(
+            f'Searching for JSON files in: {trajectories_dir}'
+        )
+
+        json_files = glob.glob(os.path.join(trajectories_dir, '*.json'))
+        if not json_files:
+            self.get_logger().error('No JSON files found in trajectories directory!')
             return
 
-        # Load JSON data
-        try:
-            with open(latest_json, 'r') as f:
-                data = json.load(f)
-            self.get_logger().info('Successfully loaded JSON')
-        except Exception as e:
-            self.get_logger().error(f'Failed to load JSON file: {e}')
+        # Load all files and pick latest by metadata generated_at
+        latest_json = None
+        latest_time = None
+
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+                generated_at = data.get('metadata', {}).get('generated_at')
+                if generated_at and (latest_time is None or generated_at > latest_time):
+                    latest_time = generated_at
+                    latest_json = (json_file, data)
+            except Exception as e:
+                self.get_logger().warn(f'Could not read {json_file}: {e}')
+                continue
+
+        if latest_json is None:
+            self.get_logger().error('No valid trajectory JSON files found!')
             return
 
-        # Only process trajectory JSON
+        json_path, data = latest_json
+        self.get_logger().info(
+            f'Loading latest JSON: {json_path} (generated_at: {latest_time})'
+        )
+
         if 'seams' in data:
             self.get_logger().info(
                 'Detected trajectory JSON - creating torch tip markers'
@@ -333,7 +317,6 @@ class MagicWand(Node):
                 f'Processing {seam_name}: {len(poses)} poses'
             )
 
-            # Sample poses (every 5th pose to avoid clutter)
             sample_step = max(1, len(poses) // 20)  # Max 20 markers per seam
             self.get_logger().info(f'Sampling every {sample_step} poses')
 
@@ -356,17 +339,15 @@ class MagicWand(Node):
                 int_marker.pose.orientation.z = float(quaternion[2])
                 int_marker.pose.orientation.w = float(quaternion[3])
 
-                # Create marker control (non-interactive, just visualization)
                 marker_control = InteractiveMarkerControl()
                 marker_control.always_visible = True
                 marker_control.interaction_mode = InteractiveMarkerControl.NONE
 
-                # Create torch tip visual (small axis)
                 axis_marker = Marker()
                 axis_marker.type = Marker.ARROW
-                axis_marker.scale.x = 0.01  # Shaft diameter
-                axis_marker.scale.y = 0.015  # Head diameter
-                axis_marker.scale.z = 0.015  # Head length
+                axis_marker.scale.x = 0.01
+                axis_marker.scale.y = 0.015
+                axis_marker.scale.z = 0.015
 
                 # Color based on seam (rainbow effect)
                 color = ColorRGBA()
@@ -385,7 +366,6 @@ class MagicWand(Node):
                 marker_control.markers.append(axis_marker)
                 int_marker.controls.append(marker_control)
 
-                # Insert marker
                 self.marker_server.insert(
                     int_marker, feedback_callback=self.marker_feedback
                 )

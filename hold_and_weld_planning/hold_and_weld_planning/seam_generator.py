@@ -21,7 +21,6 @@ from URDF collision geometry.
 """
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -29,8 +28,9 @@ if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).parent))
 
 from hold_and_weld_planning.job_planner import JobPlanner
-from hold_and_weld_planning.utils import (
+from hold_and_weld_planning.utils.path_utils import (
     auto_generate_output_path,
+    export_to_json,
     load_urdf_config,
 )
 
@@ -101,11 +101,10 @@ def main():
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
             print(f'  Points per seam: {parameters.get("num_points", 100)}')
-            print(f'  Work angle: {parameters["work_angle_deg"]}°')
-            print(f'  Travel angle: {parameters["travel_angle_deg"]}°')
+            print(f'  Work angle: {parameters["work_angle_deg"]}')
+            print(f'  Travel angle: {parameters["travel_angle_deg"]}')
             print(f'  Gap: {parameters["gap_mm"]}mm')
             print()
-
 
         if args.verbose:
             print(f'  Main part URDF: {main_path}')
@@ -120,7 +119,7 @@ def main():
             parameters=parameters,
         )
 
-        print('Starting weld job planning...')
+        print('Starting weld job planning')
         print()
 
         generated_seams = planner.plan_job()
@@ -169,11 +168,8 @@ def main():
             'work_angle_deg': parameters['work_angle_deg'],
             'travel_angle_deg': parameters['travel_angle_deg'],
             'gap_mm': parameters['gap_mm'],
-            'num_segments': len(generated_seams),
-            'pipeline': 'mesh-based geometry detection',
         }
 
-        # Export to JSON
         output_data = {'metadata': metadata, 'seams': {}}
 
         for idx, seam in enumerate(generated_seams):
@@ -184,10 +180,7 @@ def main():
             seam_dict['is_edge_joint'] = bool(seam.config.get('is_edge_joint', False))
             output_data['seams'][seam_id] = seam_dict
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w') as f:
-            json.dump(output_data, f, indent=2)
-
+        export_to_json(generated_seams, output_path, metadata)
         print(f'Exported to: {output_path}')
         return 0
 

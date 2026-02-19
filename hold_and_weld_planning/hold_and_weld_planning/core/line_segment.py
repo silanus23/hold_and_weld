@@ -18,7 +18,7 @@ Provides a reusable geometric primitive for representing line segments in 3D spa
 Useful for mesh edges, rays, seam paths, and other linear geometric entities.
 """
 
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 from numpy.typing import NDArray
@@ -66,9 +66,6 @@ class LineSegment:
     def tangent(self) -> NDArray:
         """Calculate normalized tangent vector along the segment.
 
-        Returns:
-            Normalized direction vector from start to end.
-
         Raises:
             ValueError: If segment is degenerate (zero length).
         """
@@ -78,33 +75,9 @@ class LineSegment:
         return (self.end - self.start) / length
 
     def midpoint(self) -> NDArray:
-        """Get middle point of the segment.
-
-        Returns:
-            Point at the exact middle between start and end.
-        """
+        """Get middle point of the segment."""
         return (self.start + self.end) / 2.0
 
     def point_at(self, t: float) -> NDArray:
-        """Get point along segment at parameter t.
-
-        Args:
-            t: Parameter value (0 = start, 1 = end).
-
-        Returns:
-            Point at parameter t (linear interpolation).
-        """
+        """Get point along segment at parameter t."""
         return self.start + t * (self.end - self.start)
-
-    def __repr__(self) -> str:
-        """Return string representation of LineSegment.
-
-        Returns:
-            String showing segment length and whether away_from_wall_vector is set.
-        """
-        has_away = (
-            'with away_vector'
-            if self.away_from_wall_vector is not None
-            else 'no away_vector'
-        )
-        return f'LineSegment(length={self.length():.3f}m, {has_away})'

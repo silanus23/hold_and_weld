@@ -91,33 +91,21 @@ class Seam:
 
     @property
     def line_segment(self) -> Optional[LineSegment]:
-        """Get segment as LineSegment if it is one.
-
-        Returns:
-            LineSegment or None
-        """
+        """Get segment as LineSegment if it is one."""
         if isinstance(self.segment, LineSegment):
             return self.segment
         return None
 
     @property
     def arc_segment(self) -> Optional[ArcSegment]:
-        """Get segment as ArcSegment if it is one.
-
-        Returns:
-            ArcSegment or None
-        """
+        """Get segment as ArcSegment if it is one."""
         if isinstance(self.segment, ArcSegment):
             return self.segment
         return None
 
     @property
     def segment_type(self) -> str:
-        """Get type of segment.
-
-        Returns:
-            'line' or 'arc'
-        """
+        """Get type of segment."""
         if isinstance(self.segment, LineSegment):
             return 'line'
         elif isinstance(self.segment, ArcSegment):
@@ -125,11 +113,7 @@ class Seam:
         return 'unknown'
 
     def length(self) -> float:
-        """Get length of seam segment.
-
-        Returns:
-            Length in meters
-        """
+        """Get length of seam segment."""
         return self.segment.length()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -144,7 +128,6 @@ class Seam:
             'num_poses': len(self.poses) if self.poses else 0,
         }
 
-        # Add segment-specific data
         if isinstance(self.segment, LineSegment):
             result['start'] = self.segment.start.tolist()
             result['end'] = self.segment.end.tolist()
@@ -155,7 +138,6 @@ class Seam:
             result['center'] = self.segment.center.tolist()
             result['radius'] = float(self.segment.radius)
 
-        # Include config metadata
         if self.config:
             result['config'] = {}
             for k, v in self.config.items():

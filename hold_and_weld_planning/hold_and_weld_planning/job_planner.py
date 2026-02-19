@@ -86,6 +86,9 @@ class JobPlanner:
             if param not in self.parameters:
                 raise ValueError(f"Missing required parameter: '{param}'")
 
+        print(f'DEBUG job: starting with work_angle={self.parameters["work_angle_deg"]}deg, '
+              f'gap={self.parameters["gap_mm"]}mm')
+
     def plan_job(self) -> list:
         """Execute complete planning pipeline.
 
@@ -121,6 +124,7 @@ class JobPlanner:
 
         successful_seams = [s for s in seams if s.is_generated]
         print(f'Successfully planned {len(successful_seams)} seam(s)')
+
         return successful_seams
 
     def _generate_shells(self) -> tuple:
@@ -184,6 +188,7 @@ class JobPlanner:
             manifold_obj = shell_gen.create_shells_for_all_links()
 
         mesh_data = manifold_obj.to_mesh()
+
         return trimesh.Trimesh(
             vertices=mesh_data.vert_properties, faces=mesh_data.tri_verts
         )

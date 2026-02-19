@@ -14,6 +14,8 @@
 
 from pathlib import Path
 
+from ament_index_python.packages import get_package_share_directory
+
 import manifold3d
 import numpy as np
 from numpy.typing import NDArray
@@ -84,7 +86,6 @@ class MeshLoader:
             relative_path = parts[1]
 
             try:
-                from ament_index_python.packages import get_package_share_directory
 
                 package_dir = get_package_share_directory(package_name)
             except Exception as e:

@@ -18,9 +18,6 @@ This module handles pure geometric operations on extracted paths:
 corner detection on raw paths, spline smoothing per sub-path, and
 geometry detection to classify paths as lines, arcs, or complex curves.
 
-TODO: Make torch pose spacing distance-based (point_spacing_mm) instead
-of fixed count (num_smooth_points). Compute num_points from seam length
-so density is consistent regardless of seam length.
 """
 
 from typing import Dict
@@ -36,8 +33,8 @@ class PathCreator:
 
     Takes discrete vertex sequences (from mesh boundary extraction),
     splits at corners on raw geometry, applies spline smoothing per
-    sub-path, and recursively detects whether each path represents
-    a line, circular arc, or complex curve.
+    sub-path, and classifies whether each path represents a line
+    or circular arc.
     """
 
     def process_path(
@@ -54,10 +51,9 @@ class PathCreator:
 
         Flow:
         1. Smooth full path first — stabilizes signal and removes tessellation
-           noise, giving corner detection a clean angle distribution to work with
+        noise, giving corner detection a clean angle distribution to work with
         2. Split smoothed path at corners
-        3. Detect geometry type (line/arc/complex)
-        4. Flatten complex into arc and line segments
+        3. Detect geometry type (line/arc) for each segment
 
         Args:
             points: (N, 3) raw chained path points
@@ -67,8 +63,9 @@ class PathCreator:
             corner_window: Half-window size for local maximum search
             line_error_threshold: Max mean squared error for line fit (m^2)
             circle_error_threshold: Max mean squared error for circle fit (m^2)
+
         Returns:
-            List of dicts with 'type', 'points', and geometry parameters
+            List of dicts with 'type' ('line' or 'arc'), 'points', and geometry parameters
         """
         smoothed = self._apply_spline_smoothing(
             points, is_closed=is_closed, num_points=num_points
@@ -85,38 +82,9 @@ class PathCreator:
                 line_error_threshold=line_error_threshold,
                 circle_error_threshold=circle_error_threshold,
             )
-
-            if geometry['type'] in ('arc', 'line'):
-                result.append(geometry)
-            elif geometry['type'] == 'complex':
-                arcs, lines = self._extract_segments(geometry)
-                result.extend(arcs)
-                result.extend(lines)
+            result.append(geometry)
 
         return result
-
-    def _extract_segments(self, geometry: Dict) -> tuple[list[Dict], list[Dict]]:
-        """Recursively extract arc and line segments from complex geometry.
-
-        Args:
-            geometry: Complex geometry dict with nested segments
-        Returns:
-            Tuple of (arc_segments, line_segments)
-        """
-        arcs = []
-        lines = []
-
-        def recurse(geom):
-            if geom['type'] == 'arc':
-                arcs.append(geom)
-            elif geom['type'] == 'line':
-                lines.append(geom)
-            elif geom['type'] == 'complex':
-                for seg in geom['segments']:
-                    recurse(seg)
-
-        recurse(geometry)
-        return arcs, lines
 
     def _split_path_at_corners(
         self,
@@ -142,6 +110,8 @@ class PathCreator:
         Returns:
             List of (M, 3) arrays, one per sub-path
         """
+        print(f'DEBUG corner: input {len(points)} points, threshold={angle_threshold_deg}deg')
+
         if len(points) < 3:
             return [points]
 
@@ -211,8 +181,6 @@ class PathCreator:
                 else:
                     sub_paths.append(sub_path)
 
-        print(f'DEBUG corner: split into {len(sub_paths)} sub-paths')
-
         # The path start is arbitrary (not guaranteed to be at a corner), so the
         # first and last sub-paths may be the same physical side split in two.
         # Merge them if the start point is not actually a corner.
@@ -231,9 +199,7 @@ class PathCreator:
                 np.linalg.norm(start_point - points[idx]) < tolerance
                 for idx in corner_indices
             )
-            print(
-                f'DEBUG corner: start_is_corner={start_is_corner}, tolerance={tolerance:.4f}'
-            )
+
             if not start_is_corner:
                 sub_paths[0] = np.vstack([sub_paths[-1], sub_paths[0][1:]])
                 sub_paths.pop()
@@ -353,21 +319,21 @@ class PathCreator:
         points: np.ndarray,
         line_error_threshold: float = 0.0001,
         circle_error_threshold: float = 0.0001,
-        min_segment_points: int = 5,
     ) -> Dict:
-        """Recursively detect if points form line, arc, or complex shape.
+        """Detect if points form line or arc using simple fitting.
 
-        Fits line and circle to the full point set. If neither fits well,
-        halves the path and recurses on each half independently, building
-        a tree of segments until each piece fits a primitive.
+        No recursion - corner detection already split complex shapes.
+        If neither line nor arc fits well, falls back to line with warning.
 
         Args:
             points: Array of 3D points (N, 3)
-            line_error_threshold: Max error for line fit (m^2)
-            circle_error_threshold: Max error for circle fit (m^2)
-            min_segment_points: Don't subdivide below this size
+            line_error_threshold: Max mean squared error for line fit (m^2)
+            circle_error_threshold: Max mean squared error for circle fit (m^2)
+
         Returns:
-            Dict with 'type' ('line'/'arc'/'complex') and parameters
+            Dict with structure:
+            - type='line': {'type', 'points', 'center', 'direction', 'error'}
+            - type='arc': {'type', 'points', 'center', 'radius', 'error'}
         """
         if len(points) < 3:
             return {'type': 'line', 'points': points}
@@ -375,7 +341,11 @@ class PathCreator:
         line_center, line_direction, line_error = self._fit_line(points)
         circle_center, radius, circle_error = self._fit_circle(points)
 
+        print(f'DEBUG geometry: {len(points)}pts, line_err={line_error:.6f}, '
+              f'circle_err={circle_error:.6f}')
+
         if line_error < line_error_threshold:
+            print('DEBUG geometry: classified as LINE')
             return {
                 'type': 'line',
                 'points': points,
@@ -385,6 +355,7 @@ class PathCreator:
             }
 
         if circle_error < circle_error_threshold and radius is not None:
+            print(f'DEBUG geometry: classified as ARC (radius={radius:.4f}m)')
             return {
                 'type': 'arc',
                 'points': points,
@@ -393,30 +364,14 @@ class PathCreator:
                 'error': circle_error,
             }
 
-        if len(points) < min_segment_points * 2:
-            return {
-                'type': 'line',
-                'points': points,
-                'center': line_center,
-                'direction': line_direction,
-                'error': line_error,
-                'warning': 'Poor fit, marked as line',
-            }
-
-        mid = len(points) // 2
-
-        segment_1 = self._detect_geometry_type(
-            points[: mid + 1],
-            line_error_threshold,
-            circle_error_threshold,
-            min_segment_points,
-        )
-
-        segment_2 = self._detect_geometry_type(
-            points[mid:],
-            line_error_threshold,
-            circle_error_threshold,
-            min_segment_points,
-        )
-
-        return {'type': 'complex', 'segments': [segment_1, segment_2]}
+        # Neither fits well - use line as fallback
+        print(f'DEBUG geometry: poor fit, fallback to LINE (line_err={line_error:.6f}, '
+              f'circle_err={circle_error:.6f})')
+        return {
+            'type': 'line',
+            'points': points,
+            'center': line_center,
+            'direction': line_direction,
+            'error': line_error,
+            'warning': 'Poor fit, marked as line',
+        }

@@ -165,6 +165,8 @@ def export_to_json(
             'generated_at': datetime.now().isoformat(),
             'num_seams': len(seams),
             'total_poses': sum(len(seam.poses) for seam in seams),
+            'num_segments': len(seams),
+            'pipeline': 'mesh-based geometry detection',
         },
         'seams': {},
     }
@@ -201,7 +203,6 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
     # This works whether running from build/ or install/ directories
     current_path = Path(__file__).resolve()
 
-    # Find the workspace root by looking for 'src' directory
     workspace_root = None
     for parent in current_path.parents:
         src_path = parent / 'src'
@@ -213,7 +214,6 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
         # Fallback: try relative path from current location
         workspace_root = current_path.parent.parent.parent.parent.parent
 
-    # Direct path to source trajectories directory
     output_dir = (
         workspace_root
         / 'src'
