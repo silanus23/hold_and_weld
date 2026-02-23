@@ -240,9 +240,13 @@ class MagicWand(Node):
 
     def load_and_visualize_latest_json(self):
         """Load the latest trajectory JSON and create torch tip markers."""
+
+        # Point directly to source trajectories directory
+        # This works whether running from source or install
+        workspace_root = os.path.expanduser('~/ros2_yaskawa')
         trajectories_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'trajectories'
+            workspace_root,
+            'src/hold_and_weld/hold_and_weld_application/trajectories'
         )
 
         if not os.path.exists(trajectories_dir):
@@ -282,7 +286,7 @@ class MagicWand(Node):
 
         json_path, data = latest_json
         self.get_logger().info(
-            f'Loading latest JSON: {json_path} (generated_at: {latest_time})'
+            f'Loading latest JSON: {os.path.basename(json_path)} (generated_at: {latest_time})'
         )
 
         if 'seams' in data:

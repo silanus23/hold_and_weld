@@ -117,6 +117,14 @@ class AddCollisionObjects(Node):
         if geometry is None:
             self.get_logger().error(f'No geometry found in collision for {object_id}')
             return
+        cylinder = geometry.find('cylinder')
+        if cylinder is not None:
+            radius = float(cylinder.get('radius'))
+            length = float(cylinder.get('length'))
+            primitive = SolidPrimitive()
+            primitive.type = SolidPrimitive.CYLINDER
+            primitive.dimensions = [length, radius]
+            collision_obj.primitives = [primitive]
 
         box = geometry.find('box')
         if box is not None:
