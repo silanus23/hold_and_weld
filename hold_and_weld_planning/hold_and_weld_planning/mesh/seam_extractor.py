@@ -20,13 +20,13 @@ into continuous paths, detects geometry type, and wraps results in Seam
 objects ready for weld planning.
 """
 
-import warnings
 from collections import defaultdict
 from typing import Dict, List, Tuple
+import warnings
 
 import numpy as np
-import trimesh
 from scipy import stats
+import trimesh
 
 from .path_creator import PathCreator
 from ..core.arc_segment import ArcSegment
@@ -78,7 +78,8 @@ class SeamExtractor:
         self.min_segment_length = params.get('min_segment_length', 5)
 
         # Edge detection parameters
-        self.edge_detection_search_radius_ratio = params.get('edge_detection_search_radius_ratio', 0.05)
+        self.edge_detection_search_radius_ratio = params.get('edge_detection_search_radius_ratio',
+                                                             0.05)
         self.edge_detection_threshold = params.get('edge_detection_threshold', 0.5)
         self.gaussian_sigma_ratio = params.get('gaussian_sigma_ratio', 0.3)
         self.normal_outlier_threshold_std = params.get('normal_outlier_threshold_std', 2.0)
@@ -338,7 +339,8 @@ class SeamExtractor:
 
             try:
                 with warnings.catch_warnings():
-                    warnings.filterwarnings('ignore', message='Precision loss occurred in moment calculation')
+                    warnings.filterwarnings('ignore', message='Precision '
+                                            'loss occurred in moment calculation')
 
                     skewness = stats.skew(dots)
                     kurtosis = stats.kurtosis(dots)

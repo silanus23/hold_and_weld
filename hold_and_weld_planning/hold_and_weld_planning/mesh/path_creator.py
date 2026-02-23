@@ -124,7 +124,8 @@ class PathCreator:
                 segments_with_raw = [(merged_geom, combined_raw)] + segments_with_raw[1:-1]
 
         result = self._merge_consecutive_arcs(segments_with_raw, radius_tolerance=0.05)
-        result = self._merge_consecutive_lines(result, angle_tolerance_deg=10.0, max_merge_error=0.001)
+        result = self._merge_consecutive_lines(result, angle_tolerance_deg=10.0,
+                                               max_merge_error=0.001)
         result = self._merge_small_lines_into_arcs(result, min_line_size=70, max_merge_error=0.01)
 
         return result
@@ -145,7 +146,6 @@ class PathCreator:
         Returns:
             True if segments should be merged, False otherwise
         """
-
         if len(sub_paths) <= 1:
             return False
 
@@ -192,7 +192,6 @@ class PathCreator:
         Returns:
             List of sub-path point arrays
         """
-
         if len(points) < 20:
             return [points]
 
@@ -242,7 +241,6 @@ class PathCreator:
         Returns:
             List of corner point indices
         """
-
         corners = []
 
         for i in range(window, len(points) - window):
@@ -279,7 +277,6 @@ class PathCreator:
         Returns:
             List of corner point indices
         """
-
         if len(points) < window * 2:
             return []
 
@@ -330,7 +327,6 @@ class PathCreator:
         Returns:
             List of combined corner indices
         """
-
         if not corner_lists:
             return []
 
@@ -377,7 +373,6 @@ class PathCreator:
         Returns:
             List of filtered corner indices that are local maxima
         """
-
         if not indices:
             return []
 
@@ -427,7 +422,6 @@ class PathCreator:
         Returns:
             List of merged geometry dictionaries
         """
-
         if len(segments_with_raw) <= 1:
             return [seg[0] for seg in segments_with_raw]
 
@@ -501,7 +495,6 @@ class PathCreator:
         Returns:
             List of merged geometry dictionaries
         """
-
         iteration = 0
         max_iterations = 20
 
@@ -564,7 +557,6 @@ class PathCreator:
         Returns:
             List of merged geometry dictionaries
         """
-
         changed = True
         iteration = 0
 
@@ -588,7 +580,9 @@ class PathCreator:
 
                 j = i - 1
                 while j >= 0 and j not in absorbed:
-                    if segments[j]['type'] == 'line' and len(segments[j]['points']) < min_line_size:
+                    if (segments[j]['type'] == 'line' and
+                            len(segments[j]['points']) < min_line_size):
+
                         left_indices.insert(0, j)
                         j -= 1
                     elif segments[j]['type'] == 'arc':
@@ -599,7 +593,8 @@ class PathCreator:
 
                 j = i + 1
                 while j < len(segments) and j not in absorbed:
-                    if segments[j]['type'] == 'line' and len(segments[j]['points']) < min_line_size:
+                    if (segments[j]['type'] == 'line' and len(segments[j]['points']) <
+                            min_line_size):
                         right_indices.append(j)
                         j += 1
                     elif segments[j]['type'] == 'arc':
@@ -611,7 +606,8 @@ class PathCreator:
                 absorb_indices = left_indices + [i] + right_indices
 
                 if len(absorb_indices) > 1:
-                    combined_points = np.vstack([segments[idx]['points'] for idx in absorb_indices])
+                    combined_points = np.vstack([segments[idx]['points'] for
+                                                idx in absorb_indices])
                     center, radius, error = self._fit_circle(combined_points)
 
                     if radius is not None and error < max_merge_error:
@@ -648,7 +644,6 @@ class PathCreator:
         Returns:
             Cleaned point array with outliers removed
         """
-
         if len(points) < 3:
             return points
 
@@ -687,7 +682,6 @@ class PathCreator:
         Returns:
             Smoothed point array (num_points, 3)
         """
-
         vertices = np.asarray(points, dtype=np.float64)
 
         if len(vertices) < 4:
@@ -721,7 +715,6 @@ class PathCreator:
         Returns:
             Tuple of (geometry_type, parameters_dict)
         """
-
         if len(points) < 3:
             center, direction, error = self._fit_line(points)
             return 'line', {
@@ -772,7 +765,6 @@ class PathCreator:
         Returns:
             Tuple of (center, direction, error)
         """
-
         if len(points) < 2:
             return points[0], np.array([1, 0, 0]), 0.0
 
@@ -802,7 +794,6 @@ class PathCreator:
         Returns:
             Tuple of (center, radius, error)
         """
-
         if len(points) < 3:
             return None, None, float('inf')
 

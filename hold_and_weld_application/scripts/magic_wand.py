@@ -192,10 +192,8 @@ class MagicWand(Node):
                 primitive.dimensions = sizes
                 collision_obj.primitives = [primitive]
 
-        # Set pose
         pose = Pose()
         if is_end_pose:
-            # end_pose has position/orientation sub-dicts
             position = object_config.get('position', {})
             orientation = object_config.get('orientation', {})
             pose.position.x = position.get('x', 0.0)
@@ -206,7 +204,6 @@ class MagicWand(Node):
             pose.orientation.z = orientation.get('z', 0.0)
             pose.orientation.w = orientation.get('w', 1.0)
         else:
-            # regular pose has x/y/z in pose dict, orientation as sibling
             pose.position.x = pose_config.get('x', 0.0)
             pose.position.y = pose_config.get('y', 0.0)
             pose.position.z = pose_config.get('z', 0.0)
@@ -240,7 +237,6 @@ class MagicWand(Node):
 
     def load_and_visualize_latest_json(self):
         """Load the latest trajectory JSON and create torch tip markers."""
-
         # Point directly to source trajectories directory
         # This works whether running from source or install
         workspace_root = os.path.expanduser('~/ros2_yaskawa')
@@ -309,7 +305,6 @@ class MagicWand(Node):
             self.get_logger().error('No seams found in JSON!')
             return
 
-        # Use coordinate system from metadata
         coordinate_frame = metadata.get('coordinate_system', 'world')
         self.get_logger().info(f'Using coordinate frame: {coordinate_frame}')
         self.get_logger().info(f'Found {len(seams)} seams in JSON')
@@ -328,7 +323,6 @@ class MagicWand(Node):
                 position = pose_data.get('position', [0, 0, 0])
                 quaternion = pose_data.get('quaternion', [0, 0, 0, 1])
 
-                # Create interactive marker for this torch tip
                 int_marker = InteractiveMarker()
                 int_marker.header.frame_id = coordinate_frame
                 int_marker.name = f'{seam_name}_pose_{i*sample_step}'

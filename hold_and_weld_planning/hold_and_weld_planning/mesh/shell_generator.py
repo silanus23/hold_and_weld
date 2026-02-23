@@ -152,7 +152,7 @@ class ShellGenerator:
                             f'radius={geom.radius}, length={geom.length}'
                         )
                     manifold_obj = manifold3d.Manifold.cylinder(
-                        geom.length, geom.radius, circular_segments=32,center=True
+                        geom.length, geom.radius, circular_segments=32, center=True
                     )
 
                 elif isinstance(geom, Sphere):

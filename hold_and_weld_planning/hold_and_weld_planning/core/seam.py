@@ -141,7 +141,7 @@ class Seam:
             result['config'] = {}
             for k, v in self.config.items():
                 if k in ['normals_mesh_1', 'normals_mesh_2', 'normals_main',
-                        'normals_secondary', 'smoothed_points']:
+                         'normals_secondary', 'smoothed_points']:
                     continue
 
                 if hasattr(v, 'item') and hasattr(v, 'shape') and v.shape == ():
