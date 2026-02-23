@@ -99,7 +99,12 @@ class JobPlanner:
         """
         print('Generating mesh shells...')
         mesh_main, mesh_secondary = self._generate_shells()
-
+        print(f'Mesh 1 watertight: {mesh_main.is_watertight}')
+        print(f'Mesh 2 watertight: {mesh_secondary.is_watertight}')
+        print(f'Mesh 1 bounds: {mesh_main.bounds}')
+        print(f'Mesh 2 bounds: {mesh_secondary.bounds}')
+        print(f'Mesh 1 faces: {len(mesh_main.faces)}')
+        print(f'Mesh 2 faces: {len(mesh_secondary.faces)}')
         print('Extracting seams from geometry...')
         seam_extractor = SeamExtractor(mesh_main, mesh_secondary, self.parameters)
         seams = seam_extractor.extract_seams()

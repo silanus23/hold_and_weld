@@ -131,7 +131,6 @@ class Seam:
         if isinstance(self.segment, LineSegment):
             result['start'] = self.segment.start.tolist()
             result['end'] = self.segment.end.tolist()
-
         elif isinstance(self.segment, ArcSegment):
             result['start'] = self.segment.start.tolist()
             result['end'] = self.segment.end.tolist()
@@ -141,10 +140,14 @@ class Seam:
         if self.config:
             result['config'] = {}
             for k, v in self.config.items():
-                if k in ['normals_mesh_1', 'normals_mesh_2', 'smoothed_points']:
+                if k in ['normals_mesh_1', 'normals_mesh_2', 'normals_main',
+                        'normals_secondary', 'smoothed_points']:
                     continue
-                if hasattr(v, 'item'):
+
+                if hasattr(v, 'item') and hasattr(v, 'shape') and v.shape == ():
                     result['config'][k] = v.item()
+                elif hasattr(v, 'tolist'):
+                    result['config'][k] = v.tolist()
                 else:
                     result['config'][k] = v
 

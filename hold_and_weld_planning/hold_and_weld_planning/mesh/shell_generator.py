@@ -152,7 +152,7 @@ class ShellGenerator:
                             f'radius={geom.radius}, length={geom.length}'
                         )
                     manifold_obj = manifold3d.Manifold.cylinder(
-                        geom.length, geom.radius, circular_segments=32
+                        geom.length, geom.radius, circular_segments=32,center=True
                     )
 
                 elif isinstance(geom, Sphere):
@@ -179,7 +179,7 @@ class ShellGenerator:
                 if manifold_obj is not None:
                     # Subdivide to increase vertex density
                     if self.refine_iterations > 0:
-                        manifold_obj = manifold_obj.refine(self.refine_iterations)
+                        manifold_obj = manifold_obj.refine(33)
 
                     local_T = np.array(self._get_collision_transform(collision))
                     absolute_T = self.world_transform @ local_T

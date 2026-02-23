@@ -17,6 +17,9 @@
 This module generates weld torch poses along seam paths using dual surface normals
 from both meshes. It handles coordinate frame construction, work/travel angle
 application, and gap offset calculations.
+
+The planner uses normals pre-computed by SeamExtractor to determine torch orientation
+and gap positioning without needing manual specification of away_from_wall vectors.
 """
 
 from typing import Any, Dict
@@ -30,20 +33,23 @@ class WeldPlanner:
     """Generate weld poses for seams using dual surface normals.
 
     Modifies seam objects in-place following the Mutable State pattern.
-    Uses normals from both meshes to compute torch orientation without
-    needing manual away_from_wall_vector specification.
+    Uses normals from both meshes (pre-classified as main/secondary by
+    SeamExtractor) to compute torch orientation and gap offset.
+
+    The planner applies work angle (torch tilt toward lean direction) and
+    travel angle (torch tilt along travel direction) to generate final poses.
     """
 
     def __init__(self, parameters: Dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
 
-            - work_angle_deg: Work angle in degrees (float)
-            - travel_angle_deg: Travel angle in degrees (float)
-            - gap_mm: Gap distance in millimeters (float)
-            - up_vector: World up vector [x, y, z] (default [0, 0, 1])
-
         Args:
             parameters: Dictionary with keys:
+                - work_angle_deg: Work angle in degrees (torch tilt perpendicular to travel)
+                - travel_angle_deg: Travel angle in degrees (torch tilt along travel)
+                - gap_mm: Gap distance from seam in millimeters
+                - up_vector: World up vector [x, y, z] (default [0, 0, 1])
+
         Raises:
             ValueError: If gap_mm is non-positive
         """
@@ -59,59 +65,73 @@ class WeldPlanner:
             raise ValueError(f'gap_mm must be positive, got {parameters["gap_mm"]}')
 
     def generate_seam(self, seam: Any) -> None:
-        """Generate poses for a seam. Modifies seam object in place.
+        """Generate torch poses for a seam. Modifies seam object in place.
+
+        For each point along the seam:
+        1. Compute tangent direction (travel direction)
+        2. Extract pre-computed main/secondary normals from seam config
+        3. Compute away_from_wall vector (perpendicular to seam, away from edge)
+        4. Determine torch pointing direction based on joint type:
+           - Edge-to-edge: torch points into gap bisector
+           - Edge-to-surface: torch points down toward flat surface
+        5. Build orthonormal coordinate frame
+        6. Apply work angle (tilt toward/away from secondary piece)
+        7. Apply travel angle (tilt along travel direction)
+        8. Compute gap offset (perpendicular to seam, uses √2 for edge-to-edge)
+        9. Build final pose as 4x4 transformation matrix
 
         Args:
-            seam: Seam object with smoothed points and normals in config
+            seam: Seam object with the following in config dict:
+                - smoothed_points: (N, 3) array of seam points
+                - normals_main: (N, 3) array of main surface normals
+                - normals_secondary: (N, 3) array of secondary surface normals
+                - is_edge_joint: bool indicating edge-to-edge vs edge-to-surface
+
         Raises:
             RuntimeError: If required data missing from seam.config
-            ValueError: If seam geometry is invalid
+            ValueError: If seam has fewer than 2 points
+
+        Side Effects:
+            - Sets seam.poses to list of pose dictionaries
+            - Sets seam.is_generated to True
         """
-        # Extract data from seam config
         if 'smoothed_points' not in seam.config:
             raise RuntimeError('Seam missing smoothed_points in config')
-        if 'normals_mesh_1' not in seam.config:
-            raise RuntimeError('Seam missing normals_mesh_1 in config')
-        if 'normals_mesh_2' not in seam.config:
-            raise RuntimeError('Seam missing normals_mesh_2 in config')
+        if 'normals_main' not in seam.config:
+            raise RuntimeError('Seam missing normals_main in config')
+        if 'normals_secondary' not in seam.config:
+            raise RuntimeError('Seam missing normals_secondary in config')
         if 'is_edge_joint' not in seam.config:
             raise RuntimeError('Seam missing is_edge_joint in config')
 
         points = seam.config['smoothed_points']
-        normals_1 = seam.config['normals_mesh_1']
-        normals_2 = seam.config['normals_mesh_2']
+        normals_main = seam.config['normals_main']
+        normals_secondary = seam.config['normals_secondary']
         is_edge_joint = seam.config['is_edge_joint']
 
         if len(points) < 2:
             raise ValueError('Need at least 2 points to generate poses')
 
-        # Generate poses for each point
         poses = []
         for i in range(len(points)):
             tangent = self._compute_tangent(points, i)
-
-            # Get normals at this point
-            normal_1 = normals_1[i]
-            normal_2 = normals_2[i]
-
-            main_normal, secondary_normal = self._determine_main_normal(
-                normal_1, normal_2
-            )
+            main_normal = normals_main[i]
+            secondary_normal = normals_secondary[i]
 
             away_from_wall = self._compute_away_vector(
                 tangent, main_normal, secondary_normal
             )
 
             if is_edge_joint:
-                # Edge-on-edge: both pieces meet at edges, so torch points into
-                # the gap bisector (away from both), and leans along main normal inward.
                 main_direction = away_from_wall
                 lean_direction = -main_normal
+                gap_offset_direction = main_normal
+                gap_magnitude = self.gap_m
             else:
-                # Edge-on-surface: torch points down toward the flat surface (main normal),
-                # and leans away from the vertical edge piece.
                 main_direction = -main_normal
                 lean_direction = away_from_wall
+                gap_offset_direction = -away_from_wall + main_normal
+                gap_magnitude = self.gap_m
 
             tangent_base, binormal_base, normal_base = self._build_base_frame(
                 tangent, main_direction
@@ -125,14 +145,9 @@ class WeldPlanner:
                 normal_work, binormal_work, tangent_work
             )
 
-            # Compute gap offset along bisector direction
-            bisector = self._compute_bisector(main_normal, secondary_normal)
-            gap_offset = self.gap_m * bisector
-
-            # Final position
+            gap_offset = gap_magnitude * gap_offset_direction
             position = points[i] + gap_offset
 
-            # Build pose
             pose = self._build_pose_data(
                 position, tangent_final, binormal_final, normal_final, i
             )
@@ -141,63 +156,18 @@ class WeldPlanner:
         seam.poses = poses
         seam.is_generated = True
 
-    def _determine_main_normal(
-        self,
-        normal_1: NDArray,
-        normal_2: NDArray,
-    ) -> tuple[NDArray, NDArray]:
-        """Determine main and secondary normals using world up vector.
-
-        The normal most aligned with the world up vector belongs to the
-        main (base/flat) surface. The other is the secondary (edge piece).
-
-        Args:
-            normal_1: Normal from mesh_1
-            normal_2: Normal from mesh_2
-        Returns:
-            Tuple of (main_normal, secondary_normal)
-        """
-        dot_1 = np.dot(normal_1, self.up_vector)
-        dot_2 = np.dot(normal_2, self.up_vector)
-
-        if dot_1 >= dot_2:
-            return normal_1, normal_2
-        else:
-            return normal_2, normal_1
-
-    def _compute_bisector(
-        self,
-        normal_1: NDArray,
-        normal_2: NDArray,
-    ) -> NDArray:
-        """Compute normalized bisector between two normals.
-
-        The bisector points into the corner between the two surfaces,
-        which is the correct gap offset direction.
-
-        Args:
-            normal_1: First normal vector
-            normal_2: Second normal vector
-        Returns:
-            Normalized bisector vector
-        """
-        bisector = normal_1 + normal_2
-        norm = np.linalg.norm(bisector)
-
-        if norm < 1e-10:
-            # Normals are antiparallel - fallback to up vector
-            return self.up_vector.copy()
-
-        return bisector / norm
-
     def _compute_tangent(self, points: NDArray, index: int) -> NDArray:
-        """Compute tangent vector at point index.
+        """Compute tangent vector at point index along seam path.
+
+        Uses central differences for interior points, forward/backward
+        differences for endpoints.
 
         Args:
-            points: Array of points (N, 3)
-            index: Index of point
+            points: Array of seam points (N, 3)
+            index: Index of point where tangent is needed
+
         Returns:
-            Normalized tangent vector
+            Normalized tangent vector (3,) pointing in travel direction
         """
         if index == 0:
             tangent = points[1] - points[0]
@@ -215,24 +185,26 @@ class WeldPlanner:
     def _compute_away_vector(
         self, tangent: NDArray, main_normal: NDArray, secondary_normal: NDArray
     ) -> NDArray:
-        """Compute away_from_wall_vector from dual normals.
+        """Compute away_from_wall vector perpendicular to seam.
 
-        Perpendicular to tangent in main surface plane, pointing away
-        from secondary mesh.
+        Computes a vector perpendicular to both the tangent and main normal,
+        then checks its direction relative to secondary normal to ensure it
+        points away from the secondary piece (edge piece).
 
         Args:
-            tangent: Tangent vector along seam
-            main_normal: Normal from main surface
-            secondary_normal: Normal from secondary mesh
+            tangent: Normalized tangent vector along seam (3,)
+            main_normal: Normal from main (base/flat) surface (3,)
+            secondary_normal: Normal from secondary (edge) piece (3,)
+
         Returns:
-            Normalized away vector
+            Normalized vector (3,) perpendicular to seam, pointing away
+            from secondary piece
         """
-        # Perpendicular to tangent in main surface plane
         perpendicular = np.cross(main_normal, tangent)
         norm = np.linalg.norm(perpendicular)
 
         if norm < 1e-10:
-            # Tangent parallel to normal - fallback
+            # Main normal parallel to tangent - use fallback axes
             perpendicular = np.cross(np.array([0, 0, 1]), tangent)
             norm = np.linalg.norm(perpendicular)
             if norm < 1e-10:
@@ -252,19 +224,27 @@ class WeldPlanner:
         tangent: NDArray,
         main_direction: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Build orthonormal frame from tangent and main direction.
+        """Build orthonormal coordinate frame for torch.
+
+        Constructs right-handed coordinate system with:
+        - Normal (Z-axis): torch pointing direction
+        - Tangent (X-axis): travel direction
+        - Binormal (Y-axis): perpendicular to both
+
+        Recomputes tangent from binormal × normal to enforce strict orthogonality.
 
         Args:
-            tangent: Direction along seam (travel direction)
-            main_direction: Main torch direction
+            tangent: Approximate travel direction (3,)
+            main_direction: Desired torch pointing direction (3,)
+
         Returns:
-            Tuple of (tangent, binormal, normal)
+            Tuple of (tangent, binormal, normal), each normalized (3,)
         """
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
         binormal = binormal / np.linalg.norm(binormal)
 
-        # Recompute tangent from binormal x normal to enforce strict orthogonality
+        # Recompute tangent to enforce orthogonality
         tangent = np.cross(binormal, normal)
         tangent = tangent / np.linalg.norm(tangent)
 
@@ -279,16 +259,23 @@ class WeldPlanner:
     ) -> tuple[NDArray, NDArray, NDArray]:
         """Apply work angle rotation toward lean direction.
 
+        Rotates torch around tangent (travel) axis by work_angle_rad toward
+        the lean direction. For edge-to-surface joints, this tilts the torch
+        away from the vertical edge piece. For edge-to-edge joints, this
+        tilts inward along the main normal.
+
+        The rotation sign is determined by checking which side of the tangent
+        axis the lean_direction falls on.
+
         Args:
-            normal: Normal vector (torch direction)
-            tangent: Tangent vector (travel direction)
-            binormal: Binormal vector
-            lean_direction: Target direction for tilting
+            normal: Current torch direction (3,)
+            tangent: Travel direction (3,)
+            binormal: Cross product of normal and tangent (3,)
+            lean_direction: Target direction for tilting (3,)
+
         Returns:
-            Tuple of rotated (normal, binormal, tangent)
+            Tuple of rotated (normal, binormal, tangent), each (3,)
         """
-        # Determine rotation sign by checking which side of the tangent axis
-        # lean_direction falls on relative to normal — avoids testing both directions.
         sign = np.sign(np.dot(np.cross(normal, lean_direction), tangent))
         work_rot = Rotation.from_rotvec(sign * self.work_angle_rad * tangent)
 
@@ -306,12 +293,17 @@ class WeldPlanner:
     ) -> tuple[NDArray, NDArray, NDArray]:
         """Apply travel angle rotation around binormal axis.
 
+        Rotates torch around binormal (perpendicular to travel) axis by
+        travel_angle_rad. This tilts the torch forward or backward along
+        the direction of travel.
+
         Args:
-            normal: Normal vector
-            binormal: Binormal vector
-            tangent: Tangent vector
+            normal: Current torch direction after work angle (3,)
+            binormal: Perpendicular to travel direction (3,)
+            tangent: Travel direction (3,)
+
         Returns:
-            Tuple of rotated (normal, binormal, tangent)
+            Tuple of rotated (normal, binormal, tangent), each (3,)
         """
         travel_rot = Rotation.from_rotvec(self.travel_angle_rad * binormal)
         tangent_final = travel_rot.apply(tangent)
@@ -328,16 +320,31 @@ class WeldPlanner:
         normal: NDArray,
         index: int,
     ) -> Dict[str, Any]:
-        """Build pose data dictionary.
+        """Build pose data dictionary with position and orientation.
+
+        Constructs final pose as:
+        - 3D position (center of torch)
+        - Quaternion orientation
+        - 4x4 transformation matrix
+
+        The coordinate frame convention is:
+        - X-axis (tangent): travel direction
+        - Y-axis (binormal): perpendicular to travel
+        - Z-axis (normal): torch pointing direction
 
         Args:
-            position: 3D position vector
-            tangent: Tangent vector (X-axis)
-            binormal: Binormal vector (Y-axis)
-            normal: Normal vector (Z-axis - torch pointing)
-            index: Point index
+            position: 3D position of torch center (3,)
+            tangent: Final travel direction after angles applied (3,)
+            binormal: Final perpendicular direction (3,)
+            normal: Final torch pointing direction (3,)
+            index: Sequential point index along seam
+
         Returns:
-            Dictionary with pose data
+            Dictionary with keys:
+                - index: int point index
+                - position: list[float] of [x, y, z]
+                - quaternion: list[float] of [x, y, z, w]
+                - matrix: list[list[float]] 4x4 transformation matrix
         """
         rot_matrix = np.column_stack([tangent, binormal, normal])
         quat = Rotation.from_matrix(rot_matrix).as_quat()
