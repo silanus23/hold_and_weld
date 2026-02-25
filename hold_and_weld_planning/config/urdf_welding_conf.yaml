@@ -1,5 +1,7 @@
 workpiece:
   auto_detect_seams: true
+  mode: occt
+
   main_part:
     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:

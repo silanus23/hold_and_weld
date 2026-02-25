@@ -30,6 +30,11 @@ from .utils import (
     load_urdf_config,
     load_weld_job,
 )
+from .occt import (
+    SeamExtractorOCCT,
+    OCCTLoader,
+    OCCTGenerator,
+)
 
 __version__ = '0.2.0'
 
@@ -48,4 +53,7 @@ __all__ = [
     'load_urdf_config',
     'export_to_json',
     'auto_generate_output_path',
+    'SeamExtractorOCCT',
+    'OCCTLoader',
+    'OCCTGenerator',
 ]
