@@ -22,6 +22,11 @@ from .mesh import (
     SeamExtractor,
     ShellGenerator,
 )
+from .occt import (
+    OCCTGenerator,
+    OCCTLoader,
+    SeamExtractorOCCT,
+)
 from .planning import WeldPlanner
 from .urdf import URDFProcessor
 from .utils import (
@@ -29,11 +34,6 @@ from .utils import (
     export_to_json,
     load_urdf_config,
     load_weld_job,
-)
-from .occt import (
-    SeamExtractorOCCT,
-    OCCTLoader,
-    OCCTGenerator,
 )
 
 __version__ = '0.2.0'

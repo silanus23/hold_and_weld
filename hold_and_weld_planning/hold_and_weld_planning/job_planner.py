@@ -32,13 +32,13 @@ import trimesh
 from .mesh.mesh_loader import MeshLoader
 from .mesh.seam_extractor import SeamExtractor
 from .mesh.shell_generator import ShellGenerator
+
+from .occt.occt_generator import OCCTGenerator
+from .occt.occt_loader import OCCTLoader
+from .occt.seam_extractor_occt import SeamExtractorOCCT
+
 from .planning.weld_planner import WeldPlanner
 from .urdf.urdf_processor import URDFProcessor
-
-# OCCT imports - optional
-from .occt.occt_loader import OCCTLoader
-from .occt.occt_generator import OCCTGenerator
-from .occt.seam_extractor_occt import SeamExtractorOCCT
 
 
 class JobPlanner:
@@ -138,15 +138,12 @@ class JobPlanner:
         occt_extensions = {'.step', '.stp', '.iges', '.igs'}
         mesh_extensions = {'.stl', '.urdf', '.xacro'}
 
-        # If either input is STEP/IGES, use OCCT mode
         if main_ext in occt_extensions or secondary_ext in occt_extensions:
             return 'occt'
 
-        # If both are mesh-compatible formats, use mesh mode
         if main_ext in mesh_extensions and secondary_ext in mesh_extensions:
             return 'mesh'
 
-        # Default to mesh mode for unknown extensions
         return 'mesh'
 
     def plan_job(self) -> list:

@@ -34,23 +34,24 @@ from typing import Dict, List, Tuple
 import warnings
 
 import numpy as np
-from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Common
+from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
 from OCC.Core.BRepExtrema import BRepExtrema_DistShapeShape
-from OCC.Core.GeomAbs import GeomAbs_Plane, GeomAbs_Line, GeomAbs_Circle
+from OCC.Core.BRepGProp import brepgprop
+from OCC.Core.GeomAbs import GeomAbs_Circle, GeomAbs_Line, GeomAbs_Plane
 from OCC.Core.GeomLProp import GeomLProp_SLProps
-from OCC.Core.GProp import GProp_GProps
 from OCC.Core.gp import gp_Pnt
+from OCC.Core.GProp import GProp_GProps
 from OCC.Core.ShapeAnalysis import ShapeAnalysis_Surface
-from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_WIRE, TopAbs_REVERSED
-from OCC.Core.TopExp import TopExp_Explorer, topexp
+from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_WIRE
+from OCC.Core.TopExp import topexp, TopExp_Explorer
+from OCC.Core.TopoDS import topods, TopoDS_Shape
 from OCC.Core.TopTools import (
     TopTools_IndexedDataMapOfShapeListOfShape,
     TopTools_ListIteratorOfListOfShape,
 )
-from OCC.Core.TopoDS import TopoDS_Shape, topods
 
 from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
@@ -95,7 +96,8 @@ class SeamExtractorOCCT:
 
         Returns:
             List of Seam objects with geometry and metadata.
-            Empty list if no seams found. Individual seam failures are logged but don't stop extraction.
+            Empty list if no seams found. Individual seam failures are logged
+            but don't stop extraction.
         """
         contact_candidates = self._find_contact_face_pairs()
 
@@ -169,7 +171,8 @@ class SeamExtractorOCCT:
             boundary_A = self._get_matching_boundary_edge(edge, face_A)
             boundary_B = self._get_matching_boundary_edge(edge, face_B)
 
-            # Extract normals from appropriate surfaces (walls if boundaries exist, kissing faces otherwise)
+            # Extract normals from appropriate surfaces (walls if boundaries
+            # exist, kissing faces otherwise)
             if boundary_A is not None:
                 # Shape_1 has real boundary - use wall surface
                 wall_A = self._get_wall_surface_at_edge(boundary_A, self.shape_1, face_A)
@@ -275,7 +278,9 @@ class SeamExtractorOCCT:
 
         return intersection_data
 
-    def _get_matching_boundary_edge(self, seam_edge: TopoDS_Shape, face: TopoDS_Shape) -> TopoDS_Shape:
+    def _get_matching_boundary_edge(self, seam_edge: TopoDS_Shape,
+                                    face: TopoDS_Shape
+                                    ) -> TopoDS_Shape:
         """Get the actual boundary edge from face that matches the seam edge.
 
         Determines if the seam edge lies on a real boundary edge (edge-to-edge joint)
@@ -357,10 +362,12 @@ class SeamExtractorOCCT:
                 num_samples = 5
                 for i in range(num_samples):
                     t = i / (num_samples - 1)
-                    u = adaptor_1.FirstParameter() + t * (adaptor_1.LastParameter() - adaptor_1.FirstParameter())
+                    u = (
+                        adaptor_1.FirstParameter() +
+                        t * (adaptor_1.LastParameter() - adaptor_1.FirstParameter())
+                    )
                     pnt = adaptor_1.Value(u)
 
-                    # Find closest point on edge_2
                     extrema = BRepExtrema_DistShapeShape(
                         BRepBuilderAPI_MakeVertex(pnt).Vertex(),
                         edge_2
@@ -377,7 +384,11 @@ class SeamExtractorOCCT:
         except Exception:
             return False
 
-    def _get_wall_surface_at_edge(self, boundary_edge: TopoDS_Shape, shape: TopoDS_Shape, kissing_face: TopoDS_Shape) -> TopoDS_Shape:
+    def _get_wall_surface_at_edge(self,
+                                  boundary_edge: TopoDS_Shape,
+                                  shape: TopoDS_Shape,
+                                  kissing_face: TopoDS_Shape
+                                  ) -> TopoDS_Shape:
         """Get wall surface using exact topological lookup.
 
         For edge-to-edge joints, we need the perpendicular wall surface (not the kissing face).
@@ -397,7 +408,7 @@ class SeamExtractorOCCT:
         topexp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
 
         if not edge_face_map.Contains(boundary_edge):
-            raise RuntimeError("Boundary edge not found in shape topology")
+            raise RuntimeError('Boundary edge not found in shape topology')
 
         face_list = edge_face_map.FindFromKey(boundary_edge)
 
@@ -411,7 +422,7 @@ class SeamExtractorOCCT:
         wall_candidates = [f for f in faces_at_edge if not f.IsSame(kissing_face)]
 
         if not wall_candidates:
-            raise RuntimeError("No wall surface found at edge")
+            raise RuntimeError('No wall surface found at edge')
 
         return wall_candidates[0]
 
@@ -435,7 +446,11 @@ class SeamExtractorOCCT:
 
         return num_wires > 1
 
-    def _get_pipe_surfaces(self, edge: TopoDS_Shape, face_1: TopoDS_Shape, face_2: TopoDS_Shape) -> Dict:
+    def _get_pipe_surfaces(self,
+                           edge: TopoDS_Shape,
+                           face_1: TopoDS_Shape,
+                           face_2: TopoDS_Shape
+                           ) -> Dict:
         """Get outer shaft surfaces for pipe joint.
 
         Args:
@@ -466,7 +481,11 @@ class SeamExtractorOCCT:
 
         return {'shaft_1': shaft_1, 'shaft_2': shaft_2}
 
-    def _get_outer_shaft_surface(self, edge: TopoDS_Shape, shape: TopoDS_Shape, kissing_face: TopoDS_Shape) -> TopoDS_Shape:
+    def _get_outer_shaft_surface(self,
+                                 edge: TopoDS_Shape,
+                                 shape: TopoDS_Shape,
+                                 kissing_face: TopoDS_Shape
+                                 ) -> TopoDS_Shape:
         """Get outer shaft surface for pipe using G1 continuity check.
 
         The shaft surface is discontinuous (sharp edge) with the kissing face,
@@ -504,7 +523,10 @@ class SeamExtractorOCCT:
 
         return shaft_surface
 
-    def _are_faces_continuous(self, face_1: TopoDS_Shape, face_2: TopoDS_Shape, shared_edge: TopoDS_Shape) -> bool:
+    def _are_faces_continuous(self, face_1: TopoDS_Shape,
+                              face_2: TopoDS_Shape,
+                              shared_edge: TopoDS_Shape
+                              ) -> bool:
         """Check if faces meet smoothly (G1 continuity).
 
         Args:
@@ -529,7 +551,10 @@ class SeamExtractorOCCT:
         except Exception:
             return False
 
-    def _get_neighbor_faces(self, shape: TopoDS_Shape, target_face: TopoDS_Shape) -> List[TopoDS_Shape]:
+    def _get_neighbor_faces(self,
+                            shape: TopoDS_Shape,
+                            target_face: TopoDS_Shape,
+                            ) -> List[TopoDS_Shape]:
         """Get faces that share edges with target face.
 
         Args:
@@ -578,7 +603,10 @@ class SeamExtractorOCCT:
         brepgprop.SurfaceProperties(face, props)
         return props.Mass()
 
-    def _get_pipe_normals(self, points: np.ndarray, surfaces: Dict) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_pipe_normals(self,
+                          points: np.ndarray,
+                          surfaces: Dict
+                          ) -> Tuple[np.ndarray, np.ndarray]:
         """Get normals for pipe joint from outer shafts.
 
         Args:
@@ -616,13 +644,15 @@ class SeamExtractorOCCT:
         normals_1 = np.array(normals_1)
         normals_2 = np.array(normals_2)
 
-        # Ensure consistent orientation
         normals_1 = self._make_normals_consistent(normals_1)
         normals_2 = self._make_normals_consistent(normals_2)
 
         return self._determine_main_secondary_normals(normals_1, normals_2)
 
-    def _extract_normals_from_surface(self, points: np.ndarray, surface: TopoDS_Shape) -> np.ndarray:
+    def _extract_normals_from_surface(self,
+                                      points: np.ndarray,
+                                      surface: TopoDS_Shape
+                                      ) -> np.ndarray:
         """Extract normals from a single surface at given points.
 
         Args:
@@ -639,7 +669,6 @@ class SeamExtractorOCCT:
                 normal = self._evaluate_normal_at_point(point, surface)
                 normals.append(normal)
             except Exception as e:
-                # Use last valid normal or fallback
                 if normals:
                     normals.append(normals[-1])
                 else:
@@ -682,7 +711,10 @@ class SeamExtractorOCCT:
 
         return np.array(fixed_normals)
 
-    def _determine_main_secondary_normals(self, normals_1: np.ndarray, normals_2: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _determine_main_secondary_normals(self,
+                                          normals_1: np.ndarray,
+                                          normals_2: np.ndarray
+                                          ) -> Tuple[np.ndarray, np.ndarray]:
         """Determine which normals are main vs secondary using up vector.
 
         The surface more aligned with up_vector becomes main.
@@ -795,7 +827,12 @@ class SeamExtractorOCCT:
                 'description': 'Complex curve for Pilz waypoint planning'
             }
 
-    def _wrap_in_seams(self, geometry: Dict, is_edge_joint: bool, normals_main: np.ndarray, normals_secondary: np.ndarray) -> List[Seam]:
+    def _wrap_in_seams(self,
+                       geometry: Dict,
+                       is_edge_joint: bool,
+                       normals_main: np.ndarray,
+                       normals_secondary: np.ndarray
+                       ) -> List[Seam]:
         """Wrap geometry into Seam object(s).
 
         Args:

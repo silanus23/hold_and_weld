@@ -24,11 +24,10 @@ import numpy as np
 from numpy.typing import NDArray
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCC.Core.gp import gp_Trsf
-from OCC.Core.STEPControl import STEPControl_Reader
-from OCC.Core.IGESControl import IGESControl_Reader
 from OCC.Core.IFSelect import IFSelect_RetDone
+from OCC.Core.IGESControl import IGESControl_Reader
+from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.TopoDS import TopoDS_Shape
-from scipy.spatial.transform import Rotation
 
 try:
     from ament_index_python.packages import get_package_share_directory

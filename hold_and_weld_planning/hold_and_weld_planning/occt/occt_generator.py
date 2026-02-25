@@ -24,15 +24,15 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 from OCC.Core.BRep import BRep_Builder
-from OCC.Core.TopoDS import TopoDS_Compound
-from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
+from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCC.Core.BRepPrimAPI import (
     BRepPrimAPI_MakeBox,
     BRepPrimAPI_MakeCylinder,
     BRepPrimAPI_MakeSphere,
 )
 from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf
+from OCC.Core.TopoDS import TopoDS_Compound
 from OCC.Core.TopoDS import TopoDS_Shape
 from scipy.spatial.transform import Rotation
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
@@ -122,7 +122,7 @@ class OCCTGenerator:
                 if len(geom.size) != 3:
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
-                        f"Box size must be [x, y, z], got {geom.size}"
+                        f'Box size must be [x, y, z], got {geom.size}'
                     )
 
                 dx, dy, dz = geom.size
@@ -133,8 +133,8 @@ class OCCTGenerator:
                 if geom.radius <= 0 or geom.length <= 0:
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
-                        f"Cylinder dimensions must be positive: "
-                        f"radius={geom.radius}, length={geom.length}"
+                        f'Cylinder dimensions must be positive: '
+                        f'radius={geom.radius}, length={geom.length}'
                     )
 
                 # Cylinder centered along Z-axis
@@ -145,7 +145,7 @@ class OCCTGenerator:
                 if geom.radius <= 0:
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
-                        f"Sphere radius must be positive: {geom.radius}"
+                        f'Sphere radius must be positive: {geom.radius}'
                     )
 
                 shape = BRepPrimAPI_MakeSphere(geom.radius).Shape()
@@ -153,13 +153,13 @@ class OCCTGenerator:
             elif isinstance(geom, Mesh):
                 raise ValueError(
                     f"Link '{link.name}' collision {idx}: "
-                    f"Mesh geometry is not supported"
+                    f'Mesh geometry is not supported'
                 )
 
             else:
                 raise ValueError(
                     f"Link '{link.name}' collision {idx}: "
-                    f"Unsupported geometry type: {type(geom).__name__}"
+                    f'Unsupported geometry type: {type(geom).__name__}'
                 )
 
             # Apply collision transform
