@@ -95,12 +95,9 @@ class JobPlanner:
 
         self.parameters = parameters or {}
 
-        # Determine processing mode
         if mode not in ['auto', 'mesh', 'occt']:
             raise ValueError(f"Mode must be 'auto', 'mesh', or 'occt', got '{mode}'")
 
-        mode = 'occt'
-        print(f'mode: {mode}')
         if mode == 'auto':
             self.mode = self._detect_mode(main_path, secondary_path)
         else:
@@ -108,9 +105,9 @@ class JobPlanner:
 
         # Set default tolerance based on mode
         if self.mode == 'occt':
-            self.parameters.setdefault('epsilon', 1e-3)  # 1mm for OCCT
+            self.parameters.setdefault('epsilon', 1e-3)
         else:
-            self.parameters.setdefault('epsilon', 0.01)  # 10mm for mesh
+            self.parameters.setdefault('epsilon', 0.01)
 
         self.parameters.setdefault('num_smooth_points', 100)
         self.parameters.setdefault('refine_iterations', 32)
@@ -118,7 +115,7 @@ class JobPlanner:
         required = ['work_angle_deg', 'travel_angle_deg', 'gap_mm']
         for param in required:
             if param not in self.parameters:
-                raise ValueaError(f"Missing required parameter: '{param}'")
+                raise ValueError(f"Missing required parameter: '{param}'")
 
         print(f'JobPlanner initialized in {self.mode.upper()} mode')
         print(f'  work_angle={self.parameters["work_angle_deg"]}deg, '
@@ -141,8 +138,15 @@ class JobPlanner:
         occt_extensions = {'.step', '.stp', '.iges', '.igs'}
         mesh_extensions = {'.stl', '.urdf', '.xacro'}
 
+        # If either input is STEP/IGES, use OCCT mode
+        if main_ext in occt_extensions or secondary_ext in occt_extensions:
+            return 'occt'
 
-        # Otherwise use mesh mode
+        # If both are mesh-compatible formats, use mesh mode
+        if main_ext in mesh_extensions and secondary_ext in mesh_extensions:
+            return 'mesh'
+
+        # Default to mesh mode for unknown extensions
         return 'mesh'
 
     def plan_job(self) -> list:
@@ -209,14 +213,7 @@ class JobPlanner:
         print('Generating OCCT shapes (pythonocc-core)...')
         shape_main, shape_secondary = self._generate_occt_shapes()
 
-        print('Extracting seams from geometry (OCCT Section)...')
-        from OCC.Core.BRepBndLib import brepbndlib_Add
-        from OCC.Core.Bnd import Bnd_Box
-
-        for s, name in [(shape_main, "Main"), (shape_secondary, "Secondary")]:
-            bbox = Bnd_Box()
-            brepbndlib_Add(s, bbox)
-            print(f"{name} BBox: X[{bbox.Get()[0]:.3f} to {bbox.Get()[3]:.3f}], Y[{bbox.Get()[1]:.3f} to {bbox.Get()[4]:.3f}], Z[{bbox.Get()[2]:.3f} to {bbox.Get()[5]:.3f}]")
+        print('Extracting seams from geometry (OCCT)...')
         seam_extractor = SeamExtractorOCCT(shape_main, shape_secondary, self.parameters)
         seams = seam_extractor.extract_seams()
 
@@ -356,7 +353,6 @@ class JobPlanner:
             )
             return loader.shape
         else:
-            # URDF/xacro file
             urdf = URDFProcessor(path)
             urdf.world_transform = world_transform
             occt_gen = OCCTGenerator(urdf.robot, world_transform)

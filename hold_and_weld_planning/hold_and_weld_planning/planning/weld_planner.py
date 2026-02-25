@@ -20,9 +20,13 @@ application, and gap offset calculations.
 
 The planner uses normals pre-computed by SeamExtractor to determine torch orientation
 and gap positioning without needing manual specification of away_from_wall vectors.
+
+All seams generate dense waypoint paths with configurable spacing (default 10mm) to
+ensure proper torch orientation throughout the path, even for nominally straight seams
+where surface normals may vary.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,7 +34,7 @@ from scipy.spatial.transform import Rotation
 
 
 class WeldPlanner:
-    """Generate weld poses for seams using dual surface normals.
+    """Generate weld paths for seams using dual surface normals.
 
     Modifies seam objects in-place following the Mutable State pattern.
     Uses normals from both meshes (pre-classified as main/secondary by
@@ -48,14 +52,16 @@ class WeldPlanner:
                 - work_angle_deg: Work angle in degrees (torch tilt perpendicular to travel)
                 - travel_angle_deg: Travel angle in degrees (torch tilt along travel)
                 - gap_mm: Gap distance from seam in millimeters
+                - waypoint_spacing_mm: Distance between waypoints (default 10mm)
                 - up_vector: World up vector [x, y, z] (default [0, 0, 1])
 
         Raises:
-            ValueError: If gap_mm is non-positive
+            ValueError: If gap_mm or waypoint_spacing_mm is non-positive
         """
         self.work_angle_rad = np.radians(parameters['work_angle_deg'])
         self.travel_angle_rad = np.radians(parameters['travel_angle_deg'])
         self.gap_m = parameters['gap_mm'] / 1000.0
+        self.waypoint_spacing_m = parameters.get('waypoint_spacing_mm', 10.0) / 1000.0
         self.up_vector = np.array(
             parameters.get('up_vector', [0.0, 0.0, 1.0]), dtype=float
         )
@@ -64,32 +70,25 @@ class WeldPlanner:
         if self.gap_m <= 0:
             raise ValueError(f'gap_mm must be positive, got {parameters["gap_mm"]}')
 
-    def generate_seam(self, seam: Any) -> None:
-        """Generate torch poses for a seam. Modifies seam object in place.
+        if self.waypoint_spacing_m <= 0:
+            raise ValueError(
+                f'waypoint_spacing_mm must be positive, '
+                f'got {parameters.get("waypoint_spacing_mm", 10.0)}'
+            )
 
-        For each point along the seam:
-        1. Compute tangent direction (travel direction)
-        2. Extract pre-computed main/secondary normals from seam config
-        3. Compute away_from_wall vector (perpendicular to seam, away from edge)
-        4. Determine torch pointing direction based on joint type:
-           - Edge-to-edge: torch points into gap bisector
-           - Edge-to-surface: torch points down toward flat surface
-        5. Build orthonormal coordinate frame
-        6. Apply work angle (tilt toward/away from secondary piece)
-        7. Apply travel angle (tilt along travel direction)
-        8. Compute gap offset (perpendicular to seam, uses √2 for edge-to-edge)
-        9. Build final pose as 4x4 transformation matrix
+    def generate_seam(self, seam: Any) -> None:
+        """Generate dense waypoint path for seam. Modifies seam object in place.
+
+        All geometry types (line/arc/polyline) generate dense waypoints with
+        configurable spacing to ensure proper torch orientation throughout,
+        even where surface normals vary along nominally straight seams.
 
         Args:
-            seam: Seam object with the following in config dict:
-                - smoothed_points: (N, 3) array of seam points
-                - normals_main: (N, 3) array of main surface normals
-                - normals_secondary: (N, 3) array of secondary surface normals
-                - is_edge_joint: bool indicating edge-to-edge vs edge-to-surface
+            seam: Seam object with geometry data in config
 
         Raises:
             RuntimeError: If required data missing from seam.config
-            ValueError: If seam has fewer than 2 points
+            ValueError: If arrays have invalid lengths
 
         Side Effects:
             - Sets seam.poses to list of pose dictionaries
@@ -109,52 +108,136 @@ class WeldPlanner:
         normals_secondary = seam.config['normals_secondary']
         is_edge_joint = seam.config['is_edge_joint']
 
-        if len(points) < 2:
-            raise ValueError('Need at least 2 points to generate poses')
+        self._validate_arrays(points, normals_main, normals_secondary)
+
+        sampled_indices = self._sample_by_distance(points, self.waypoint_spacing_m)
 
         poses = []
-        for i in range(len(points)):
-            tangent = self._compute_tangent(points, i)
-            main_normal = normals_main[i]
-            secondary_normal = normals_secondary[i]
-
-            away_from_wall = self._compute_away_vector(
-                tangent, main_normal, secondary_normal
-            )
-
-            if is_edge_joint:
-                main_direction = away_from_wall
-                lean_direction = -main_normal
-                gap_offset_direction = main_normal
-                gap_magnitude = self.gap_m
-            else:
-                main_direction = -main_normal
-                lean_direction = away_from_wall
-                gap_offset_direction = -away_from_wall + main_normal
-                gap_magnitude = self.gap_m
-
-            tangent_base, binormal_base, normal_base = self._build_base_frame(
-                tangent, main_direction
-            )
-
-            normal_work, binormal_work, tangent_work = self._apply_work_angle(
-                normal_base, tangent_base, binormal_base, lean_direction
-            )
-
-            normal_final, binormal_final, tangent_final = self._apply_travel_angle(
-                normal_work, binormal_work, tangent_work
-            )
-
-            gap_offset = gap_magnitude * gap_offset_direction
-            position = points[i] + gap_offset
-
-            pose = self._build_pose_data(
-                position, tangent_final, binormal_final, normal_final, i
+        for idx in sampled_indices:
+            pose = self._compute_pose_at_index(
+                points, normals_main, normals_secondary, is_edge_joint, idx
             )
             poses.append(pose)
 
         seam.poses = poses
         seam.is_generated = True
+
+    def _validate_arrays(
+        self, points: NDArray, normals_main: NDArray, normals_secondary: NDArray
+    ) -> None:
+        """Validate that input arrays have consistent lengths.
+
+        Args:
+            points: Seam points array
+            normals_main: Main normals array
+            normals_secondary: Secondary normals array
+
+        Raises:
+            ValueError: If arrays have mismatched lengths or too few points
+        """
+        if len(points) < 2:
+            raise ValueError('Need at least 2 points to generate poses')
+
+        if len(normals_main) != len(points):
+            raise ValueError(
+                f'normals_main length {len(normals_main)} does not match '
+                f'points length {len(points)}'
+            )
+
+        if len(normals_secondary) != len(points):
+            raise ValueError(
+                f'normals_secondary length {len(normals_secondary)} does not match '
+                f'points length {len(points)}'
+            )
+
+    def _sample_by_distance(self, points: NDArray, spacing: float) -> List[int]:
+        """Sample point indices based on distance threshold.
+
+        Args:
+            points: Array of points (N, 3)
+            spacing: Minimum distance between samples in meters
+
+        Returns:
+            List of indices into points array
+        """
+        if len(points) == 0:
+            return []
+
+        sampled = [0]
+        cumulative_dist = 0.0
+
+        for i in range(1, len(points)):
+            segment_dist = np.linalg.norm(points[i] - points[i-1])
+            cumulative_dist += segment_dist
+
+            if cumulative_dist >= spacing:
+                sampled.append(i)
+                cumulative_dist = 0.0
+
+        if sampled[-1] != len(points) - 1:
+            sampled.append(len(points) - 1)
+
+        return sampled
+
+    def _compute_pose_at_index(
+        self,
+        points: NDArray,
+        normals_main: NDArray,
+        normals_secondary: NDArray,
+        is_edge_joint: bool,
+        index: int,
+    ) -> Dict[str, Any]:
+        """Compute torch pose at specific point index.
+
+        Args:
+            points: Array of seam points (N, 3)
+            normals_main: Main surface normals (N, 3)
+            normals_secondary: Secondary surface normals (N, 3)
+            is_edge_joint: Whether this is edge-to-edge joint
+            index: Index of point to compute pose for
+
+        Returns:
+            Pose dictionary with position, quaternion, and matrix
+        """
+        tangent = self._compute_tangent(points, index)
+        main_normal = normals_main[index]
+        secondary_normal = normals_secondary[index]
+
+        away_from_wall = self._compute_away_vector(
+            tangent, main_normal, secondary_normal
+        )
+
+        if is_edge_joint:
+            main_direction = away_from_wall
+            lean_direction = -main_normal
+            gap_offset_direction = main_normal
+            gap_magnitude = self.gap_m
+        else:
+            main_direction = -main_normal
+            lean_direction = away_from_wall
+            gap_offset_direction = -away_from_wall + main_normal
+            gap_magnitude = self.gap_m
+
+        tangent_base, binormal_base, normal_base = self._build_base_frame(
+            tangent, main_direction
+        )
+
+        normal_work, binormal_work, tangent_work = self._apply_work_angle(
+            normal_base, tangent_base, binormal_base, lean_direction
+        )
+
+        normal_final, binormal_final, tangent_final = self._apply_travel_angle(
+            normal_work, binormal_work, tangent_work
+        )
+
+        gap_offset = gap_magnitude * gap_offset_direction
+        position = points[index] + gap_offset
+
+        pose = self._build_pose_data(
+            position, tangent_final, binormal_final, normal_final, index
+        )
+
+        return pose
 
     def _compute_tangent(self, points: NDArray, index: int) -> NDArray:
         """Compute tangent vector at point index along seam path.
@@ -204,7 +287,6 @@ class WeldPlanner:
         norm = np.linalg.norm(perpendicular)
 
         if norm < 1e-10:
-            # Main normal parallel to tangent - use fallback axes
             perpendicular = np.cross(np.array([0, 0, 1]), tangent)
             norm = np.linalg.norm(perpendicular)
             if norm < 1e-10:
@@ -213,7 +295,6 @@ class WeldPlanner:
 
         perpendicular = perpendicular / np.linalg.norm(perpendicular)
 
-        # Check direction: should point away from secondary
         if np.dot(perpendicular, secondary_normal) > 0:
             return -perpendicular
         else:
@@ -244,7 +325,6 @@ class WeldPlanner:
         binormal = np.cross(normal, tangent)
         binormal = binormal / np.linalg.norm(binormal)
 
-        # Recompute tangent to enforce orthogonality
         tangent = np.cross(binormal, normal)
         tangent = tangent / np.linalg.norm(tangent)
 

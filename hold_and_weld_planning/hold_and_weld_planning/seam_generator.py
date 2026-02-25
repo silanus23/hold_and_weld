@@ -111,12 +111,16 @@ def main():
             print(f'  Secondary part URDF: {secondary_path}')
             print()
 
+        # Extract mode from workpiece config
+        mode = workpiece_config.get('mode', 'auto')
+
         planner = JobPlanner(
             main_path=main_path,
             secondary_path=secondary_path,
             main_world_pose=main_world_pose,
             secondary_world_pose=secondary_world_pose,
             parameters=parameters,
+            mode=mode,
         )
 
         print('Starting weld job planning')
