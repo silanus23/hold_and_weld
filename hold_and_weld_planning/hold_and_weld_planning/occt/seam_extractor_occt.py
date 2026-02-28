@@ -17,6 +17,7 @@
 This module uses face-to-face proximity detection and BRepAlgoAPI_Common to find
 kissing surfaces, then extracts exact seam curves and surface normals.
 """
+
 # TODO: (@silanus23) Complete pipe logic
 # Warning: Pipe joint detection is under construction. Current implementation
 # treats any face with inner holes (>1 wire) as a pipe joint and attempts to

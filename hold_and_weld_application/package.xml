@@ -4,7 +4,7 @@
   <name>hold_and_weld_application</name>
   <version>0.1.0</version>
   <description>Dual robot welding application with kinematics validation</description>
-  <maintainer email="berkan@example.com">Berkan Tali</maintainer>
+  <maintainer email="berkantali23@outlook.com">Berkan Tali</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

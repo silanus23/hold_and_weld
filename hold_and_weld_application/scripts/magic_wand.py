@@ -57,28 +57,24 @@ class MagicWand(Node):
             'ros__parameters', {}
         )
 
-        # Get configuration
         self.frame_id = objects_config.get('frame_id', 'world')
         child_link_config = objects_config.get('child_link', {})
         base_link_config = objects_config.get('base_link', {})
 
-        # Create collision object publisher
         self.collision_pub = self.create_publisher(
             CollisionObject, '/collision_object', 10
         )
 
-        # Create interactive marker server for torch tips
         self.get_logger().info(
             'Creating interactive marker server for torch tips...'
         )
         self.marker_server = InteractiveMarkerServer(self, 'torch_tips')
 
-        # Wait for MoveIt subscribers (with timeout)
         self.get_logger().info(
             'Waiting for collision_object subscribers (max 5 seconds)...'
         )
         wait_count = 0
-        max_wait = 50  # 5 seconds
+        max_wait = 50
         while (
             self.collision_pub.get_subscription_count() < 1
             and wait_count < max_wait
@@ -93,7 +89,6 @@ class MagicWand(Node):
                 'collision objects.'
             )
         else:
-            # Spawn base_link
             base_pose = base_link_config.get('pose', {})
             if base_pose:
                 self.get_logger().info('Spawning base_link')
@@ -104,7 +99,6 @@ class MagicWand(Node):
                     desc_pkg
                 )
 
-            # Spawn child_link at end_pose
             end_pose = child_link_config.get('end_pose', {})
             if end_pose:
                 self.get_logger().info('Spawning child_link at end_pose')
@@ -153,7 +147,6 @@ class MagicWand(Node):
             self.get_logger().error(f'Failed to parse URDF: {e}')
             return
 
-        # Create collision object
         collision_obj = CollisionObject()
         collision_obj.header = Header()
         collision_obj.header.frame_id = self.frame_id
@@ -181,7 +174,6 @@ class MagicWand(Node):
             )
             return
 
-        # Parse geometry (box, sphere, cylinder)
         box = geometry.find('box')
         if box is not None:
             size_attr = box.get('size')
@@ -316,7 +308,7 @@ class MagicWand(Node):
                 f'Processing {seam_name}: {len(poses)} poses'
             )
 
-            sample_step = max(1, len(poses) // 20)  # Max 20 markers per seam
+            sample_step = max(1, len(poses) // 20)
             self.get_logger().info(f'Sampling every {sample_step} poses')
 
             for i, pose_data in enumerate(poses[::sample_step]):
@@ -354,7 +346,6 @@ class MagicWand(Node):
                 color.a = 0.8
                 axis_marker.color = color
 
-                # Arrow points in Z direction (torch direction)
                 start_point = Point()
                 start_point.x, start_point.y, start_point.z = 0.0, 0.0, 0.0
                 end_point = Point()
