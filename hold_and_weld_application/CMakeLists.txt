@@ -11,8 +11,12 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(tf2 REQUIRED)
@@ -70,9 +74,11 @@ add_library(hold_and_weld_action_servers SHARED
 ament_target_dependencies(hold_and_weld_action_servers
   rclcpp
   rclcpp_action
-  rclcpp_components
+  rclcpp_lifecycle
+  lifecycle_msgs
   geometry_msgs
   control_msgs
+  controller_manager_msgs
   moveit_msgs
   moveit_ros_planning_interface
   tf2
@@ -93,6 +99,12 @@ add_library(hold_and_weld_coordinator SHARED
 ament_target_dependencies(hold_and_weld_coordinator
   rclcpp
   rclcpp_action
+  rclcpp_lifecycle
+  lifecycle_msgs
+  std_srvs
+  control_msgs
+  controller_manager_msgs
+  moveit_msgs
   moveit_ros_planning_interface
 )
 
@@ -224,6 +236,8 @@ ament_export_dependencies(
   rosidl_default_runtime
   rclcpp
   rclcpp_action
+  rclcpp_lifecycle
+  lifecycle_msgs
   geometry_msgs
   control_msgs
   moveit_msgs

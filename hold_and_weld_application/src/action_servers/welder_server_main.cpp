@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "hold_and_weld_application/action_servers/welder_action_server.hpp"
+#include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include "hold_and_weld_application/action_servers/welder_action_server.hpp"
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
-  auto welder_server = std::make_shared<hold_and_weld::WelderActionServer>();
+  auto node = std::make_shared<hold_and_weld::WelderActionServer>();
 
-  rclcpp::spin(welder_server);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node->get_node_base_interface());
+
+  executor.spin();
 
   rclcpp::shutdown();
   return 0;

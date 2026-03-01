@@ -25,14 +25,18 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <lifecycle_msgs/msg/transition.hpp>
 
 #include <moveit_msgs/msg/planning_scene.hpp>
 #include <moveit_msgs/srv/apply_planning_scene.hpp>
 #include <moveit_msgs/srv/get_planning_scene.hpp>
+#include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit_msgs/msg/attached_collision_object.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <control_msgs/action/follow_joint_trajectory.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
 #include "hold_and_weld_application/action/trigger_gripper.hpp"
 
 
@@ -67,13 +71,13 @@ struct GripperJob
 
 /**
  * @class GripperActionServer
- * @brief ROS2 action server for controlling gripper operations with MoveIt integration.
+ * @brief ROS2 lifecycle action server for controlling gripper operations with MoveIt integration.
  *
- * This class implements an action server that handles gripper motion planning and execution,
+ * This class implements a lifecycle action server that handles gripper motion planning and execution,
  * including object attachment/detachment, collision object management, and synchronized
  * gripper control through follow joint trajectory actions.
  */
-class GripperActionServer : public rclcpp::Node {
+class GripperActionServer : public rclcpp_lifecycle::LifecycleNode {
 public:
   using TriggerGripper = hold_and_weld_application::action::TriggerGripper;
   using GoalHandleTriggerGripper = rclcpp_action::ServerGoalHandle<TriggerGripper>;
@@ -84,6 +88,47 @@ public:
    * @param options ROS2 node options for configuration.
    */
   explicit GripperActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+
+  // Lifecycle callbacks
+  /**
+   * @brief Configure lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_configure(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Activate lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_activate(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Deactivate lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_deactivate(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Cleanup lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_cleanup(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Shutdown lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_shutdown(const rclcpp_lifecycle::State & state);
 
 private:
   // Initialization
@@ -191,7 +236,8 @@ private:
   rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
 
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_action_client_;
-  rclcpp::Publisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr attached_collision_pub_;
+  rclcpp_lifecycle::LifecyclePublisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr
+    attached_collision_pub_;
   rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr get_planning_scene_client_;
 
   // Configuration
@@ -219,11 +265,14 @@ private:
   std::shared_ptr<std::thread> execution_thread_;
   std::mutex execution_mutex_;
 
-  // Initialization
-  rclcpp::TimerBase::SharedPtr init_timer_;
-  rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
-  bool initialized_ = false;
+  // Configuration parameters
   std::string arm_group_name_;
+  std::string yaml_path_;
+  bool auto_trigger_ = false;
+  double auto_trigger_delay_sec_ = 3.0;
+
+  // Initialization
+  rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
 };
 
 }  // namespace hold_and_weld

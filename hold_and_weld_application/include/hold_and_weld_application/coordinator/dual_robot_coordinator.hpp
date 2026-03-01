@@ -16,29 +16,42 @@
 #define HOLD_AND_WELD_APPLICATION__COORDINATOR__DUAL_ROBOT_COORDINATOR_HPP_
 
 #include <memory>
+#include <atomic>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <lifecycle_msgs/msg/transition.hpp>
+#include <std_srvs/srv/trigger.hpp>
+#include <control_msgs/action/follow_joint_trajectory.hpp>
 #include "hold_and_weld_application/action/trigger_gripper.hpp"
 #include "hold_and_weld_application/action/trigger_welder.hpp"
 #include <moveit/move_group_interface/move_group_interface.hpp>
+#include <moveit_msgs/srv/get_cartesian_path.hpp>
 
 namespace hold_and_weld
 {
 
 /**
  * @class DualRobotCoordinator
- * @brief Coordinates synchronized operations between gripper and welder robots.
+ * @brief Event-driven lifecycle coordinator for synchronized dual-robot operations.
  *
- * This class manages the orchestration of gripper picking operations and welder
- * execution, ensuring proper sequencing and safety of dual-robot manipulation
- * and welding tasks.
+ * This coordinator manages the orchestration of gripper picking and welder operations
+ * in a fully event-driven manner, eliminating arbitrary timeouts and blocking calls.
+ *
+ * Features:
+ * - Event-driven readiness monitoring (checks controller availability)
+ * - Automatic execution when ready (configurable via auto_start parameter)
+ * - Manual trigger service for on-demand execution
+ * - Async action execution with proper sequencing
+ * - No blocking threads, timers, or arbitrary delays
  */
-class DualRobotCoordinator : public rclcpp::Node {
+class DualRobotCoordinator : public rclcpp_lifecycle::LifecycleNode {
 public:
   using TriggerGripper = hold_and_weld_application::action::TriggerGripper;
   using TriggerWelder = hold_and_weld_application::action::TriggerWelder;
   using GoalHandleTriggerGripper = rclcpp_action::ClientGoalHandle<TriggerGripper>;
   using GoalHandleTriggerWelder = rclcpp_action::ClientGoalHandle<TriggerWelder>;
+  using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
 
   /**
    * @brief Construct a new DualRobotCoordinator object.
@@ -46,50 +59,152 @@ public:
    */
   explicit DualRobotCoordinator(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
+  // Lifecycle callbacks
   /**
-   * @brief Main execution loop for coordinating robot operations.
+   * @brief Configure lifecycle transition callback.
+   * Initializes action clients, services, and MoveIt interface.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
    */
-  void run();
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_configure(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Activate lifecycle transition callback.
+   * Starts readiness monitoring timer.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_activate(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Deactivate lifecycle transition callback.
+   * Stops execution and readiness monitoring.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_deactivate(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Cleanup lifecycle transition callback.
+   * Releases all resources.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_cleanup(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Shutdown lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_shutdown(const rclcpp_lifecycle::State & state);
 
 private:
   /**
-   * @brief Execute a gripper job by sending goal to gripper action server.
-   * @return true if gripper job completed successfully, false otherwise.
+   * @brief Periodically checks if all dependencies are ready.
+   * When ready and auto_start is enabled, automatically triggers execution.
    */
-  bool execute_gripper_job();
+  void check_readiness();
 
   /**
-   * @brief Execute a welder job by sending goal to welder action server.
-   * @return true if welder job completed successfully, false otherwise.
+   * @brief Check if all required controller action servers are available.
+   * @return true if all controllers are ready, false otherwise.
    */
-  bool execute_welder_job();
+  bool check_controllers_ready();
 
   /**
-   * @brief Move the welder arm to a safe position.
-   * @return true if welder reached safety position, false otherwise.
+   * @brief Service callback to manually trigger the coordinated sequence.
+   * @param request Service request (empty).
+   * @param response Service response with success status and message.
    */
-  bool move_welder_to_safety();
+  void handle_trigger_service(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
   /**
-   * @brief Spin the ROS executor for a specified duration.
-   * @param seconds Duration to spin in seconds.
+   * @brief Execute the complete dual-robot coordinated sequence.
+   * Steps: 1) Move welder to safety, 2) Execute gripper job, 3) Execute welder job.
    */
-  void spin_for_duration(double seconds);
+  void execute_sequence();
 
   /**
-   * @brief Initialize MoveIt interface for the welder arm.
+   * @brief Move the welder arm to a safe position (async).
+   * Calls step_gripper_job() upon completion.
    */
-  void init_moveit();
+  void step_welder_safety();
 
-  // MoveIt interface for safety positioning
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> welder_move_group_;
+  /**
+   * @brief Execute gripper job (async).
+   * Calls step_welder_job() upon completion.
+   */
+  void step_gripper_job();
 
-  // Action clients
+  /**
+   * @brief Execute welder job (async).
+   * Final step in the sequence.
+   */
+  void step_welder_job();
+
+  /**
+   * @brief Callback for gripper action feedback.
+   * @param feedback Feedback message from gripper action.
+   */
+  void gripper_feedback_callback(
+    GoalHandleTriggerGripper::SharedPtr,
+    const std::shared_ptr<const TriggerGripper::Feedback> feedback);
+
+  /**
+   * @brief Callback for gripper action result.
+   * @param result Wrapped result from gripper action.
+   */
+  void gripper_result_callback(const GoalHandleTriggerGripper::WrappedResult & result);
+
+  /**
+   * @brief Callback for welder action feedback.
+   * @param feedback Feedback message from welder action.
+   */
+  void welder_feedback_callback(
+    GoalHandleTriggerWelder::SharedPtr,
+    const std::shared_ptr<const TriggerWelder::Feedback> feedback);
+
+  /**
+   * @brief Callback for welder action result.
+   * @param result Wrapped result from welder action.
+   */
+  void welder_result_callback(const GoalHandleTriggerWelder::WrappedResult & result);
+
+  // Parameters
+  bool auto_start_{true};  ///< Auto-start sequence when ready
+
+  // State tracking
+  std::atomic<bool> is_active_{false};
+  std::atomic<bool> system_ready_{false};
+  std::atomic<bool> sequence_started_{false};
+  std::atomic<bool> sequence_running_{false};
+
+  // Readiness monitoring
+  rclcpp::TimerBase::SharedPtr readiness_timer_;
+
+  // Controller action clients (for readiness checking)
+  rclcpp_action::Client<FollowJointTrajectory>::SharedPtr robot1_controller_client_;
+  rclcpp_action::Client<FollowJointTrajectory>::SharedPtr robot2_controller_client_;
+  rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_controller_client_;
+
+  // Application action clients
   rclcpp_action::Client<TriggerGripper>::SharedPtr gripper_client_;
   rclcpp_action::Client<TriggerWelder>::SharedPtr welder_client_;
 
-  rclcpp::TimerBase::SharedPtr init_timer_;
-  std::atomic<bool> moveit_ready_{false};
+  // Manual trigger service
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_service_;
+
+  // MoveIt interface for safety positioning
+  std::shared_ptr<rclcpp::Node> moveit_node_;
+  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> welder_move_group_;
 };
 
 }  // namespace hold_and_weld

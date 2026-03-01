@@ -27,7 +27,11 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <lifecycle_msgs/msg/transition.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
+#include <moveit_msgs/srv/get_cartesian_path.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 
 #include "hold_and_weld_application/action/trigger_welder.hpp"
@@ -68,13 +72,13 @@ struct WelderConfig
 
 /**
  * @class WelderActionServer
- * @brief ROS2 action server for controlling welding operations with MoveIt integration.
+ * @brief ROS2 lifecycle action server for controlling welding operations with MoveIt integration.
  *
- * This class implements an action server that handles welding seam execution,
+ * This class implements a lifecycle action server that handles welding seam execution,
  * including approach/retract motions, cartesian path planning, and feedback updates
  * during the welding process.
  */
-class WelderActionServer : public rclcpp::Node {
+class WelderActionServer : public rclcpp_lifecycle::LifecycleNode {
 public:
   using TriggerWelder = hold_and_weld_application::action::TriggerWelder;
   using GoalHandleTriggerWelder = rclcpp_action::ServerGoalHandle<TriggerWelder>;
@@ -89,6 +93,47 @@ public:
    * @brief Destroy the WelderActionServer object, ensuring proper cleanup of worker thread.
    */
   ~WelderActionServer() override;
+
+  // Lifecycle callbacks
+  /**
+   * @brief Configure lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_configure(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Activate lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_activate(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Deactivate lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_deactivate(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Cleanup lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_cleanup(const rclcpp_lifecycle::State & state);
+
+  /**
+   * @brief Shutdown lifecycle transition callback.
+   * @param state Current lifecycle state.
+   * @return Transition callback result.
+   */
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+  on_shutdown(const rclcpp_lifecycle::State & state);
 
 private:
     // Action server callbacks
@@ -216,9 +261,6 @@ private:
   // Action server
   rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
 
-  // Initialization
-  rclcpp::TimerBase::SharedPtr init_timer_;
-
   // Worker thread for asynchronous goal execution
   std::thread worker_thread_;
   std::mutex work_mutex_;
@@ -228,7 +270,6 @@ private:
 
   // Configuration
   WelderConfig config_;
-  bool initialized_ = false;
 };
 
 }  // namespace hold_and_weld

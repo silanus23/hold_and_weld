@@ -12,14 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include "hold_and_weld_application/action_servers/gripper_action_server.hpp"
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
+
   auto node = std::make_shared<hold_and_weld::GripperActionServer>();
-  rclcpp::spin(node);
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node->get_node_base_interface());
+
+  executor.spin();
+
   rclcpp::shutdown();
   return 0;
 }

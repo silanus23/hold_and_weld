@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <thread>
-
+#include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include "hold_and_weld_application/coordinator/dual_robot_coordinator.hpp"
 
@@ -21,20 +20,12 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
-  auto node = std::make_shared<hold_and_weld::DualRobotCoordinator>();
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(node);
+  auto coordinator = std::make_shared<hold_and_weld::DualRobotCoordinator>();
 
-  std::thread logic_thread([node, &executor]() {
-      node->run();
-      executor.cancel();
-    });
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(coordinator->get_node_base_interface());
 
   executor.spin();
-
-  if (logic_thread.joinable()) {
-    logic_thread.join();
-  }
 
   rclcpp::shutdown();
   return 0;

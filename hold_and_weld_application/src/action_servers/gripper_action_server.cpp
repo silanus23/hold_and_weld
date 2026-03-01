@@ -17,14 +17,54 @@
 #include <yaml-cpp/yaml.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
+#include <moveit_msgs/srv/get_cartesian_path.hpp>
 
 
 namespace hold_and_weld
 {
 
 GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
-: Node("gripper_action_server", options)
+: LifecycleNode("gripper_action_server", options)
 {
+  RCLCPP_INFO(get_logger(), "Gripper Action Server constructed");
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
+{
+  RCLCPP_INFO(get_logger(), "Configuring Gripper Action Server");
+
+  // Wait for MoveIt and controllers to be available
+  RCLCPP_INFO(get_logger(), "Waiting for required services to become available...");
+  auto temp_node = std::make_shared<rclcpp::Node>("gripper_service_waiter");
+
+  // Wait for compute_cartesian_path service (indicates MoveIt is ready)
+  auto cartesian_path_client = temp_node->create_client<moveit_msgs::srv::GetCartesianPath>(
+    "/compute_cartesian_path");
+  RCLCPP_INFO(get_logger(), "Waiting for MoveIt compute_cartesian_path service...");
+  while (!cartesian_path_client->wait_for_service(std::chrono::seconds(1))) {
+    if (!rclcpp::ok()) {
+      RCLCPP_ERROR(get_logger(), "Interrupted while waiting for MoveIt service");
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
+    RCLCPP_INFO(get_logger(), "Still waiting for MoveIt...");
+  }
+  RCLCPP_INFO(get_logger(), "MoveIt is available");
+
+  // Wait for controller_manager services (indicates controllers are loaded)
+  auto list_controllers_client = temp_node->create_client<
+    controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
+  RCLCPP_INFO(get_logger(), "Waiting for controller_manager service...");
+  while (!list_controllers_client->wait_for_service(std::chrono::seconds(1))) {
+    if (!rclcpp::ok()) {
+      RCLCPP_ERROR(get_logger(), "Interrupted while waiting for controller_manager service");
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
+    RCLCPP_INFO(get_logger(), "Still waiting for controller_manager...");
+  }
+  RCLCPP_INFO(get_logger(), "Controllers are ready");
+
   std::string default_yaml =
     ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
     "/config/tasks/pick_place_targets.yaml";
@@ -38,69 +78,55 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
 
   arm_group_name_ = get_parameter("arm_group_name").as_string();
   gripper_joint_names_ = get_parameter("gripper_joint_names").as_string_array();
+  yaml_path_ = get_parameter("positions_yaml").as_string();
+  auto_trigger_ = get_parameter("auto_trigger").as_bool();
+  auto_trigger_delay_sec_ = get_parameter("auto_trigger_delay_sec").as_double();
 
-  std::string yaml_path = get_parameter("positions_yaml").as_string();
-
-  RCLCPP_INFO(get_logger(), "Gripper Action Server starting");
   RCLCPP_INFO(get_logger(), "  Arm group: %s", arm_group_name_.c_str());
 
   gripper_action_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
-        this, "/gripper_controller/follow_joint_trajectory");
+    this->get_node_base_interface(),
+    this->get_node_graph_interface(),
+    this->get_node_logging_interface(),
+    this->get_node_waitables_interface(),
+    "/gripper_controller/follow_joint_trajectory");
 
-  attached_collision_pub_ = create_publisher<moveit_msgs::msg::AttachedCollisionObject>(
-        "/attached_collision_object", 10);
-
-  load_job_from_yaml(yaml_path);
-
-  init_timer_ = create_wall_timer(
-        std::chrono::milliseconds(500),
-        std::bind(&GripperActionServer::initialize_moveit, this));
+  attached_collision_pub_ = this->create_publisher<moveit_msgs::msg::AttachedCollisionObject>(
+    "/attached_collision_object", 10);
 
   planning_scene_client_ = create_client<moveit_msgs::srv::ApplyPlanningScene>(
-        "/apply_planning_scene");
+    "/apply_planning_scene");
 
   get_planning_scene_client_ =
     create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
 
-  // Load base_link_id from objects.yaml
   load_object_config();
-}
+  load_job_from_yaml(yaml_path_);
 
-void GripperActionServer::load_object_config()
-{
   try {
-    std::string objects_yaml_path =
-      ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
-      "/config/collision_objects/objects.yaml";
+    RCLCPP_INFO(get_logger(), "Initializing MoveIt");
 
-    YAML::Node config = YAML::LoadFile(objects_yaml_path);
+    // MoveGroupInterface expects rclcpp::Node::SharedPtr
+    // We need to create a wrapper node since MoveGroupInterface doesn't support lifecycle nodes
+    rclcpp::NodeOptions node_options;
+    node_options.automatically_declare_parameters_from_overrides(true);
 
-    if (config["/**"] && config["/**"]["ros__parameters"] &&
-      config["/**"]["ros__parameters"]["base_link"])
-    {
-      auto base_link = config["/**"]["ros__parameters"]["base_link"];
-      if (base_link["id"]) {
-        base_link_id_ = base_link["id"].as<std::string>();
-        RCLCPP_INFO(get_logger(), "Loaded base_link_id: %s", base_link_id_.c_str());
-      }
+    std::string robot_description_semantic;
+    if (this->has_parameter("robot_description_semantic")) {
+      robot_description_semantic = this->get_parameter("robot_description_semantic").as_string();
     }
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(get_logger(), "Could not load object config, using default base_link_id: %s",
-                e.what());
-  }
-}
 
-void GripperActionServer::initialize_moveit()
-{
-  init_timer_->cancel();
+    // Create internal node for MoveGroupInterface
+    auto internal_node = std::make_shared<rclcpp::Node>(
+      "gripper_moveit_internal",
+      node_options);
 
-  using namespace std::placeholders;
+    if (!robot_description_semantic.empty()) {
+      internal_node->declare_parameter("robot_description_semantic", robot_description_semantic);
+    }
 
-  RCLCPP_INFO(get_logger(), "Initializing MoveIt");
-
-  try {
     move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
-            shared_from_this(), arm_group_name_);
+      internal_node, arm_group_name_);
 
     move_group_->setPlanningTime(10.0);
     move_group_->setNumPlanningAttempts(10);
@@ -110,26 +136,28 @@ void GripperActionServer::initialize_moveit()
     RCLCPP_INFO(get_logger(), "MoveIt initialized successfully");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Failed to initialize MoveIt: %s", e.what());
-    return;
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
+  using namespace std::placeholders;
   action_server_ = rclcpp_action::create_server<TriggerGripper>(
-      this,
-      "trigger_gripper",
+    this->get_node_base_interface(),
+    this->get_node_clock_interface(),
+    this->get_node_logging_interface(),
+    this->get_node_waitables_interface(),
+    "trigger_gripper",
     [this](const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const TriggerGripper::Goal> goal)
     {
       return this->handle_goal(uuid, goal);
-      },
+    },
     [this](const std::shared_ptr<GoalHandleTriggerGripper> handle) {
       return this->handle_cancel(handle);
-      },
+    },
     [this](const std::shared_ptr<GoalHandleTriggerGripper> handle) {
       this->handle_accepted(handle);
-      }
+    }
   );
-  initialized_ = true;
-  RCLCPP_INFO(get_logger(), "Gripper Action Server ready!");
 
   std::lock_guard<std::mutex> lock(config_mutex_);
   if (job_loaded_) {
@@ -138,10 +166,21 @@ void GripperActionServer::initialize_moveit()
     RCLCPP_WARN(get_logger(), "  No job loaded!");
   }
 
-  // Auto-trigger if enabled
-  bool auto_trigger = get_parameter("auto_trigger").as_bool();
-  if (auto_trigger && job_loaded_) {
-    double delay = get_parameter("auto_trigger_delay_sec").as_double();
+  RCLCPP_INFO(get_logger(), "Gripper Action Server configured");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+GripperActionServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
+{
+  RCLCPP_INFO(get_logger(), "Activating Gripper Action Server");
+
+  attached_collision_pub_->on_activate();
+
+  RCLCPP_INFO(get_logger(), "Gripper Action Server activated and ready!");
+
+  if (auto_trigger_ && job_loaded_) {
+    double delay = auto_trigger_delay_sec_;
     RCLCPP_INFO(get_logger(), "Auto-trigger enabled, will start in %.1f seconds", delay);
 
     auto_trigger_timer_ = create_wall_timer(
@@ -150,7 +189,6 @@ void GripperActionServer::initialize_moveit()
         auto_trigger_timer_->cancel();
         RCLCPP_INFO(get_logger(), "Auto-triggering gripper action...");
 
-        // Execute the job directly in a new thread
         std::lock_guard<std::mutex> exec_lock(execution_mutex_);
         if (execution_thread_ && execution_thread_->joinable()) {
           execution_thread_->join();
@@ -222,6 +260,93 @@ void GripperActionServer::initialize_moveit()
         );
       }
     );
+  }
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+GripperActionServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
+{
+  RCLCPP_INFO(get_logger(), "Deactivating Gripper Action Server");
+
+  if (auto_trigger_timer_) {
+    auto_trigger_timer_->cancel();
+    auto_trigger_timer_.reset();
+  }
+
+  if (move_group_) {
+    move_group_->stop();
+  }
+
+  attached_collision_pub_->on_deactivate();
+
+  RCLCPP_INFO(get_logger(), "Gripper Action Server deactivated");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+GripperActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
+{
+  RCLCPP_INFO(get_logger(), "Cleaning up Gripper Action Server");
+
+  {
+    std::lock_guard<std::mutex> lock(execution_mutex_);
+    if (execution_thread_ && execution_thread_->joinable()) {
+      execution_thread_->join();
+    }
+    execution_thread_.reset();
+  }
+
+  action_server_.reset();
+
+  move_group_.reset();
+
+  gripper_action_client_.reset();
+  planning_scene_client_.reset();
+  get_planning_scene_client_.reset();
+  attached_collision_pub_.reset();
+
+  {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    job_loaded_ = false;
+  }
+
+  RCLCPP_INFO(get_logger(), "Gripper Action Server cleaned up");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+GripperActionServer::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
+{
+  RCLCPP_INFO(get_logger(), "Shutting down Gripper Action Server");
+
+  on_cleanup(get_current_state());
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+void GripperActionServer::load_object_config()
+{
+  try {
+    std::string objects_yaml_path =
+      ament_index_cpp::get_package_share_directory("hold_and_weld_bringup") +
+      "/config/objects/objects.yaml";
+
+    YAML::Node config = YAML::LoadFile(objects_yaml_path);
+
+    if (config["/**"] && config["/**"]["ros__parameters"] &&
+      config["/**"]["ros__parameters"]["base_link"])
+    {
+      auto base_link = config["/**"]["ros__parameters"]["base_link"];
+      if (base_link["id"]) {
+        base_link_id_ = base_link["id"].as<std::string>();
+        RCLCPP_INFO(get_logger(), "Loaded base_link_id: %s", base_link_id_.c_str());
+      }
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Could not load object config, using default base_link_id: %s",
+                e.what());
   }
 }
 
@@ -298,8 +423,8 @@ rclcpp_action::GoalResponse GripperActionServer::handle_goal(
   [[maybe_unused]] const rclcpp_action::GoalUUID & uuid,
   [[maybe_unused]] std::shared_ptr<const TriggerGripper::Goal> goal)
 {
-  if (!initialized_) {
-    RCLCPP_ERROR(get_logger(), "Server not initialized yet");
+  if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    RCLCPP_ERROR(get_logger(), "Cannot accept goal: node is not active");
     return rclcpp_action::GoalResponse::REJECT;
   }
 
@@ -317,7 +442,9 @@ rclcpp_action::CancelResponse GripperActionServer::handle_cancel(
   [[maybe_unused]] const std::shared_ptr<GoalHandleTriggerGripper> goal_handle)
 {
   RCLCPP_INFO(get_logger(), "Received cancel request");
-  move_group_->stop();
+  if (move_group_) {
+    move_group_->stop();
+  }
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -436,7 +563,6 @@ void GripperActionServer::execute_job(const std::shared_ptr<GoalHandleTriggerGri
     return;
   }
 
-  // Success
   feedback->current_step = "completed";
   feedback->completion_percentage = 100.0f;
   goal_handle->publish_feedback(feedback);
@@ -626,7 +752,6 @@ bool GripperActionServer::allow_collision_for_placement()
       acm.entry_values[idx2].enabled[idx1] = true;
     };
 
-  // Use base_link_id from config
   toggle_acm_bit(job_.target_id, base_link_id_);
 
   auto apply_request = std::make_shared<moveit_msgs::srv::ApplyPlanningScene::Request>();
