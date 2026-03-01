@@ -365,7 +365,7 @@ class MagicWand(Node):
         )
         self.marker_server.applyChanges()
         self.get_logger().info(
-            f'✓ Created {marker_count} torch tip markers and applied changes!'
+            f'Created {marker_count} torch tip markers and applied changes!'
         )
         self.get_logger().info(
             'Check RViz InteractiveMarkers display with topic: '

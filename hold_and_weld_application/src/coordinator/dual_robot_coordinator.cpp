@@ -222,7 +222,7 @@ void DualRobotCoordinator::check_readiness()
 
   if (controllers_ready && !system_ready_) {
     system_ready_ = true;
-    RCLCPP_INFO(get_logger(), "✓ All controllers are ready!");
+    RCLCPP_INFO(get_logger(), "All controllers are ready!");
 
     if (auto_start_) {
       RCLCPP_INFO(get_logger(), "Auto-start enabled, beginning coordinated sequence...");
@@ -346,7 +346,7 @@ void DualRobotCoordinator::step_welder_safety()
     return;
   }
 
-  RCLCPP_INFO(get_logger(), "✓ Welder moved to safety position");
+  RCLCPP_INFO(get_logger(), "Welder moved to safety position");
 
   step_gripper_job();
 }
@@ -384,18 +384,18 @@ void DualRobotCoordinator::gripper_result_callback(
   const GoalHandleTriggerGripper::WrappedResult & result)
 {
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
-    RCLCPP_INFO(get_logger(), "✓ Gripper job completed successfully");
+    RCLCPP_INFO(get_logger(), "Gripper job completed successfully");
     step_welder_job();
   } else if (result.code == rclcpp_action::ResultCode::ABORTED) {
-    RCLCPP_ERROR(get_logger(), "✗ Gripper job aborted: %s", result.result->message.c_str());
+    RCLCPP_ERROR(get_logger(), "Gripper job aborted: %s", result.result->message.c_str());
     RCLCPP_ERROR(get_logger(), "Sequence aborted");
     sequence_running_ = false;
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
-    RCLCPP_WARN(get_logger(), "✗ Gripper job canceled");
+    RCLCPP_WARN(get_logger(), "Gripper job canceled");
     RCLCPP_WARN(get_logger(), "Sequence aborted");
     sequence_running_ = false;
   } else {
-    RCLCPP_ERROR(get_logger(), "✗ Gripper job failed with unknown result code");
+    RCLCPP_ERROR(get_logger(), "Gripper job failed with unknown result code");
     RCLCPP_ERROR(get_logger(), "Sequence aborted");
     sequence_running_ = false;
   }
