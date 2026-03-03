@@ -72,7 +72,7 @@ struct WelderConfig
   int max_ompl_planning_attempts = 3;
   int max_approach_validation_retries = 3;
   int max_cartesian_retries = 2;
-  bool use_approach_validator = false;
+  bool use_approach_validator = true;
   std::string json_file;
 };
 

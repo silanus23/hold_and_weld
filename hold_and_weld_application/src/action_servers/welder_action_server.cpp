@@ -222,7 +222,7 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
         std::make_unique<hold_and_weld_application::kinematics::ApproachValidator>(
         kinematics_solver_,
         ceres_solver_,
-        0.01);
+        0.001);
       RCLCPP_INFO(get_logger(), "Approach validator initialized");
       RCLCPP_INFO(get_logger(), "All kinematics solvers initialized successfully");
     } catch (const std::exception & e) {
