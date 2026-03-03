@@ -8,8 +8,9 @@ cartesian_step_size: 0.01       # Step size for Cartesian path computation (mete
 velocity_scaling: 0.3           # Velocity scaling factor (0.0-1.0)
 
 # Retry parameters
-max_approach_retries: 3         # Maximum attempts for approach motion
-max_cartesian_retries: 2        # Maximum attempts for Cartesian path execution
+max_ompl_planning_attempts: 3        # Maximum OMPL planning attempts for approach
+max_approach_validation_retries: 3   # Maximum validation retries (check if approach can reach seam)
+max_cartesian_retries: 2             # Maximum attempts for Cartesian path execution
 
 
 start_pose:

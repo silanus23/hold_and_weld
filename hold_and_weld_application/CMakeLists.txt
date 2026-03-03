@@ -50,19 +50,32 @@ add_library(hold_and_weld_kinematics SHARED
   src/kinematics/urdf_parser.cpp
   src/kinematics/kinematics_solver.cpp
   src/kinematics/ceres_ik_solver.cpp
+  src/kinematics/approach_validator.cpp
 )
 
 ament_target_dependencies(hold_and_weld_kinematics
   rclcpp
+  rclcpp_action
+  rclcpp_lifecycle
+  lifecycle_msgs
   geometry_msgs
+  control_msgs
+  controller_manager_msgs
+  moveit_msgs
+  moveit_ros_planning_interface
+  tf2
+  tf2_geometry_msgs
   urdf
   kdl_parser
   ament_index_cpp
 )
 
 target_link_libraries(hold_and_weld_kinematics
+  "${cpp_typesupport_target}"
   Eigen3::Eigen
   Ceres::ceres
+  yaml-cpp
+  nlohmann_json::nlohmann_json
 )
 
 add_library(hold_and_weld_action_servers SHARED
@@ -88,6 +101,7 @@ ament_target_dependencies(hold_and_weld_action_servers
 
 target_link_libraries(hold_and_weld_action_servers
   "${cpp_typesupport_target}"
+  hold_and_weld_kinematics
   yaml-cpp
   nlohmann_json::nlohmann_json
 )
@@ -122,6 +136,7 @@ target_link_libraries(gripper_server
 
 ament_target_dependencies(gripper_server
   rclcpp
+  rclcpp_lifecycle
 )
 
 add_executable(welder_server
@@ -134,6 +149,7 @@ target_link_libraries(welder_server
 
 ament_target_dependencies(welder_server
   rclcpp
+  rclcpp_lifecycle
 )
 
 add_executable(move_to_pose_server

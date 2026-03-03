@@ -16,7 +16,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
-using hold_and_weld::kinematics::URDFParser;
+using hold_and_weld_application::kinematics::URDFParser;
 
 namespace
 {

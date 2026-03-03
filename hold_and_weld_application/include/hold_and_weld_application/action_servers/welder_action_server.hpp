@@ -34,6 +34,10 @@
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 
+#include "hold_and_weld_application/kinematics/approach_validator.hpp"
+#include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
+#include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
+#include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 #include "hold_and_weld_application/action/trigger_welder.hpp"
 
 namespace hold_and_weld
@@ -65,7 +69,8 @@ struct WelderConfig
   double cartesian_path_threshold = 0.95;
   double cartesian_step_size = 0.01;
   double velocity_scaling = 0.3;
-  int max_approach_retries = 3;
+  int max_ompl_planning_attempts = 3;
+  int max_approach_validation_retries = 3;
   int max_cartesian_retries = 2;
   std::string json_file;
 };
@@ -206,11 +211,11 @@ private:
   void execute_weld(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
   /**
-   * @brief Move the welder arm to approach position above the first seam pose.
-   * @param first_pose First pose along the weld seam.
+   * @brief Move the welder arm to approach position 5cm back along the seam direction.
+   * @param seam The weld seam containing start/end points and poses.
    * @return true if approach motion was successful, false otherwise.
    */
-  bool approach_seam(const geometry_msgs::msg::Pose & first_pose);
+  bool approach_seam(const WeldSeam & seam);
 
   /**
    * @brief Retract the welder arm from the last seam pose.
@@ -235,6 +240,7 @@ private:
     int32_t points_before_seam,
     int32_t total_waypoints);
 
+  // TODO(@silanus23): Put controls over this
   /**
    * @brief Convert a JSON pose object to a geometry_msgs::msg::Pose message.
    * @param pose_data JSON object containing position and quaternion arrays.
@@ -243,22 +249,41 @@ private:
   geometry_msgs::msg::Pose json_to_pose(const nlohmann::json & pose_data)
   {
     geometry_msgs::msg::Pose pose;
-
     pose.position.x = pose_data["position"][0];
     pose.position.y = pose_data["position"][1];
     pose.position.z = pose_data["position"][2];
 
-    pose.orientation.x = pose_data["quaternion"][0];
-    pose.orientation.y = pose_data["quaternion"][1];
-    pose.orientation.z = pose_data["quaternion"][2];
-    pose.orientation.w = pose_data["quaternion"][3];
+      // Load into Eigen for normalization and manipulation
+      // Note: Eigen::Quaterniond constructor takes (w, x, y, z)
+    Eigen::Quaterniond q(
+      pose_data["quaternion"][3],
+      pose_data["quaternion"][0],
+      pose_data["quaternion"][1],
+      pose_data["quaternion"][2]
+    );
+
+    q.normalize();
+
+      // Flip 180 degrees to test the antiparallel theory
+      // Change UnitX() to UnitY() if the torch needs to flip along the other axis
+    Eigen::Quaterniond flip_rotation(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX()));
+    q = q * flip_rotation;
+
+    pose.orientation.x = q.x();
+    pose.orientation.y = q.y();
+    pose.orientation.z = q.z();
+    pose.orientation.w = q.w();
+
     return pose;
   }
-
-  // MoveIt interface
+    // MoveIt interface
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
 
-  // Action server
+    // MoveIt internal node execution
+  rclcpp::executors::SingleThreadedExecutor::SharedPtr moveit_executor_;
+  std::thread moveit_thread_;
+
+    // Action server
   rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
 
   // Worker thread for asynchronous goal execution
@@ -267,6 +292,11 @@ private:
   std::condition_variable work_cv_;
   std::shared_ptr<GoalHandleTriggerWelder> pending_goal_;
   bool shutdown_requested_ = false;
+
+  // Kinematics calculators
+  std::shared_ptr<hold_and_weld_application::kinematics::CeresIKSolver> ceres_solver_;
+  std::shared_ptr<hold_and_weld_application::kinematics::KinematicsSolver> kinematics_solver_;
+  std::unique_ptr<hold_and_weld_application::kinematics::ApproachValidator> approach_validator_;
 
   // Configuration
   WelderConfig config_;

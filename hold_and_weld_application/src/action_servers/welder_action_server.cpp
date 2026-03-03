@@ -21,10 +21,12 @@
 #include <fstream>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include <Eigen/Dense>
 #include <nlohmann/json.hpp>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
-#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include <rclcpp/parameter_client.hpp>
 
 
 namespace hold_and_weld
@@ -39,6 +41,13 @@ WelderActionServer::WelderActionServer(const rclcpp::NodeOptions & options)
 WelderActionServer::~WelderActionServer()
 {
   shutdown_worker();
+
+  if (moveit_executor_) {
+    moveit_executor_->cancel();
+  }
+  if (moveit_thread_.joinable()) {
+    moveit_thread_.join();
+  }
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
@@ -46,11 +55,9 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Configuring Welder Action Server");
 
-  // Wait for MoveIt and controllers to be available
   RCLCPP_INFO(get_logger(), "Waiting for required services to become available...");
   auto temp_node = std::make_shared<rclcpp::Node>("welder_service_waiter");
 
-  // Wait for compute_cartesian_path service (indicates MoveIt is ready)
   auto cartesian_path_client = temp_node->create_client<moveit_msgs::srv::GetCartesianPath>(
     "/compute_cartesian_path");
   RCLCPP_INFO(get_logger(), "Waiting for MoveIt compute_cartesian_path service...");
@@ -63,7 +70,6 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
   }
   RCLCPP_INFO(get_logger(), "MoveIt is available");
 
-  // Wait for controller_manager services (indicates controllers are loaded)
   auto list_controllers_client = temp_node->create_client<
     controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
   RCLCPP_INFO(get_logger(), "Waiting for controller_manager service...");
@@ -80,16 +86,64 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   worker_thread_ = std::thread(&WelderActionServer::worker_thread_func, this);
 
-  // MoveGroupInterface needs rclcpp::Node, not LifecycleNode
+  std::string urdf_string;
+  RCLCPP_INFO(get_logger(), "Asking robot_state_publisher for the master URDF...");
+
+  // Use a SyncParametersClient attached to temp_node to avoid blocking the lifecycle executor
+  auto param_client = std::make_shared<rclcpp::SyncParametersClient>(temp_node,
+      "robot_state_publisher");
+
+  if (param_client->wait_for_service(std::chrono::seconds(10))) {
+    auto parameters = param_client->get_parameters({"robot_description"});
+    if (!parameters.empty()) {
+      urdf_string = parameters[0].as_string();
+    }
+  } else {
+    RCLCPP_ERROR(get_logger(), "Failed to contact robot_state_publisher! Is it running?");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
+
+  if (urdf_string.empty()) {
+    RCLCPP_ERROR(get_logger(), "Retrieved robot_description is empty!");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
+
+  rclcpp::Node::SharedPtr internal_node;
   try {
     RCLCPP_INFO(get_logger(), "Initializing MoveIt");
 
     rclcpp::NodeOptions node_options;
     node_options.automatically_declare_parameters_from_overrides(true);
 
-    auto internal_node = std::make_shared<rclcpp::Node>(
+    internal_node = std::make_shared<rclcpp::Node>(
       "welder_moveit_internal",
       node_options);
+
+    bool use_sim_time = false;
+    if (this->get_parameter("use_sim_time", use_sim_time)) {
+      internal_node->set_parameter(rclcpp::Parameter("use_sim_time", use_sim_time));
+      RCLCPP_INFO(get_logger(), "Copied use_sim_time=%s to internal node",
+          use_sim_time ? "true" : "false");
+    }
+
+    std::string robot_description_semantic;
+    if (this->has_parameter("robot_description_semantic")) {
+      robot_description_semantic = this->get_parameter("robot_description_semantic").as_string();
+      RCLCPP_INFO(get_logger(), "Got robot_description_semantic from lifecycle node");
+    }
+
+    if (!robot_description_semantic.empty()) {
+      internal_node->declare_parameter("robot_description_semantic", robot_description_semantic);
+      RCLCPP_INFO(get_logger(), "Copied robot_description_semantic to internal node");
+    }
+
+    // Give MoveIt its own copy of the URDF just fetched
+    internal_node->declare_parameter("robot_description", urdf_string);
+    RCLCPP_INFO(get_logger(), "Copied robot_description to internal node");
+
+    moveit_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    moveit_executor_->add_node(internal_node);
+    moveit_thread_ = std::thread([this]() {moveit_executor_->spin();});
 
     move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
       internal_node, config_.welder_group_name);
@@ -101,6 +155,76 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     RCLCPP_INFO(get_logger(), "MoveIt initialized successfully");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Failed to initialize MoveIt: %s", e.what());
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
+
+  try {
+    RCLCPP_INFO(get_logger(), "Initializing kinematics solvers");
+
+    const auto * joint_model_group = move_group_->getRobotModel()->getJointModelGroup(
+      config_.welder_group_name);
+
+    if (!joint_model_group) {
+      RCLCPP_ERROR(get_logger(), "Joint model group '%s' not found in robot model",
+                   config_.welder_group_name.c_str());
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
+
+    const std::vector<std::string> & link_names = joint_model_group->getLinkModelNames();
+    if (link_names.size() < 2) {
+      RCLCPP_ERROR(get_logger(), "Joint model group has insufficient links: %zu",
+                   link_names.size());
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
+
+    const std::vector<const moveit::core::JointModel *> & joint_models =
+      joint_model_group->getActiveJointModels();
+
+    std::string base_link;
+    if (!joint_models.empty() && joint_models.front()->getParentLinkModel()) {
+      base_link = joint_models.front()->getParentLinkModel()->getName();
+    } else {
+      base_link = link_names.front();
+    }
+
+    std::string tip_link = link_names.back();
+
+    RCLCPP_INFO(get_logger(), "Detected kinematic chain: %s -> %s",
+                base_link.c_str(), tip_link.c_str());
+
+    auto urdf_parser = std::make_unique<hold_and_weld_application::kinematics::URDFParser>();
+
+    // Parse the string directly in memory using the string we fetched at the top
+    hold_and_weld_application::kinematics::ParsedChain parsed_chain;
+    try {
+      parsed_chain = urdf_parser->extract_joint_chain_from_string(urdf_string, base_link, tip_link);
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(get_logger(), "URDF Parser failed: %s", e.what());
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
+
+    RCLCPP_INFO(get_logger(), "Parsed kinematic chain with %zu actuated joints",
+                parsed_chain.actuated_joints.size());
+
+    kinematics_solver_ = std::make_shared<hold_and_weld_application::kinematics::KinematicsSolver>(
+      parsed_chain);
+    RCLCPP_INFO(get_logger(), "Kinematics solver initialized");
+
+    ceres_solver_ = std::make_shared<hold_and_weld_application::kinematics::CeresIKSolver>(
+      kinematics_solver_,
+      1.0);
+    RCLCPP_INFO(get_logger(), "Ceres IK solver initialized");
+
+    approach_validator_ =
+      std::make_unique<hold_and_weld_application::kinematics::ApproachValidator>(
+      kinematics_solver_,
+      ceres_solver_,
+      0.01);
+    RCLCPP_INFO(get_logger(), "Approach validator initialized");
+    RCLCPP_INFO(get_logger(), "All kinematics solvers initialized successfully");
+
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to initialize kinematics solvers: %s", e.what());
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
@@ -146,10 +270,20 @@ WelderActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   RCLCPP_INFO(get_logger(), "Cleaning up Welder Action Server");
 
   shutdown_worker();
-
   action_server_.reset();
-
   move_group_.reset();
+
+  if (moveit_executor_) {
+    moveit_executor_->cancel();
+  }
+  if (moveit_thread_.joinable()) {
+    moveit_thread_.join();
+  }
+  moveit_executor_.reset();
+
+  approach_validator_.reset();
+  kinematics_solver_.reset();
+  ceres_solver_.reset();
 
   RCLCPP_INFO(get_logger(), "Welder Action Server cleaned up");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
@@ -203,8 +337,11 @@ void WelderActionServer::load_config_from_yaml()
     if (yaml["velocity_scaling"]) {
       config_.velocity_scaling = yaml["velocity_scaling"].as<double>();
     }
-    if (yaml["max_approach_retries"]) {
-      config_.max_approach_retries = yaml["max_approach_retries"].as<int>();
+    if (yaml["max_ompl_planning_attempts"]) {
+      config_.max_ompl_planning_attempts = yaml["max_ompl_planning_attempts"].as<int>();
+    }
+    if (yaml["max_approach_validation_retries"]) {
+      config_.max_approach_validation_retries = yaml["max_approach_validation_retries"].as<int>();
     }
     if (yaml["max_cartesian_retries"]) {
       config_.max_cartesian_retries = yaml["max_cartesian_retries"].as<int>();
@@ -221,7 +358,6 @@ void WelderActionServer::load_config_from_yaml()
 
 void WelderActionServer::worker_thread_func()
 {
-  // Wait for goals using condition variable to avoid busy-waiting
   while (!shutdown_requested_) {
     std::shared_ptr<GoalHandleTriggerWelder> goal_handle;
 
@@ -245,6 +381,7 @@ void WelderActionServer::worker_thread_func()
   }
 }
 
+// TODO(@silanus23): Better path finder needed. Find trajectories through saved directories.
 std::string WelderActionServer::find_latest_json()
 {
   std::string generated_dir;
@@ -292,7 +429,6 @@ std::string WelderActionServer::find_latest_json()
       return "";
     }
 
-    // Sort by modification time (newest first)
     std::sort(json_files.begin(), json_files.end(),
       [](const auto & a, const auto & b) {
         return std::filesystem::last_write_time(a) >
@@ -308,6 +444,7 @@ std::string WelderActionServer::find_latest_json()
   }
 }
 
+//  TODO(@silanus23: Fail earlier
 std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string & filepath)
 {
   std::vector<WeldSeam> seams;
@@ -370,7 +507,6 @@ rclcpp_action::GoalResponse WelderActionServer::handle_goal(
   [[maybe_unused]] const rclcpp_action::GoalUUID & uuid,
   [[maybe_unused]] std::shared_ptr<const TriggerWelder::Goal> goal)
 {
-  // Check if node is active
   if (get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
     RCLCPP_ERROR(get_logger(), "Cannot accept goal: node is not active");
     return rclcpp_action::GoalResponse::REJECT;
@@ -393,7 +529,6 @@ rclcpp_action::CancelResponse WelderActionServer::handle_cancel(
 void WelderActionServer::handle_accepted(
   const std::shared_ptr<GoalHandleTriggerWelder> goal_handle)
 {
-  // Queue the goal for worker thread instead of blocking
   {
     std::lock_guard<std::mutex> lock(work_mutex_);
     pending_goal_ = goal_handle;
@@ -447,10 +582,8 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
   int32_t total_points_executed = 0;
   int32_t points_processed = 0;
 
-  // Process each seam
   RCLCPP_INFO(get_logger(), "Processing %zu seams", seams.size());
 
-  // Execute each seam
   for (size_t seam_idx = 0; seam_idx < seams.size(); ++seam_idx) {
     const auto & seam = seams[seam_idx];
     const auto & waypoints = seam.poses;
@@ -473,18 +606,8 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
       return;
     }
 
-    bool approach_success = false;
-    for (int attempt = 0; attempt < config_.max_approach_retries; ++attempt) {
-      publish_progress("approaching_seam_" + seam.seam_id, points_processed);
-      if (approach_seam(waypoints.front())) {
-        approach_success = true;
-        break;
-      }
-      RCLCPP_WARN(get_logger(), "Approach attempt %d/%d failed",
-                   attempt + 1, config_.max_approach_retries);
-    }
-
-    if (!approach_success) {
+    publish_progress("approaching_seam_" + seam.seam_id, points_processed);
+    if (!approach_seam(seam)) {
       RCLCPP_ERROR(get_logger(), "Failed to approach seam %s", seam.seam_id.c_str());
       failed_seams.push_back(seam.seam_id);
       continue;
@@ -565,22 +688,98 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
   }
 }
 
-bool WelderActionServer::approach_seam(const geometry_msgs::msg::Pose & first_pose)
+bool WelderActionServer::approach_seam(const WeldSeam & seam)
 {
+  const auto & first_pose = seam.poses.front();
   geometry_msgs::msg::Pose approach_pose = first_pose;
-  approach_pose.position.z += config_.approach_offset_z;
 
-  RCLCPP_INFO(get_logger(), "Approaching seam at (%.3f, %.3f, %.3f)",
-               approach_pose.position.x,
-               approach_pose.position.y,
-               approach_pose.position.z);
+  RCLCPP_INFO(get_logger(), "Target Position: (%.3f, %.3f, %.3f)",
+               approach_pose.position.x, approach_pose.position.y, approach_pose.position.z);
+
+  move_group_->setStartStateToCurrentState();
+  auto current_state = move_group_->getCurrentState();
+  if (!current_state) {
+    RCLCPP_ERROR(get_logger(), "Failed to get current robot state!");
+    return false;
+  }
+
+  auto current_pose = move_group_->getCurrentPose();
+  double distance = std::sqrt(
+    std::pow(approach_pose.position.x - current_pose.pose.position.x, 2) +
+    std::pow(approach_pose.position.y - current_pose.pose.position.y, 2) +
+    std::pow(approach_pose.position.z - current_pose.pose.position.z, 2)
+  );
+  RCLCPP_INFO(get_logger(), "Distance to target: %.3f m", distance);
+
+  const auto * joint_model_group = current_state->getJointModelGroup(move_group_->getName());
+  if (!joint_model_group) {
+    RCLCPP_ERROR(get_logger(), "Failed to get joint model group!");
+    return false;
+  }
 
   move_group_->setPoseTarget(approach_pose);
-  auto result = move_group_->move();
-  if (result == moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_INFO(get_logger(), "Approach complete");
-    return true;
+  approach_validator_->seamSetter(seam);
+
+  for (int ompl_attempt = 1; ompl_attempt <= config_.max_ompl_planning_attempts; ++ompl_attempt) {
+    RCLCPP_INFO(get_logger(), "OMPL planning attempt %d/%d for approach pose",
+                ompl_attempt, config_.max_ompl_planning_attempts);
+
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    auto plan_result = move_group_->plan(plan);
+
+    if (plan_result != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_WARN(get_logger(), "OMPL planning attempt %d failed", ompl_attempt);
+      continue;
+    }
+
+    const auto & trajectory = plan.trajectory.joint_trajectory;
+    if (trajectory.points.empty()) {
+      RCLCPP_ERROR(get_logger(), "Planned trajectory has no points");
+      continue;
+    }
+
+    const auto & final_point = trajectory.points.back();
+    if (final_point.positions.size() < 6) {
+      RCLCPP_ERROR(get_logger(), "Final point has insufficient joint values: %zu",
+                   final_point.positions.size());
+      continue;
+    }
+
+    Eigen::Matrix<double, 6, 1> q_approach;
+    for (size_t i = 0; i < 6; ++i) {
+      q_approach(i) = final_point.positions[i];
+    }
+
+    for (int val_attempt = 1; val_attempt <= config_.max_approach_validation_retries;
+      ++val_attempt)
+    {
+      RCLCPP_INFO(get_logger(), "Validation attempt %d/%d for OMPL plan %d",
+                  val_attempt, config_.max_approach_validation_retries, ompl_attempt);
+
+      if (approach_validator_->isApproachValid(q_approach)) {
+        RCLCPP_INFO(get_logger(), "Approach configuration validated! Executing plan...");
+
+        auto execute_result = move_group_->execute(plan);
+        if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
+          RCLCPP_INFO(get_logger(), "Approach complete (OMPL attempt %d, validation attempt %d)",
+                      ompl_attempt, val_attempt);
+          return true;
+        } else {
+          RCLCPP_ERROR(get_logger(), "Execution failed despite valid plan");
+          return false;
+        }
+      } else {
+        RCLCPP_WARN(get_logger(), "Validation attempt %d/%d failed",
+                    val_attempt, config_.max_approach_validation_retries);
+      }
+    }
+
+    RCLCPP_WARN(get_logger(), "All %d validation attempts failed for OMPL plan %d",
+                config_.max_approach_validation_retries, ompl_attempt);
   }
+
+  RCLCPP_ERROR(get_logger(), "Failed to find valid approach after %d OMPL attempts",
+               config_.max_ompl_planning_attempts);
   return false;
 }
 

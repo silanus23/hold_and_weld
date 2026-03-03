@@ -25,7 +25,7 @@
 
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
-namespace hold_and_weld
+namespace hold_and_weld_application
 {
 namespace kinematics
 {
@@ -132,6 +132,6 @@ private:
 };
 
 }  // namespace kinematics
-}  // namespace hold_and_weld
+}  // namespace hold_and_weld_application
 
 #endif  // HOLD_AND_WELD_APPLICATION__KINEMATICS__KINEMATICS_SOLVER_HPP_

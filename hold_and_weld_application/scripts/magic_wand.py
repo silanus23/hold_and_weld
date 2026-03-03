@@ -347,9 +347,9 @@ class MagicWand(Node):
                 axis_marker.color = color
 
                 start_point = Point()
-                start_point.x, start_point.y, start_point.z = 0.0, 0.0, 0.0
+                start_point.x, start_point.y, start_point.z = 0.0, 0.0, -0.1
                 end_point = Point()
-                end_point.x, end_point.y, end_point.z = 0.0, 0.0, 0.1
+                end_point.x, end_point.y, end_point.z = 0.0, 0.0, 0.0
                 axis_marker.points = [start_point, end_point]
 
                 marker_control.markers.append(axis_marker)

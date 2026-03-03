@@ -23,7 +23,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-namespace hold_and_weld
+namespace hold_and_weld_application
 {
 namespace kinematics
 {
@@ -441,5 +441,51 @@ void URDFParser::validate_chain(const std::vector<JointInfo> & joints)
   RCLCPP_INFO(logger, "Joint chain validation successful");
 }
 
+urdf::ModelInterfaceSharedPtr URDFParser::load_urdf_from_string(const std::string & urdf_string)
+{
+  auto logger = rclcpp::get_logger("urdf_parser");
+  RCLCPP_INFO(logger, "Parsing URDF directly from ROS 2 system string");
+
+  auto model = urdf::parseURDF(urdf_string);
+  if (!model) {
+    RCLCPP_ERROR(logger, "Failed to parse URDF from provided string");
+    throw std::runtime_error("Failed to parse URDF from string");
+  }
+
+  RCLCPP_INFO(logger, "Successfully loaded URDF model: %s", model->getName().c_str());
+  return model;
+}
+
+ParsedChain URDFParser::extract_joint_chain_from_string(
+  const std::string & urdf_string,
+  const std::string & base_link,
+  const std::string & tip_link)
+{
+  auto logger = rclcpp::get_logger("urdf_parser");
+  RCLCPP_INFO(logger, "Extracting joint chain from ROS 2 URDF string");
+  RCLCPP_DEBUG(logger, "Base link: %s, Tip link: %s", base_link.c_str(), tip_link.c_str());
+
+  if (urdf_string.empty()) {
+    throw std::invalid_argument("URDF string cannot be empty");
+  }
+
+  // Use the new string parser
+  auto model = load_urdf_from_string(urdf_string);
+
+  // Reuse all your existing robust logic
+  auto link_chain = build_link_chain(model, base_link, tip_link);
+  auto joints = extract_joints_from_chain(link_chain);
+  auto tool_transform = extract_tool_transform(link_chain, joints);
+  validate_chain(joints);
+
+  ParsedChain result;
+  result.actuated_joints = joints;
+  result.tool_transform = tool_transform;
+  result.base_link = base_link;
+  result.tip_link = tip_link;
+
+  return result;
+}
+
 }  // namespace kinematics
-}  // namespace hold_and_weld
+}  // namespace hold_and_weld_application

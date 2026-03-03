@@ -22,6 +22,7 @@
 #include <vector>
 #include <cmath>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -88,6 +89,11 @@ public:
    * @param options ROS2 node options for configuration.
    */
   explicit GripperActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+
+  /**
+   * @brief Destroy the GrippperActionServer object, ensuring proper cleanup of worker thread.
+   */
+  ~GripperActionServer() override;
 
   // Lifecycle callbacks
   /**
@@ -234,6 +240,8 @@ private:
   rclcpp_action::Server<TriggerGripper>::SharedPtr action_server_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
   rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> moveit_executor_;
+  std::thread moveit_thread_;
 
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_action_client_;
   rclcpp_lifecycle::LifecyclePublisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr

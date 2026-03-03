@@ -3,23 +3,23 @@ workpiece:
   mode: occt
 
   main_part:
-    main_path: "package://hold_and_weld_description/urdf/environment/prism.urdf.xacro"
+    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:
       xyz:
       - 1.2
-      - -0.9
+      - -0.5
       - 0.65
       rpy:
       - 0
       - 0
       - 0
   secondary_part:
-    secondary_path: "package://hold_and_weld_description/urdf/environment/prism.urdf.xacro"
+    secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
     world_pose:
       xyz:
       - 1.2
-      - -0.1
-      - 0.65
+      - -0.5
+      - 0.925
       rpy:
       - 0
       - 0

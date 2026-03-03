@@ -45,11 +45,17 @@ def generate_launch_description():
             default_value='true',
             description='Automatically start coordinated sequence when system is ready',
         ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='true',
+            description='Use simulation time',
+        ),
     ]
 
     use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
     use_rviz = LaunchConfiguration('use_rviz')
     auto_start = LaunchConfiguration('auto_start')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     bringup_launch_dir = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_bringup'), 'launch']
@@ -71,6 +77,7 @@ def generate_launch_description():
         launch_arguments={
             'spawn_in_gazebo': 'true',
             'add_to_planning_scene': 'false',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
@@ -80,6 +87,7 @@ def generate_launch_description():
         launch_arguments={
             'robot_type': 'dual',
             'controller_manager_timeout': '30',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
@@ -88,6 +96,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_move_group.launch.py']),
         launch_arguments={
             'robot_description_file': 'dual_robot.srdf',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
@@ -97,6 +106,7 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
         launch_arguments={
             'use_rviz': use_rviz,
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
@@ -106,18 +116,23 @@ def generate_launch_description():
         launch_arguments={
             'spawn_in_gazebo': 'false',
             'add_to_planning_scene': 'true',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
     # Application servers (lifecycle nodes that will wait for their dependencies)
     welder_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_welder_server.launch.py']),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items(),
     )
 
     gripper_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_gripper_server.launch.py']),
         launch_arguments={
             'auto_trigger': 'false',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
@@ -126,6 +141,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_coordinator.launch.py']),
         launch_arguments={
             'auto_start': auto_start,
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 

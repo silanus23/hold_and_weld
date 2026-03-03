@@ -218,6 +218,14 @@ class WeldPlanner:
             gap_offset_direction = -away_from_wall + main_normal
             gap_magnitude = self.gap_m
 
+        # Normalize gap offset direction to ensure correct offset distance
+        gap_offset_direction_norm = np.linalg.norm(gap_offset_direction)
+        if gap_offset_direction_norm > 1e-10:
+            gap_offset_direction = (gap_offset_direction / gap_offset_direction_norm)
+        else:
+            # Fallback: use main_normal if direction is degenerate
+            gap_offset_direction = ( main_normal / np.linalg.norm(main_normal))
+
         tangent_base, binormal_base, normal_base = self._build_base_frame(
             tangent, main_direction
         )

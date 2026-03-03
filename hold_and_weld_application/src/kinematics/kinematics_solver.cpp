@@ -17,7 +17,7 @@
 #include <stdexcept>
 #include <rclcpp/rclcpp.hpp>
 
-namespace hold_and_weld
+namespace hold_and_weld_application
 {
 namespace kinematics
 {
@@ -189,4 +189,4 @@ bool KinematicsSolver::check_joint_limits(
 }
 
 }  // namespace kinematics
-}  // namespace hold_and_weld
+}  // namespace hold_and_weld_application

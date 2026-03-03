@@ -1,12 +1,12 @@
 /**:
   ros__parameters:
     base_link:
-      urdf_path: 'urdf/environment/prism.urdf.xacro'
+      urdf_path: 'urdf/environment/workpiece.urdf.xacro'
       id: 'base_link'
       spawn_name: 'main_prism'
       pose:
         x: 1.2
-        y: -0.9
+        y: -0.5
         z: 0.65
       orientation:
         x: 0.0
@@ -15,18 +15,18 @@
         w: 1.0
 
     child_link:
-      urdf_path: 'urdf/environment/prism.urdf.xacro'
+      urdf_path: 'urdf/environment/cube.urdf.xacro'
       id: 'child_link'
       spawn_name: 'secondary_prism'
       pose:
         x: 1.2
-        y: -0.1
-        z: 0.65
+        y: 0.3
+        z: 0.125
       end_pose:
         position:
           x: 1.2
-          y: -0.1
-          z: 0.65
+          y: -0.5
+          z: 0.925
         orientation:
           x: 0.0
           y: 0.0

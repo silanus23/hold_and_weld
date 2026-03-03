@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-namespace hold_and_weld
+namespace hold_and_weld_application
 {
 namespace kinematics
 {
@@ -96,9 +96,9 @@ struct ParsedChain
  */
 class URDFParser {
 public:
-    /**
-     * @brief Construct a new URDFParser object
-     */
+  /**
+    * @brief Construct a new URDFParser object
+    */
   URDFParser();
 
     /**
@@ -106,20 +106,40 @@ public:
      */
   ~URDFParser();
 
-    /**
-     * @brief Extract joint chain from URDF file
-     *
-     * Parses URDF and extracts:
-     * - 6 actuated (revolute) joints with their local transforms
-     * - Tool transform (accumulated fixed joints after last actuated joint)
-     *
-     * @param urdf_path Path to URDF file (supports package://)
-     * @param base_link Starting link name (e.g., "robot2_base_link")
-     * @param tip_link End link name/TCP (e.g., "robot2_wire_tip")
-* @return ParsedChain containing actuated joints and tool transform
-     */
+  /**
+  * @brief Extract joint chain from URDF file
+  *
+  * Parses URDF and extracts:
+  * - 6 actuated (revolute) joints with their local transforms
+  * - Tool transform (accumulated fixed joints after last actuated joint)
+  *
+  * @param urdf_path Path to URDF file (supports package://)
+  * @param base_link Starting link name (e.g., "robot2_base_link")
+  * @param tip_link End link name/TCP (e.g., "robot2_wire_tip")
+  * @return ParsedChain containing actuated joints and tool transform
+  */
   ParsedChain extract_joint_chain(
     const std::string & urdf_path,
+    const std::string & base_link,
+    const std::string & tip_link);
+
+  /**
+  * @brief Extracts a kinematic chain directly from a raw URDF XML string.
+  *
+  * This method bypasses the filesystem and parses a URDF string natively. It builds
+  * the link tree, extracts the actuated joints between the specified base and tip
+  * links, and computes the fixed tool transform. It is designed to consume the
+  * 'robot_description' parameter directly from the ROS 2 parameter server.
+  *
+  * @param urdf_string The raw XML string containing the URDF robot description.
+  * @param base_link The name of the root link of the desired kinematic chain.
+  * @param tip_link The name of the end-effector link of the desired kinematic chain.
+  * @return ParsedChain A structure containing the ordered actuated joints and tool transform.
+  * @throws std::invalid_argument If the URDF string, base_link, or tip_link is empty.
+  * @throws std::runtime_error If the URDF string fails to parse or the chain is invalid.
+  */
+  ParsedChain extract_joint_chain_from_string(
+    const std::string & urdf_string,
     const std::string & base_link,
     const std::string & tip_link);
 
@@ -196,9 +216,18 @@ private:
      * @throws std::runtime_error if validation fails
      */
   void validate_chain(const std::vector<JointInfo> & joints);
+
+  /**
+  * @brief Parses a raw URDF XML string into a urdf::Model object in memory.
+  *
+  * @param urdf_string The raw XML string containing the URDF robot description.
+  * @return urdf::ModelInterfaceSharedPtr A shared pointer to the parsed URDF model.
+  * @throws std::runtime_error If the URDF string is invalid or fails to parse.
+  */
+  urdf::ModelInterfaceSharedPtr load_urdf_from_string(const std::string & urdf_string);
 };
 
 }  // namespace kinematics
-}  // namespace hold_and_weld
+}  // namespace hold_and_weld_application
 
 #endif  // HOLD_AND_WELD_APPLICATION__KINEMATICS__URDF_PARSER_HPP_

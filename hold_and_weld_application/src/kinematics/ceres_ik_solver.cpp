@@ -13,10 +13,12 @@
 // limitations under the License.
 
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
-
+#include <Eigen/Dense>
 #include <rclcpp/rclcpp.hpp>
+#include <vector>
+#include <cmath>
 
-namespace hold_and_weld
+namespace hold_and_weld_application
 {
 namespace kinematics
 {
@@ -24,11 +26,18 @@ namespace kinematics
 IKCostFunctor::IKCostFunctor(
   const KinematicsSolver * solver,
   const Eigen::Isometry3d & target_pose,
-  double rotation_weight)
+  double rotation_weight,
+  double seed_weight)
 : solver_(solver),
   target_pose_(target_pose),
-  rotation_weight_(rotation_weight)
+  rotation_weight_(rotation_weight),
+  seed_weight_(seed_weight)
 {}
+
+void IKCostFunctor::set_target_seed(const std::vector<double> & seed)
+{
+  q_target_seed_ = seed;
+}
 
 template<typename T>
 bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
@@ -45,7 +54,6 @@ bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
   residuals[1] = T(pos_error.y());
   residuals[2] = T(pos_error.z());
 
-  // rotation_error = R_target * R_current^T (rotation from current to target)
   Eigen::Matrix3d rotation_error = target_pose_.rotation() * current_pose.rotation().transpose();
   Eigen::AngleAxisd aa(rotation_error);
   Eigen::Vector3d rot_error = aa.angle() * aa.axis();
@@ -53,6 +61,16 @@ bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
   residuals[3] = T(rotation_weight_ * rot_error.x());
   residuals[4] = T(rotation_weight_ * rot_error.y());
   residuals[5] = T(rotation_weight_ * rot_error.z());
+
+  if (q_target_seed_.size() == 6) {
+    for (int i = 0; i < 6; ++i) {
+      residuals[6 + i] = T(seed_weight_ * (static_cast<double>(q_array[i]) - q_target_seed_[i]));
+    }
+  } else {
+    for (int i = 0; i < 6; ++i) {
+      residuals[6 + i] = T(0.0);
+    }
+  }
 
   return true;
 }
@@ -68,36 +86,37 @@ CeresIKSolver::CeresIKSolver(
 
 bool CeresIKSolver::solve(
   const Eigen::Isometry3d & target_pose,
-  const std::vector<double> & q_seed,
-  std::vector<double> & q_solution,
+  const CeresIKSolver::Vector6d & q_seed,
+  CeresIKSolver::Vector6d & q_solution,
   double position_tolerance,
   double orientation_tolerance)
 {
   auto logger = rclcpp::get_logger("ceres_ik_solver");
 
-  if (q_seed.size() != fk_solver_->dof()) {
-    RCLCPP_ERROR(
-      logger, "Seed size mismatch: expected %zu, got %zu",
-      fk_solver_->dof(), q_seed.size());
-    return false;
-  }
-
-  q_solution = q_seed;
   double q_params[6];
   for (size_t i = 0; i < 6; ++i) {
     q_params[i] = q_seed[i];
   }
 
   ceres::Problem problem;
-  // Using numeric differentiation (CENTRAL) instead of analytic Jacobian
+
+  double seed_weight = 0.01;
+  std::vector<double> seed_vec(6);
+  for (size_t i = 0; i < 6; ++i) {
+    seed_vec[i] = q_seed[i];
+  }
+
+  auto * functor = new IKCostFunctor(
+    fk_solver_.get(), target_pose, rotation_weight_, seed_weight);
+  functor->set_target_seed(seed_vec);
+
   ceres::CostFunction * cost_function =
-    new ceres::NumericDiffCostFunction<IKCostFunctor, ceres::CENTRAL, 6, 6>(
-    new IKCostFunctor(fk_solver_.get(), target_pose, rotation_weight_));
+    new ceres::NumericDiffCostFunction<IKCostFunctor, ceres::FORWARD, 12, 6>(functor);
 
   problem.AddResidualBlock(cost_function, nullptr, q_params);
 
   const auto & limits = fk_solver_->joint_limits();
-  for (size_t i = 0; i < 6; ++i) {
+  for (int i = 0; i < 6; ++i) {
     problem.SetParameterLowerBound(q_params, i, limits[i].first);
     problem.SetParameterUpperBound(q_params, i, limits[i].second);
   }
@@ -118,41 +137,31 @@ bool CeresIKSolver::solve(
   }
 
   if (!summary.IsSolutionUsable()) {
-    RCLCPP_WARN(
-      logger, "IK failed to converge: %s",
-      summary.message.c_str());
+    RCLCPP_WARN(logger, "IK failed to converge: %s", summary.message.c_str());
     return false;
   }
 
-  // Verify solution accuracy
-  Eigen::Isometry3d achieved_pose = fk_solver_->compute_fk(q_solution);
-  Eigen::Vector3d pos_error = achieved_pose.translation() - target_pose.translation();
-  double position_error = pos_error.norm();
+  std::vector<double> solution_vec(6);
+  for (size_t i = 0; i < 6; ++i) {
+    solution_vec[i] = q_solution[i];
+  }
 
-  Eigen::Matrix3d rotation_error = target_pose.rotation() * achieved_pose.rotation().transpose();
-  Eigen::AngleAxisd aa(rotation_error);
-  double orientation_error = std::abs(aa.angle());
+  Eigen::Isometry3d achieved_pose = fk_solver_->compute_fk(solution_vec);
+  double position_error = (achieved_pose.translation() - target_pose.translation()).norm();
 
-  if (position_error > position_tolerance) {
+  Eigen::AngleAxisd rot_err_aa(target_pose.rotation() * achieved_pose.rotation().transpose());
+  double orientation_error = std::abs(rot_err_aa.angle());
+
+  if (position_error > position_tolerance || orientation_error > orientation_tolerance) {
     RCLCPP_WARN(
-      logger, "IK position error too large: %.6f m (tolerance: %.6f m)",
-      position_error, position_tolerance);
+      logger, "IK Accuracy Failed: Pos Err: %.6f m, Rot Err: %.6f rad",
+      position_error, orientation_error);
     return false;
   }
 
-  if (orientation_error > orientation_tolerance) {
-    RCLCPP_WARN(
-      logger, "IK orientation error too large: %.6f rad (tolerance: %.6f rad)",
-      orientation_error, orientation_tolerance);
-    return false;
-  }
-
-  RCLCPP_DEBUG(
-    logger, "IK converged in %zu iterations (pos_err: %.4f mm, rot_err: %.4f deg)",
-    summary.iterations.size(), position_error * 1000.0, orientation_error * 180.0 / M_PI);
-
+  RCLCPP_DEBUG(logger, "IK Solution Valid within tolerances.");
   return true;
 }
 
 }  // namespace kinematics
-}  // namespace hold_and_weld
+}  // namespace hold_and_weld_application

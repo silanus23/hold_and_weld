@@ -127,6 +127,7 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         name='ros_gz_bridge',
+        parameters=[{'use_sim_time': True}],
         arguments=[
             '/world/default/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             ['/world/default/model/', robot_name, '/joint_state',

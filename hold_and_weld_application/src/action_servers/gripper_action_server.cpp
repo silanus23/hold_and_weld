@@ -125,6 +125,17 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
       internal_node->declare_parameter("robot_description_semantic", robot_description_semantic);
     }
 
+    std::string robot_description;
+    if (this->has_parameter("robot_description")) {
+      robot_description = this->get_parameter("robot_description").as_string();
+      internal_node->declare_parameter("robot_description", robot_description);
+    }
+
+        // Spin the internal node in a dedicated thread to prevent MoveIt deadlocks
+    moveit_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    moveit_executor_->add_node(internal_node);
+    moveit_thread_ = std::thread([this]() {moveit_executor_->spin();});
+
     move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
       internal_node, arm_group_name_);
 
@@ -168,6 +179,25 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   RCLCPP_INFO(get_logger(), "Gripper Action Server configured");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+GripperActionServer::~GripperActionServer()
+{
+  // Safely stop the MoveIt executor thread
+  if (moveit_executor_) {
+    moveit_executor_->cancel();
+  }
+  if (moveit_thread_.joinable()) {
+    moveit_thread_.join();
+  }
+
+  // Safely stop the job execution thread
+  {
+    std::lock_guard<std::mutex> lock(execution_mutex_);
+    if (execution_thread_ && execution_thread_->joinable()) {
+      execution_thread_->join();
+    }
+  }
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
@@ -301,7 +331,13 @@ GripperActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   action_server_.reset();
 
   move_group_.reset();
-
+  if (moveit_executor_) {
+    moveit_executor_->cancel();
+  }
+  if (moveit_thread_.joinable()) {
+    moveit_thread_.join();
+  }
+  moveit_executor_.reset();
   gripper_action_client_.reset();
   planning_scene_client_.reset();
   get_planning_scene_client_.reset();
