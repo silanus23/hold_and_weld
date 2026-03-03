@@ -15,18 +15,17 @@
 #ifndef HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_
 
+#include <cmath>
 #include <memory>
-#include <map>
 #include <mutex>
 #include <string>
-#include <vector>
-#include <cmath>
-#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <thread>
+#include <vector>
 
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
-#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <control_msgs/action/follow_joint_trajectory.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
 
 #include <moveit_msgs/msg/planning_scene.hpp>
@@ -35,11 +34,11 @@
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit_msgs/msg/attached_collision_object.hpp>
-#include <geometry_msgs/msg/pose.hpp>
-#include <control_msgs/action/follow_joint_trajectory.hpp>
-#include <controller_manager_msgs/srv/list_controllers.hpp>
 #include "hold_and_weld_application/action/trigger_gripper.hpp"
 
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 namespace hold_and_weld
 {

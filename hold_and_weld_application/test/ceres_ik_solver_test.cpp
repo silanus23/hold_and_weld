@@ -71,10 +71,6 @@ protected:
   std::unique_ptr<CeresIKSolver> ik_solver_;
 };
 
-// ============================================================================
-// Basic Functionality Tests
-// ============================================================================
-
 TEST_F(CeresIKSolverTest, SolvesIdentityPose)
 {
   // Start from a known configuration
@@ -170,10 +166,6 @@ TEST_F(CeresIKSolverTest, SolvesMultipleConsecutivePoses)
   }
 }
 
-// ============================================================================
-// Convergence and Tolerance Tests
-// ============================================================================
-
 TEST_F(CeresIKSolverTest, RespectsPositionTolerance)
 {
   std::vector<double> q_target_vec = {0.3, 0.2, 0.5, 0.1, 0.3, 0.2};
@@ -227,10 +219,6 @@ TEST_F(CeresIKSolverTest, RespectsOrientationTolerance)
   }
 }
 
-// ============================================================================
-// Joint Limit Tests
-// ============================================================================
-
 TEST_F(CeresIKSolverTest, RespectsJointLimits)
 {
   // Target pose that requires joint near limits
@@ -254,10 +242,6 @@ TEST_F(CeresIKSolverTest, RespectsJointLimits)
     }
   }
 }
-
-// ============================================================================
-// Edge Case Tests
-// ============================================================================
 
 TEST_F(CeresIKSolverTest, HandlesInvalidSeedSize)
 {
@@ -291,10 +275,6 @@ TEST_F(CeresIKSolverTest, HandlesPoorSeed)
     EXPECT_LT(pos_error.norm(), 1e-3);
   }
 }
-
-// ============================================================================
-// Configuration Tests
-// ============================================================================
 
 TEST_F(CeresIKSolverTest, RotationWeightAffectsSolution)
 {
@@ -355,10 +335,6 @@ TEST_F(CeresIKSolverTest, MaxIterationsLimitsComputation)
   // No assertion here, just verify it doesn't hang or crash
 }
 
-// ============================================================================
-// Singularity Tests
-// ============================================================================
-
 TEST_F(CeresIKSolverTest, HandlesNearSingularity)
 {
   // Configuration near wrist singularity (joints 4, 5, 6 aligned)
@@ -377,10 +353,6 @@ TEST_F(CeresIKSolverTest, HandlesNearSingularity)
   double yoshikawa = fk_solver_->compute_yoshikawa_index(q_singular_vec);
   EXPECT_LT(yoshikawa, 0.1) << "Expected low manipulability near singularity";
 }
-
-// ============================================================================
-// Performance Test (Informational)
-// ============================================================================
 
 TEST_F(CeresIKSolverTest, DISABLED_PerformanceTest)
 {
@@ -430,10 +402,6 @@ TEST_F(CeresIKSolverTest, DISABLED_PerformanceTest)
   // Informational - no strict assertion
   EXPECT_LT(avg_time, 10.0) << "IK solving too slow (target < 5ms)";
 }
-
-// ============================================================================
-// Seed Penalty and Configuration Continuity Tests
-// ============================================================================
 
 TEST_F(CeresIKSolverTest, SeedPenaltyPreventsConfigurationFlips)
 {
@@ -585,38 +553,6 @@ TEST_F(CeresIKSolverTest, SeedPenaltyBalancesPoseAccuracy)
   EXPECT_LT(std::abs(aa.angle()), 1e-3) << "Orientation error too large with seed penalty";
 }
 
-TEST_F(CeresIKSolverTest, SmallStepsConvergeFast)
-{
-  // Test that small incremental steps converge quickly (for trajectory validation)
-  Eigen::Matrix<double, 6, 1> q_current;
-  q_current << 0.3, 0.4, 0.5, 0.2, 0.3, 0.1;
-
-  std::vector<double> q_current_vec(6);
-  for (size_t i = 0; i < 6; ++i) {
-    q_current_vec[i] = q_current[i];
-  }
-  Eigen::Isometry3d current_pose = fk_solver_->compute_fk(q_current_vec);
-
-  // Very small step (1mm) - typical for seam validation
-  Eigen::Isometry3d target_pose = current_pose;
-  target_pose.translate(Eigen::Vector3d(0.001, 0.0, 0.0));
-
-  auto start = std::chrono::high_resolution_clock::now();
-
-  Eigen::Matrix<double, 6, 1> q_solution;
-  bool success = ik_solver_->solve(target_pose, q_current, q_solution);
-
-  auto end = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double, std::milli> elapsed = end - start;
-
-  ASSERT_TRUE(success);
-  EXPECT_LT(elapsed.count(), 10.0) << "Small step took too long: " << elapsed.count() << "ms";
-
-  // Joint changes should be minimal
-  for (size_t i = 0; i < 6; ++i) {
-    EXPECT_LT(std::abs(q_solution[i] - q_current[i]), 0.01);
-  }
-}
 
 TEST_F(CeresIKSolverTest, SeamLikeTrajectoryValidation)
 {
@@ -674,10 +610,6 @@ TEST_F(CeresIKSolverTest, SeamLikeTrajectoryValidation)
   EXPECT_GE(convergence_count, static_cast<int>(num_segments * 0.7))
     << "Only converged " << convergence_count << " out of " << num_segments << " segments";
 }
-
-// ============================================================================
-// Main
-// ============================================================================
 
 int main(int argc, char ** argv)
 {

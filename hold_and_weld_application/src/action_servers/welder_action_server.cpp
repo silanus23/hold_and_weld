@@ -14,20 +14,19 @@
 
 #include "hold_and_weld_application/action_servers/welder_action_server.hpp"
 
+#include <Eigen/Dense>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
-#include <filesystem>
 #include <fstream>
+#include <filesystem>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <controller_manager_msgs/srv/list_controllers.hpp>
-#include <Eigen/Dense>
-#include <nlohmann/json.hpp>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
+#include <nlohmann/json.hpp>
 #include <rclcpp/parameter_client.hpp>
-
 
 namespace hold_and_weld
 {
@@ -55,57 +54,57 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Configuring Welder Action Server");
 
-  RCLCPP_INFO(get_logger(), "Waiting for required services to become available...");
+  RCLCPP_INFO(get_logger(), "Waiting for required services to become available");
   auto temp_node = std::make_shared<rclcpp::Node>("welder_service_waiter");
 
   auto cartesian_path_client = temp_node->create_client<moveit_msgs::srv::GetCartesianPath>(
     "/compute_cartesian_path");
-  RCLCPP_INFO(get_logger(), "Waiting for MoveIt compute_cartesian_path service...");
+  RCLCPP_INFO(get_logger(), "Waiting for MoveIt compute_cartesian_path service");
   while (!cartesian_path_client->wait_for_service(std::chrono::seconds(1))) {
     if (!rclcpp::ok()) {
       RCLCPP_ERROR(get_logger(), "Interrupted while waiting for MoveIt service");
       return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
     }
-    RCLCPP_INFO(get_logger(), "Still waiting for MoveIt...");
+    RCLCPP_INFO(get_logger(), "Still waiting for MoveIt");
   }
   RCLCPP_INFO(get_logger(), "MoveIt is available");
 
   auto list_controllers_client = temp_node->create_client<
     controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
-  RCLCPP_INFO(get_logger(), "Waiting for controller_manager service...");
+  RCLCPP_INFO(get_logger(), "Waiting for controller_manager service");
   while (!list_controllers_client->wait_for_service(std::chrono::seconds(1))) {
     if (!rclcpp::ok()) {
       RCLCPP_ERROR(get_logger(), "Interrupted while waiting for controller_manager service");
       return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
     }
-    RCLCPP_INFO(get_logger(), "Still waiting for controller_manager...");
+    RCLCPP_INFO(get_logger(), "Still waiting for controller_manager");
   }
   RCLCPP_INFO(get_logger(), "Controllers are ready");
 
   load_config_from_yaml();
 
-  worker_thread_ = std::thread(&WelderActionServer::worker_thread_func, this);
-
   std::string urdf_string;
-  RCLCPP_INFO(get_logger(), "Asking robot_state_publisher for the master URDF...");
+  // Since URDF as string only needed for kinematics and here is the place we handle nodes
+  if (config_.use_approach_validator) {
+    RCLCPP_INFO(get_logger(), "Asking robot_state_publisher for the master URDF");
 
-  // Use a SyncParametersClient attached to temp_node to avoid blocking the lifecycle executor
-  auto param_client = std::make_shared<rclcpp::SyncParametersClient>(temp_node,
-      "robot_state_publisher");
+    auto param_client = std::make_shared<rclcpp::SyncParametersClient>(temp_node,
+        "robot_state_publisher");
 
-  if (param_client->wait_for_service(std::chrono::seconds(10))) {
-    auto parameters = param_client->get_parameters({"robot_description"});
-    if (!parameters.empty()) {
-      urdf_string = parameters[0].as_string();
+    if (param_client->wait_for_service(std::chrono::seconds(10))) {
+      auto parameters = param_client->get_parameters({"robot_description"});
+      if (!parameters.empty()) {
+        urdf_string = parameters[0].as_string();
+      }
+    } else {
+      RCLCPP_ERROR(get_logger(), "Failed to contact robot_state_publisher! Is it running?");
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
     }
-  } else {
-    RCLCPP_ERROR(get_logger(), "Failed to contact robot_state_publisher! Is it running?");
-    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-  }
 
-  if (urdf_string.empty()) {
-    RCLCPP_ERROR(get_logger(), "Retrieved robot_description is empty!");
-    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    if (urdf_string.empty()) {
+      RCLCPP_ERROR(get_logger(), "Retrieved robot_description is empty!");
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
   }
 
   rclcpp::Node::SharedPtr internal_node;
@@ -137,7 +136,6 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
       RCLCPP_INFO(get_logger(), "Copied robot_description_semantic to internal node");
     }
 
-    // Give MoveIt its own copy of the URDF just fetched
     internal_node->declare_parameter("robot_description", urdf_string);
     RCLCPP_INFO(get_logger(), "Copied robot_description to internal node");
 
@@ -155,78 +153,88 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     RCLCPP_INFO(get_logger(), "MoveIt initialized successfully");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Failed to initialize MoveIt: %s", e.what());
+    shutdown_worker();
+    if (moveit_executor_) {moveit_executor_->cancel();}
+    if (moveit_thread_.joinable()) {moveit_thread_.join();}
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
-  try {
-    RCLCPP_INFO(get_logger(), "Initializing kinematics solvers");
-
-    const auto * joint_model_group = move_group_->getRobotModel()->getJointModelGroup(
-      config_.welder_group_name);
-
-    if (!joint_model_group) {
-      RCLCPP_ERROR(get_logger(), "Joint model group '%s' not found in robot model",
-                   config_.welder_group_name.c_str());
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    }
-
-    const std::vector<std::string> & link_names = joint_model_group->getLinkModelNames();
-    if (link_names.size() < 2) {
-      RCLCPP_ERROR(get_logger(), "Joint model group has insufficient links: %zu",
-                   link_names.size());
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    }
-
-    const std::vector<const moveit::core::JointModel *> & joint_models =
-      joint_model_group->getActiveJointModels();
-
-    std::string base_link;
-    if (!joint_models.empty() && joint_models.front()->getParentLinkModel()) {
-      base_link = joint_models.front()->getParentLinkModel()->getName();
-    } else {
-      base_link = link_names.front();
-    }
-
-    std::string tip_link = link_names.back();
-
-    RCLCPP_INFO(get_logger(), "Detected kinematic chain: %s -> %s",
-                base_link.c_str(), tip_link.c_str());
-
-    auto urdf_parser = std::make_unique<hold_and_weld_application::kinematics::URDFParser>();
-
-    // Parse the string directly in memory using the string we fetched at the top
-    hold_and_weld_application::kinematics::ParsedChain parsed_chain;
+  if (config_.use_approach_validator) {
     try {
+      RCLCPP_INFO(get_logger(), "Initializing kinematics solvers");
+
+      const auto * joint_model_group = move_group_->getRobotModel()->getJointModelGroup(
+        config_.welder_group_name);
+
+      if (!joint_model_group) {
+        RCLCPP_ERROR(get_logger(), "Joint model group '%s' not found in robot model",
+                     config_.welder_group_name.c_str());
+        shutdown_worker();
+        if (moveit_executor_) {moveit_executor_->cancel();}
+        if (moveit_thread_.joinable()) {moveit_thread_.join();}
+        return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+      }
+
+      const std::vector<std::string> & link_names = joint_model_group->getLinkModelNames();
+      if (link_names.size() < 2) {
+        RCLCPP_ERROR(get_logger(), "Joint model group has insufficient links: %zu",
+                     link_names.size());
+        shutdown_worker();
+        if (moveit_executor_) {moveit_executor_->cancel();}
+        if (moveit_thread_.joinable()) {moveit_thread_.join();}
+        return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+      }
+
+      const std::vector<const moveit::core::JointModel *> & joint_models =
+        joint_model_group->getActiveJointModels();
+
+      std::string base_link;
+      if (!joint_models.empty() && joint_models.front()->getParentLinkModel()) {
+        base_link = joint_models.front()->getParentLinkModel()->getName();
+      } else {
+        base_link = link_names.front();
+      }
+
+      std::string tip_link = link_names.back();
+
+      RCLCPP_INFO(get_logger(), "Detected kinematic chain: %s -> %s",
+                  base_link.c_str(), tip_link.c_str());
+
+      auto urdf_parser = std::make_unique<hold_and_weld_application::kinematics::URDFParser>();
+
+      hold_and_weld_application::kinematics::ParsedChain parsed_chain;
       parsed_chain = urdf_parser->extract_joint_chain_from_string(urdf_string, base_link, tip_link);
+
+      RCLCPP_INFO(get_logger(), "Parsed kinematic chain with %zu actuated joints",
+                  parsed_chain.actuated_joints.size());
+
+      kinematics_solver_ =
+        std::make_shared<hold_and_weld_application::kinematics::KinematicsSolver>(
+        parsed_chain);
+      RCLCPP_INFO(get_logger(), "Kinematics solver initialized");
+
+      ceres_solver_ = std::make_shared<hold_and_weld_application::kinematics::CeresIKSolver>(
+        kinematics_solver_,
+        1.0);
+      RCLCPP_INFO(get_logger(), "Ceres IK solver initialized");
+
+      approach_validator_ =
+        std::make_unique<hold_and_weld_application::kinematics::ApproachValidator>(
+        kinematics_solver_,
+        ceres_solver_,
+        0.01);
+      RCLCPP_INFO(get_logger(), "Approach validator initialized");
+      RCLCPP_INFO(get_logger(), "All kinematics solvers initialized successfully");
     } catch (const std::exception & e) {
-      RCLCPP_ERROR(get_logger(), "URDF Parser failed: %s", e.what());
+      RCLCPP_ERROR(get_logger(), "Failed to initialize kinematics: %s", e.what());
+      shutdown_worker();
+      if (moveit_executor_) {moveit_executor_->cancel();}
+      if (moveit_thread_.joinable()) {moveit_thread_.join();}
       return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
     }
-
-    RCLCPP_INFO(get_logger(), "Parsed kinematic chain with %zu actuated joints",
-                parsed_chain.actuated_joints.size());
-
-    kinematics_solver_ = std::make_shared<hold_and_weld_application::kinematics::KinematicsSolver>(
-      parsed_chain);
-    RCLCPP_INFO(get_logger(), "Kinematics solver initialized");
-
-    ceres_solver_ = std::make_shared<hold_and_weld_application::kinematics::CeresIKSolver>(
-      kinematics_solver_,
-      1.0);
-    RCLCPP_INFO(get_logger(), "Ceres IK solver initialized");
-
-    approach_validator_ =
-      std::make_unique<hold_and_weld_application::kinematics::ApproachValidator>(
-      kinematics_solver_,
-      ceres_solver_,
-      0.01);
-    RCLCPP_INFO(get_logger(), "Approach validator initialized");
-    RCLCPP_INFO(get_logger(), "All kinematics solvers initialized successfully");
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(get_logger(), "Failed to initialize kinematics solvers: %s", e.what());
-    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
+
+  worker_thread_ = std::thread(&WelderActionServer::worker_thread_func, this);
 
   using namespace std::placeholders;
   action_server_ = rclcpp_action::create_server<TriggerWelder>(
@@ -316,6 +324,7 @@ void WelderActionServer::load_config_from_yaml()
     return;
   }
 
+  // There are unneeded configurations here kept as backup
   try {
     YAML::Node yaml = YAML::LoadFile(yaml_path);
 
@@ -324,6 +333,9 @@ void WelderActionServer::load_config_from_yaml()
     }
     if (yaml["approach_offset_z"]) {
       config_.approach_offset_z = yaml["approach_offset_z"].as<double>();
+    }
+    if (yaml["use_approach_validator"]) {
+      config_.use_approach_validator = yaml["use_approach_validator"].as<bool>();
     }
     if (yaml["retract_offset_z"]) {
       config_.retract_offset_z = yaml["retract_offset_z"].as<double>();
@@ -381,62 +393,54 @@ void WelderActionServer::worker_thread_func()
   }
 }
 
-// TODO(@silanus23): Better path finder needed. Find trajectories through saved directories.
 std::string WelderActionServer::find_latest_json()
 {
-  std::string generated_dir;
-
-  try {
-    std::string pkg_share =
-      ament_index_cpp::get_package_share_directory("hold_and_weld_application");
-
-    std::filesystem::path share_path(pkg_share);
-    std::filesystem::path ws_root =
-      share_path.parent_path().parent_path().parent_path().parent_path();
-
-    std::filesystem::path src_path = ws_root / "src" / "hold_and_weld" /
-      "hold_and_weld_application" / "trajectories";
-
-    if (std::filesystem::exists(src_path)) {
-      generated_dir = src_path.string();
-      RCLCPP_INFO(get_logger(), "Using source trajectory dir: %s", generated_dir.c_str());
-    } else {
-      generated_dir = pkg_share + "/trajectories";
-      RCLCPP_WARN(get_logger(), "Source dir not found, using install: %s", generated_dir.c_str());
+  // First, check if user provided a specific trajectory directory via parameter
+  std::string trajectory_dir;
+  if (this->has_parameter("trajectory_directory")) {
+    trajectory_dir = this->get_parameter("trajectory_directory").as_string();
+    RCLCPP_INFO(get_logger(), "Using trajectory directory from parameter: %s",
+                trajectory_dir.c_str());
+  } else {
+    // Fallback: use installed trajectory directory
+    try {
+      std::string pkg_share =
+        ament_index_cpp::get_package_share_directory("hold_and_weld_application");
+      trajectory_dir = pkg_share + "/trajectories";
+      RCLCPP_INFO(get_logger(), "Using installed trajectory directory: %s",
+                  trajectory_dir.c_str());
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(get_logger(), "Failed to locate package: %s", e.what());
+      return "";
     }
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(get_logger(), "Failed to locate package: %s", e.what());
-    return "";
   }
 
-  RCLCPP_INFO(get_logger(), "Searching for JSON in: %s", generated_dir.c_str());
-
-  if (!std::filesystem::exists(generated_dir)) {
-    RCLCPP_ERROR(get_logger(), "Trajectory directory does not exist: %s", generated_dir.c_str());
+  if (!std::filesystem::exists(trajectory_dir)) {
+    RCLCPP_ERROR(get_logger(), "Trajectory directory does not exist: %s",
+                 trajectory_dir.c_str());
     return "";
   }
 
   try {
     std::vector<std::filesystem::path> json_files;
-    for (const auto & entry : std::filesystem::directory_iterator(generated_dir)) {
+    for (const auto & entry : std::filesystem::directory_iterator(trajectory_dir)) {
       if (entry.path().extension() == ".json") {
         json_files.push_back(entry.path());
       }
     }
 
     if (json_files.empty()) {
-      RCLCPP_ERROR(get_logger(), "No JSON files found in: %s", generated_dir.c_str());
+      RCLCPP_ERROR(get_logger(), "No JSON files found in: %s", trajectory_dir.c_str());
       return "";
     }
 
     std::sort(json_files.begin(), json_files.end(),
       [](const auto & a, const auto & b) {
-        return std::filesystem::last_write_time(a) >
-               std::filesystem::last_write_time(b);
-            });
+        return std::filesystem::last_write_time(a) > std::filesystem::last_write_time(b);
+      });
 
     RCLCPP_INFO(get_logger(), "Found %zu JSON files, using latest: %s",
-                   json_files.size(), json_files.front().filename().string().c_str());
+                json_files.size(), json_files.front().filename().string().c_str());
     return json_files.front().string();
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Error finding JSON: %s", e.what());
@@ -444,7 +448,6 @@ std::string WelderActionServer::find_latest_json()
   }
 }
 
-//  TODO(@silanus23: Fail earlier
 std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string & filepath)
 {
   std::vector<WeldSeam> seams;
@@ -467,24 +470,31 @@ std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string
     }
 
     for (const auto & [seam_id, seam_data] : data["seams"].items()) {
+      WeldSeam seam;
+      seam.seam_id = seam_id;
+
       if (!seam_data.contains("poses")) {
         RCLCPP_WARN(get_logger(), "Seam %s has no poses, skipping", seam_id.c_str());
         continue;
       }
 
-      WeldSeam seam;
-      seam.seam_id = seam_id;
+      if (seam_data["poses"].size() == 0) {
+        RCLCPP_WARN(get_logger(), "Seam %s has empty poses array, skipping", seam_id.c_str());
+        continue;
+      }
 
-      seam.length_m = seam_data.value("length_m", 0.0);
-
-      if (seam_data.contains("start")) {
+      if (seam_data.contains("start") && seam_data["start"].size() == 3) {
         auto s = seam_data["start"];
         seam.start = {s[0], s[1], s[2]};
       }
-      if (seam_data.contains("end")) {
+      // If missing or wrong size, stays at default {0,0,0}
+
+      if (seam_data.contains("end") && seam_data["end"].size() == 3) {
         auto e = seam_data["end"];
         seam.end = {e[0], e[1], e[2]};
       }
+
+      seam.length_m = seam_data.value("length_m", 0.0);
 
       seam.poses.reserve(seam_data["poses"].size());
       for (const auto & pose_data : seam_data["poses"]) {
@@ -566,6 +576,13 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
   int32_t total_waypoints = 0;
   for (const auto & seam : seams) {
     total_waypoints += static_cast<int32_t>(seam.num_poses);
+  }
+
+  if (total_waypoints == 0) {
+    result->success = false;
+    result->message = "No waypoints to execute";
+    goal_handle->abort(result);
+    return;
   }
 
   auto publish_progress = [&](const std::string & step, int32_t points_done) {
@@ -653,7 +670,9 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
 
     publish_progress("retracting_from_seam_" + seam.seam_id, points_processed);
     if (!retract_from_seam(waypoints.back())) {
-      RCLCPP_WARN(get_logger(), "Failed to retract from seam %s", seam.seam_id.c_str());
+      RCLCPP_ERROR(get_logger(), "Failed to retract from seam %s", seam.seam_id.c_str());
+      failed_seams.push_back(seam.seam_id);
+      continue;
     }
 
     succeeded_seams.push_back(seam.seam_id);
@@ -690,10 +709,31 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
 
 bool WelderActionServer::approach_seam(const WeldSeam & seam)
 {
-  const auto & first_pose = seam.poses.front();
-  geometry_msgs::msg::Pose approach_pose = first_pose;
+  Eigen::Quaterniond q(
+    seam.poses[0].orientation.w,
+    seam.poses[0].orientation.x,
+    seam.poses[0].orientation.y,
+    seam.poses[0].orientation.z
+  );
 
-  RCLCPP_INFO(get_logger(), "Target Position: (%.3f, %.3f, %.3f)",
+  // Assuming torch points along Z-axis (adjust if different axis)
+  // Cuase tip link is antiparallel to torch
+  Eigen::Vector3d torch_direction = q * Eigen::Vector3d(0, 0, -1);
+
+  // Back up along torch direction
+  // 10 cm is hardcoded cause it's not too near but far enough to give transition speed
+  Eigen::Vector3d pos0(seam.poses[0].position.x, seam.poses[0].position.y,
+    seam.poses[0].position.z);
+  Eigen::Vector3d approach_pos = pos0 - torch_direction * 0.10;
+
+  geometry_msgs::msg::Pose approach_pose;
+  approach_pose.position.x = approach_pos.x();
+  approach_pose.position.y = approach_pos.y();
+  approach_pose.position.z = approach_pos.z();
+  approach_pose.orientation = seam.poses[0].orientation;
+
+
+  RCLCPP_INFO(get_logger(), "Approach Position: (%.3f, %.3f, %.3f)",
                approach_pose.position.x, approach_pose.position.y, approach_pose.position.z);
 
   move_group_->setStartStateToCurrentState();
@@ -709,16 +749,13 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
     std::pow(approach_pose.position.y - current_pose.pose.position.y, 2) +
     std::pow(approach_pose.position.z - current_pose.pose.position.z, 2)
   );
-  RCLCPP_INFO(get_logger(), "Distance to target: %.3f m", distance);
-
-  const auto * joint_model_group = current_state->getJointModelGroup(move_group_->getName());
-  if (!joint_model_group) {
-    RCLCPP_ERROR(get_logger(), "Failed to get joint model group!");
-    return false;
-  }
+  RCLCPP_INFO(get_logger(), "Distance to approach target: %.3f m", distance);
 
   move_group_->setPoseTarget(approach_pose);
-  approach_validator_->seamSetter(seam);
+
+  if (config_.use_approach_validator) {
+    approach_validator_->seamSetter(seam);
+  }
 
   for (int ompl_attempt = 1; ompl_attempt <= config_.max_ompl_planning_attempts; ++ompl_attempt) {
     RCLCPP_INFO(get_logger(), "OMPL planning attempt %d/%d for approach pose",
@@ -750,32 +787,38 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
       q_approach(i) = final_point.positions[i];
     }
 
-    for (int val_attempt = 1; val_attempt <= config_.max_approach_validation_retries;
-      ++val_attempt)
-    {
-      RCLCPP_INFO(get_logger(), "Validation attempt %d/%d for OMPL plan %d",
-                  val_attempt, config_.max_approach_validation_retries, ompl_attempt);
+    if (config_.use_approach_validator) {
+      for (int val_attempt = 1; val_attempt <= config_.max_approach_validation_retries;
+        ++val_attempt)
+      {
+        RCLCPP_INFO(get_logger(), "Validation attempt %d/%d for OMPL plan %d",
+                    val_attempt, config_.max_approach_validation_retries, ompl_attempt);
 
-      if (approach_validator_->isApproachValid(q_approach)) {
-        RCLCPP_INFO(get_logger(), "Approach configuration validated! Executing plan...");
+        if (approach_validator_->isApproachValid(q_approach)) {
+          RCLCPP_INFO(get_logger(), "Approach configuration validated! Executing plan");
 
-        auto execute_result = move_group_->execute(plan);
-        if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
-          RCLCPP_INFO(get_logger(), "Approach complete (OMPL attempt %d, validation attempt %d)",
-                      ompl_attempt, val_attempt);
-          return true;
+          auto execute_result = move_group_->execute(plan);
+          if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
+            RCLCPP_INFO(get_logger(), "Approach complete (OMPL attempt %d, validation attempt %d)",
+                        ompl_attempt, val_attempt);
+            return true;
+          } else {
+            RCLCPP_ERROR(get_logger(), "Execution failed despite valid plan");
+            return false;
+          }
         } else {
-          RCLCPP_ERROR(get_logger(), "Execution failed despite valid plan");
-          return false;
+          RCLCPP_WARN(get_logger(), "Validation attempt %d/%d failed",
+                      val_attempt, config_.max_approach_validation_retries);
         }
-      } else {
-        RCLCPP_WARN(get_logger(), "Validation attempt %d/%d failed",
-                    val_attempt, config_.max_approach_validation_retries);
+      }
+      RCLCPP_WARN(get_logger(), "All %d validation attempts failed for OMPL plan %d",
+                  config_.max_approach_validation_retries, ompl_attempt);
+    } else {
+      auto execute_result = move_group_->execute(plan);
+      if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
+        return true;
       }
     }
-
-    RCLCPP_WARN(get_logger(), "All %d validation attempts failed for OMPL plan %d",
-                config_.max_approach_validation_retries, ompl_attempt);
   }
 
   RCLCPP_ERROR(get_logger(), "Failed to find valid approach after %d OMPL attempts",

@@ -15,30 +15,30 @@
 #ifndef HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__WELDER_ACTION_SERVER_HPP_
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__WELDER_ACTION_SERVER_HPP_
 
-#include <string>
-#include <vector>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
 #include <array>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
-#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
-#include <controller_manager_msgs/srv/list_controllers.hpp>
-#include <geometry_msgs/msg/pose.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
+#include "hold_and_weld_application/action/trigger_welder.hpp"
 #include "hold_and_weld_application/kinematics/approach_validator.hpp"
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
-#include "hold_and_weld_application/action/trigger_welder.hpp"
 
 namespace hold_and_weld
 {
@@ -72,6 +72,7 @@ struct WelderConfig
   int max_ompl_planning_attempts = 3;
   int max_approach_validation_retries = 3;
   int max_cartesian_retries = 2;
+  bool use_approach_validator = false;
   std::string json_file;
 };
 
@@ -248,24 +249,36 @@ private:
    */
   geometry_msgs::msg::Pose json_to_pose(const nlohmann::json & pose_data)
   {
+    // Validate required fields
+    if (!pose_data.contains("position") || !pose_data.contains("quaternion")) {
+      throw std::runtime_error("Pose missing 'position' or 'quaternion' key");
+    }
+
+    if (pose_data["position"].size() != 3) {
+      throw std::runtime_error("Position array must have exactly 3 elements");
+    }
+
+    if (pose_data["quaternion"].size() != 4) {
+      throw std::runtime_error("Quaternion array must have exactly 4 elements");
+    }
+
     geometry_msgs::msg::Pose pose;
     pose.position.x = pose_data["position"][0];
     pose.position.y = pose_data["position"][1];
     pose.position.z = pose_data["position"][2];
 
-      // Load into Eigen for normalization and manipulation
-      // Note: Eigen::Quaterniond constructor takes (w, x, y, z)
+    // Load into Eigen for normalization and manipulation
+    // Note: Eigen::Quaterniond constructor takes (w, x, y, z)
     Eigen::Quaterniond q(
       pose_data["quaternion"][3],
       pose_data["quaternion"][0],
       pose_data["quaternion"][1],
       pose_data["quaternion"][2]
     );
-
     q.normalize();
 
-      // Flip 180 degrees to test the antiparallel theory
-      // Change UnitX() to UnitY() if the torch needs to flip along the other axis
+    // WARNING: Hardcoded 180° flip around X-axis for specific welding torch orientation
+    // DO NOT MODIFY unless torch or torch mounting changes
     Eigen::Quaterniond flip_rotation(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX()));
     q = q * flip_rotation;
 
@@ -275,8 +288,7 @@ private:
     pose.orientation.w = q.w();
 
     return pose;
-  }
-    // MoveIt interface
+  }    // MoveIt interface
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
 
     // MoveIt internal node execution

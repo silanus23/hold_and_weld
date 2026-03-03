@@ -238,6 +238,8 @@ install(DIRECTORY action/
   DESTINATION share/${PROJECT_NAME}/action
 )
 
+install(DIRECTORY trajectories/ DESTINATION share/${PROJECT_NAME}/trajectories)
+
 install(PROGRAMS
   scripts/utils/add_collision_objects.py
   scripts/magic_wand.py

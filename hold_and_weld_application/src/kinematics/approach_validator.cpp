@@ -14,9 +14,8 @@
 
 #include "hold_and_weld_application/kinematics/approach_validator.hpp"
 
-#include <cmath>
 #include <Eigen/Dense>
-#include <iostream>
+#include <cmath>
 
 #include "hold_and_weld_application/action_servers/welder_action_server.hpp"
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"

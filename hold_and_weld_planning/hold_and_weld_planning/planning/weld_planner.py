@@ -224,7 +224,7 @@ class WeldPlanner:
             gap_offset_direction = (gap_offset_direction / gap_offset_direction_norm)
         else:
             # Fallback: use main_normal if direction is degenerate
-            gap_offset_direction = ( main_normal / np.linalg.norm(main_normal))
+            gap_offset_direction = (main_normal / np.linalg.norm(main_normal))
 
         tangent_base, binormal_base, normal_base = self._build_base_frame(
             tangent, main_direction

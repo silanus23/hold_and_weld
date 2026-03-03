@@ -11,7 +11,7 @@ velocity_scaling: 0.3           # Velocity scaling factor (0.0-1.0)
 max_ompl_planning_attempts: 3        # Maximum OMPL planning attempts for approach
 max_approach_validation_retries: 3   # Maximum validation retries (check if approach can reach seam)
 max_cartesian_retries: 2             # Maximum attempts for Cartesian path execution
-
+use_approach_validation: false
 
 start_pose:
   position:

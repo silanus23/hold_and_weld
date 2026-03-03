@@ -13,10 +13,11 @@
 // limitations under the License.
 
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
-#include <Eigen/Dense>
-#include <rclcpp/rclcpp.hpp>
-#include <vector>
+
+ #include <Eigen/Dense>
 #include <cmath>
+
+#include <rclcpp/rclcpp.hpp>
 
 namespace hold_and_weld_application
 {
