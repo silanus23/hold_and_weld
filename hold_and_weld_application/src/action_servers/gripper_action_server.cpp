@@ -54,7 +54,7 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   // Wait for controller_manager services (indicates controllers are loaded)
   auto list_controllers_client = temp_node->create_client<
-    controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
+      controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
   RCLCPP_INFO(get_logger(), "Waiting for controller_manager service...");
   while (!list_controllers_client->wait_for_service(std::chrono::seconds(1))) {
     if (!rclcpp::ok()) {
@@ -100,9 +100,6 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
   get_planning_scene_client_ =
     create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
 
-  load_object_config();
-  load_job_from_yaml(yaml_path_);
-
   try {
     RCLCPP_INFO(get_logger(), "Initializing MoveIt");
 
@@ -131,7 +128,7 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
       internal_node->declare_parameter("robot_description", robot_description);
     }
 
-        // Spin the internal node in a dedicated thread to prevent MoveIt deadlocks
+    // Spin the internal node in a dedicated thread to prevent MoveIt deadlocks
     moveit_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     moveit_executor_->add_node(internal_node);
     moveit_thread_ = std::thread([this]() {moveit_executor_->spin();});
@@ -147,6 +144,12 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     RCLCPP_INFO(get_logger(), "MoveIt initialized successfully");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Failed to initialize MoveIt: %s", e.what());
+    if (moveit_executor_) {
+      moveit_executor_->cancel();
+    }
+    if (moveit_thread_.joinable()) {
+      moveit_thread_.join();
+    }
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
@@ -170,11 +173,16 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     }
   );
 
-  std::lock_guard<std::mutex> lock(config_mutex_);
-  if (job_loaded_) {
-    RCLCPP_INFO(get_logger(), "  Job loaded for target: %s", job_.target_id.c_str());
-  } else {
-    RCLCPP_WARN(get_logger(), "  No job loaded!");
+  load_object_config();
+  load_job_from_yaml(yaml_path_);
+
+  {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    if (job_loaded_) {
+      RCLCPP_INFO(get_logger(), "  Job loaded for target: %s", job_.target_id.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "  No job loaded!");
+    }
   }
 
   RCLCPP_INFO(get_logger(), "Gripper Action Server configured");
@@ -226,66 +234,7 @@ GripperActionServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
 
         execution_thread_ = std::make_shared<std::thread>(
           [this]() {
-            auto feedback = std::make_shared<TriggerGripper::Feedback>();
-
-            GripperJob job;
-            {
-              std::lock_guard<std::mutex> lock(config_mutex_);
-              job = job_;
-            }
-
-            int current_step_index = 0;
-            const int total_steps = 6;
-
-            auto update_feedback = [&](const std::string & step_name) {
-              RCLCPP_INFO(get_logger(), "[Auto-Step %d/%d] %s",
-                           current_step_index + 1, total_steps, step_name.c_str());
-              current_step_index++;
-            };
-
-            update_feedback("opening_gripper");
-            if (!set_gripper_position(open_position_)) {
-              RCLCPP_ERROR(get_logger(), "Failed to open gripper");
-              return;
-            }
-
-            update_feedback("moving_to_approach");
-            if (!move_to_pose(job.approach_pose, "approach")) {
-              RCLCPP_ERROR(get_logger(), "Failed to move to approach");
-              return;
-            }
-
-            update_feedback("moving_to_pick");
-            if (!move_to_pose(job.pick_pose, "pick")) {
-              RCLCPP_ERROR(get_logger(), "Failed to move to pick");
-              return;
-            }
-
-            update_feedback("closing_gripper");
-            if (!set_gripper_position(close_position_)) {
-              RCLCPP_ERROR(get_logger(), "Failed to close gripper");
-              return;
-            }
-            attach_object(job.target_id);
-
-            update_feedback("moving_to_retract");
-            if (!move_to_pose(job.retract_pose, "retract")) {
-              RCLCPP_ERROR(get_logger(), "Failed to move to retract");
-              return;
-            }
-
-            RCLCPP_INFO(get_logger(), "Allowing collision between child_link and base_link");
-            if (!allow_collision_for_placement()) {
-              RCLCPP_WARN(get_logger(), "Failed to update collision matrix, continuing anyway");
-            }
-
-            update_feedback("moving_to_place");
-            if (!move_to_pose(job.place_pose, "place")) {
-              RCLCPP_ERROR(get_logger(), "Failed to move to place");
-              return;
-            }
-
-            RCLCPP_INFO(get_logger(), "[Auto-trigger] Job completed successfully!");
+            execute_gripper_job_internal();
           }
         );
       }
@@ -305,8 +254,20 @@ GripperActionServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
     auto_trigger_timer_.reset();
   }
 
-  if (move_group_) {
-    move_group_->stop();
+  {
+    std::lock_guard<std::mutex> lock(execution_mutex_);
+    if (execution_thread_ && execution_thread_->joinable()) {
+      execution_thread_->join();
+    }
+  }
+
+  try {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to stop move group: %s", e.what());
   }
 
   attached_collision_pub_->on_deactivate();
@@ -328,20 +289,39 @@ GripperActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
     execution_thread_.reset();
   }
 
-  action_server_.reset();
+  try {
+    action_server_.reset();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to reset action_server: %s", e.what());
+  }
 
-  move_group_.reset();
-  if (moveit_executor_) {
-    moveit_executor_->cancel();
+  try {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
+    move_group_.reset();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to reset move_group: %s", e.what());
   }
-  if (moveit_thread_.joinable()) {
-    moveit_thread_.join();
+
+  try {
+    if (moveit_executor_) {
+      moveit_executor_->cancel();
+    }
+    if (moveit_thread_.joinable()) {
+      moveit_thread_.join();
+    }
+    moveit_executor_.reset();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to cleanup MoveIt executor: %s", e.what());
   }
-  moveit_executor_.reset();
-  gripper_action_client_.reset();
-  planning_scene_client_.reset();
-  get_planning_scene_client_.reset();
-  attached_collision_pub_.reset();
+
+  try {
+    gripper_action_client_.reset();
+    planning_scene_client_.reset();
+    get_planning_scene_client_.reset();
+    attached_collision_pub_.reset();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to reset clients/publishers: %s", e.what());
+  }
 
   {
     std::lock_guard<std::mutex> lock(config_mutex_);
@@ -403,6 +383,7 @@ void GripperActionServer::normalize_quaternion(geometry_msgs::msg::Quaternion & 
   q.w /= norm;
 }
 
+// TODO(@silanus23): Validate yaml values
 void GripperActionServer::load_job_from_yaml(const std::string & yaml_path)
 {
   std::lock_guard<std::mutex> lock(config_mutex_);
@@ -478,9 +459,16 @@ rclcpp_action::CancelResponse GripperActionServer::handle_cancel(
   [[maybe_unused]] const std::shared_ptr<GoalHandleTriggerGripper> goal_handle)
 {
   RCLCPP_INFO(get_logger(), "Received cancel request");
-  if (move_group_) {
-    move_group_->stop();
+
+  try {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to stop move_group: %s", e.what());
   }
+
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -498,7 +486,6 @@ void GripperActionServer::handle_accepted(
         &GripperActionServer::execute_job, this, goal_handle);
 }
 
-
 bool GripperActionServer::wait_for_planning_scene_update(int millis)
 {
   // Wait for asynchronous planning scene updates to propagate
@@ -511,6 +498,56 @@ bool GripperActionServer::wait_for_planning_scene_update(int millis)
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
+  return true;
+}
+
+bool GripperActionServer::execute_gripper_job_internal()
+{
+  GripperJob job;
+  {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    job = job_;
+  }
+
+  RCLCPP_INFO(get_logger(), "[Job] Starting gripper job for target: %s", job.target_id.c_str());
+
+  if (!set_gripper_position(open_position_)) {
+    RCLCPP_ERROR(get_logger(), "[Job] Failed to open gripper");
+    return false;
+  }
+
+  if (!move_to_pose(job.approach_pose, "approach")) {
+    RCLCPP_ERROR(get_logger(), "[Job] Failed to move to approach");
+    return false;
+  }
+
+  if (!move_to_pose(job.pick_pose, "pick")) {
+    RCLCPP_ERROR(get_logger(), "[Job] Failed to move to pick");
+    return false;
+  }
+
+  if (!set_gripper_position(close_position_)) {
+    RCLCPP_ERROR(get_logger(), "[Job] Failed to close gripper");
+    return false;
+  }
+  attach_object(job.target_id);
+
+  if (!move_to_pose(job.retract_pose, "retract")) {
+    RCLCPP_ERROR(get_logger(), "[Job] Failed to move to retract");
+    return false;
+  }
+
+  RCLCPP_INFO(get_logger(), "[Job] Allowing collision between child_link and base_link");
+  if (!allow_collision_for_placement()) {
+    RCLCPP_WARN(get_logger(), "[Job] Failed to update collision matrix, continuing anyway");
+  }
+
+  if (!move_to_pose(job.place_pose, "place")) {
+    RCLCPP_ERROR(get_logger(), "[Job] Failed to move to place");
+    return false;
+  }
+
+  RCLCPP_INFO(get_logger(), "[Job] Gripper job completed successfully");
   return true;
 }
 
@@ -665,6 +702,7 @@ bool GripperActionServer::move_to_pose(
   const geometry_msgs::msg::Pose & pose,
   const std::string & step_name)
 {
+  std::lock_guard<std::mutex> lock(move_group_mutex_);
   RCLCPP_INFO(get_logger(), "[%s] Planning to (%.3f, %.3f, %.3f)",
                step_name.c_str(),
                pose.position.x,

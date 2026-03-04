@@ -168,10 +168,16 @@ private:
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
-   * @brief Execute the gripper job for a given goal.
+   * @brief Execute the gripper job for a given goal (with action server feedback).
    * @param goal_handle Handle to the goal being executed.
    */
   void execute_job(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
+
+  /**
+   * @brief Execute the core gripper job sequence (no action server dependencies).
+   * @return true if job completed successfully, false otherwise.
+   */
+  bool execute_gripper_job_internal();
 
   // Configuration loading
   /**
@@ -271,6 +277,9 @@ private:
   // Execution thread management
   std::shared_ptr<std::thread> execution_thread_;
   std::mutex execution_mutex_;
+
+  // MoveIt thread safety
+  std::mutex move_group_mutex_;
 
   // Configuration parameters
   std::string arm_group_name_;

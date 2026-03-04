@@ -202,6 +202,10 @@ private:
   // Manual trigger service
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_service_;
 
+  // Mutexes
+  std::mutex state_mutex_;
+  std::mutex move_group_mutex_;
+
   // MoveIt interface for safety positioning
   std::shared_ptr<rclcpp::Node> moveit_node_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> welder_move_group_;

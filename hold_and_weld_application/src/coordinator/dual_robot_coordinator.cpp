@@ -129,6 +129,8 @@ DualRobotCoordinator::on_configure(const rclcpp_lifecycle::State & /*state*/)
     RCLCPP_INFO(get_logger(), "MoveIt initialized successfully for safety moves");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Failed to initialize MoveIt: %s", e.what());
+    welder_move_group_.reset();
+    moveit_node_.reset();
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
@@ -214,18 +216,23 @@ DualRobotCoordinator::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 
 void DualRobotCoordinator::check_readiness()
 {
-  if (!is_active_ || sequence_started_) {
-    return;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!is_active_ || sequence_started_) {
+      return;
+    }
   }
 
   bool controllers_ready = check_controllers_ready();
 
+  std::lock_guard<std::mutex> lock(state_mutex_);
   if (controllers_ready && !system_ready_) {
     system_ready_ = true;
     RCLCPP_INFO(get_logger(), "All controllers are ready!");
 
     if (auto_start_) {
       RCLCPP_INFO(get_logger(), "Auto-start enabled, beginning coordinated sequence...");
+      lock.~lock_guard();  // Unlock before calling execute_sequence
       execute_sequence();
     } else {
       RCLCPP_INFO(get_logger(), "System ready! Waiting for manual trigger...");
@@ -262,6 +269,8 @@ void DualRobotCoordinator::handle_trigger_service(
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*request*/,
   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+
   if (!is_active_) {
     response->success = false;
     response->message = "Coordinator is not active";
@@ -287,18 +296,22 @@ void DualRobotCoordinator::handle_trigger_service(
   response->message = "Sequence triggered successfully";
   RCLCPP_INFO(get_logger(), "Manual trigger received, starting sequence...");
 
+  lock.~lock_guard();  // Unlock before calling execute_sequence
   execute_sequence();
 }
 
 void DualRobotCoordinator::execute_sequence()
 {
-  if (sequence_started_) {
-    RCLCPP_WARN(get_logger(), "Sequence already started, ignoring duplicate call");
-    return;
-  }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (sequence_started_) {
+      RCLCPP_WARN(get_logger(), "Sequence already started, ignoring duplicate call");
+      return;
+    }
 
-  sequence_started_ = true;
-  sequence_running_ = true;
+    sequence_started_ = true;
+    sequence_running_ = true;
+  }
 
   // Cancel readiness monitoring
   if (readiness_timer_) {
@@ -312,7 +325,7 @@ void DualRobotCoordinator::execute_sequence()
 
 void DualRobotCoordinator::step_welder_safety()
 {
-  RCLCPP_INFO(get_logger(), "[Step 1/3] Moving welder to safety position...");
+  RCLCPP_INFO(get_logger(), "[Step 1/3] Moving welder to safety position");
 
   std::map<std::string, double> safety_joints;
   safety_joints["robot2_joint_1_s"] = 0.02367382699844696;
@@ -322,27 +335,45 @@ void DualRobotCoordinator::step_welder_safety()
   safety_joints["robot2_joint_5_b"] = -0.9101291555788971;
   safety_joints["robot2_joint_6_t"] = 6.26474330075644;
 
-  welder_move_group_->setJointValueTarget(safety_joints);
-  welder_move_group_->setMaxVelocityScalingFactor(0.3);
-  welder_move_group_->setPlanningTime(5.0);
+  try {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
 
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
-  bool success = (welder_move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+    welder_move_group_->setJointValueTarget(safety_joints);
+    welder_move_group_->setMaxVelocityScalingFactor(0.3);
+    welder_move_group_->setPlanningTime(5.0);
 
-  if (!success) {
-    RCLCPP_ERROR(get_logger(), "Failed to plan welder safety move!");
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    bool success = (welder_move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+    if (!success) {
+      RCLCPP_ERROR(get_logger(), "Failed to plan welder safety move!");
+      RCLCPP_ERROR(get_logger(), "Sequence aborted");
+      {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        sequence_running_ = false;
+      }
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "Safety move planned, executing");
+    auto result = welder_move_group_->execute(plan);
+
+    if (result != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_ERROR(get_logger(), "Failed to execute welder safety move!");
+      RCLCPP_ERROR(get_logger(), "Sequence aborted");
+      {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        sequence_running_ = false;
+      }
+      return;
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Exception during welder safety move: %s", e.what());
     RCLCPP_ERROR(get_logger(), "Sequence aborted");
-    sequence_running_ = false;
-    return;
-  }
-
-  RCLCPP_INFO(get_logger(), "Safety move planned, executing...");
-  auto result = welder_move_group_->execute(plan);
-
-  if (result != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_ERROR(get_logger(), "Failed to execute welder safety move!");
-    RCLCPP_ERROR(get_logger(), "Sequence aborted");
-    sequence_running_ = false;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      sequence_running_ = false;
+    }
     return;
   }
 
@@ -353,7 +384,7 @@ void DualRobotCoordinator::step_welder_safety()
 
 void DualRobotCoordinator::step_gripper_job()
 {
-  RCLCPP_INFO(get_logger(), "[Step 2/3] Executing gripper job...");
+  RCLCPP_INFO(get_logger(), "[Step 2/3] Executing gripper job");
 
   auto goal_msg = TriggerGripper::Goal();
   auto send_goal_options = rclcpp_action::Client<TriggerGripper>::SendGoalOptions();
@@ -389,21 +420,30 @@ void DualRobotCoordinator::gripper_result_callback(
   } else if (result.code == rclcpp_action::ResultCode::ABORTED) {
     RCLCPP_ERROR(get_logger(), "Gripper job aborted: %s", result.result->message.c_str());
     RCLCPP_ERROR(get_logger(), "Sequence aborted");
-    sequence_running_ = false;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      sequence_running_ = false;
+    }
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
     RCLCPP_WARN(get_logger(), "Gripper job canceled");
     RCLCPP_WARN(get_logger(), "Sequence aborted");
-    sequence_running_ = false;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      sequence_running_ = false;
+    }
   } else {
     RCLCPP_ERROR(get_logger(), "Gripper job failed with unknown result code");
     RCLCPP_ERROR(get_logger(), "Sequence aborted");
-    sequence_running_ = false;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      sequence_running_ = false;
+    }
   }
 }
 
 void DualRobotCoordinator::step_welder_job()
 {
-  RCLCPP_INFO(get_logger(), "[Step 3/3] Executing welder job...");
+  RCLCPP_INFO(get_logger(), "[Step 3/3] Executing welder job");
 
   auto goal_msg = TriggerWelder::Goal();
   auto send_goal_options = rclcpp_action::Client<TriggerWelder>::SendGoalOptions();
@@ -435,7 +475,10 @@ void DualRobotCoordinator::welder_feedback_callback(
 void DualRobotCoordinator::welder_result_callback(
   const GoalHandleTriggerWelder::WrappedResult & result)
 {
-  sequence_running_ = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    sequence_running_ = false;
+  }
 
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     RCLCPP_INFO(get_logger(), "Welder job completed successfully");
