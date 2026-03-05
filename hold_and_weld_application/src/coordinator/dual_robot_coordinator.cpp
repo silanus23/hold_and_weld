@@ -225,20 +225,26 @@ void DualRobotCoordinator::check_readiness()
 
   bool controllers_ready = check_controllers_ready();
 
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  if (controllers_ready && !system_ready_) {
-    system_ready_ = true;
-    RCLCPP_INFO(get_logger(), "All controllers are ready!");
+  bool should_execute = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (controllers_ready && !system_ready_) {
+      system_ready_ = true;
+      RCLCPP_INFO(get_logger(), "All controllers are ready!");
 
-    if (auto_start_) {
-      RCLCPP_INFO(get_logger(), "Auto-start enabled, beginning coordinated sequence...");
-      lock.~lock_guard();  // Unlock before calling execute_sequence
-      execute_sequence();
-    } else {
-      RCLCPP_INFO(get_logger(), "System ready! Waiting for manual trigger...");
-      RCLCPP_INFO(get_logger(),
-          "Call service: ros2 service call ~/trigger_sequence std_srvs/srv/Trigger");
+      if (auto_start_) {
+        RCLCPP_INFO(get_logger(), "Auto-start enabled, beginning coordinated sequence...");
+        should_execute = true;
+      } else {
+        RCLCPP_INFO(get_logger(), "System ready! Waiting for manual trigger...");
+        RCLCPP_INFO(get_logger(),
+            "Call service: ros2 service call ~/trigger_sequence std_srvs/srv/Trigger");
+      }
     }
+  }
+
+  if (should_execute) {
+    execute_sequence();
   }
 }
 
@@ -269,34 +275,35 @@ void DualRobotCoordinator::handle_trigger_service(
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*request*/,
   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
 
-  if (!is_active_) {
-    response->success = false;
-    response->message = "Coordinator is not active";
-    RCLCPP_WARN(get_logger(), "Trigger rejected: coordinator not active");
-    return;
-  }
+    if (!is_active_) {
+      response->success = false;
+      response->message = "Coordinator is not active";
+      RCLCPP_WARN(get_logger(), "Trigger rejected: coordinator not active");
+      return;
+    }
 
-  if (!system_ready_) {
-    response->success = false;
-    response->message = "System is not ready yet (controllers not available)";
-    RCLCPP_WARN(get_logger(), "Trigger rejected: system not ready");
-    return;
-  }
+    if (!system_ready_) {
+      response->success = false;
+      response->message = "System is not ready yet (controllers not available)";
+      RCLCPP_WARN(get_logger(), "Trigger rejected: system not ready");
+      return;
+    }
 
-  if (sequence_running_) {
-    response->success = false;
-    response->message = "Sequence is already running";
-    RCLCPP_WARN(get_logger(), "Trigger rejected: sequence already running");
-    return;
-  }
+    if (sequence_running_) {
+      response->success = false;
+      response->message = "Sequence is already running";
+      RCLCPP_WARN(get_logger(), "Trigger rejected: sequence already running");
+      return;
+    }
 
-  response->success = true;
-  response->message = "Sequence triggered successfully";
-  RCLCPP_INFO(get_logger(), "Manual trigger received, starting sequence...");
+    response->success = true;
+    response->message = "Sequence triggered successfully";
+    RCLCPP_INFO(get_logger(), "Manual trigger received, starting sequence...");
+  }  // Lock automatically released here
 
-  lock.~lock_guard();  // Unlock before calling execute_sequence
   execute_sequence();
 }
 
