@@ -45,3 +45,5 @@
           - EST
         projection_evaluator: joints(robot2_joint_1_s,robot2_joint_2_l,robot2_joint_3_u)
         longest_valid_segment_fraction: 0.005
+        default_planner_config: RRTConnect
+        enforce_constrained_state_space: true

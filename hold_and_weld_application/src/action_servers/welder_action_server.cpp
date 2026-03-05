@@ -222,7 +222,7 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
         std::make_unique<hold_and_weld_application::kinematics::ApproachValidator>(
         kinematics_solver_,
         ceres_solver_,
-        0.001);
+        0.000001);
       RCLCPP_INFO(get_logger(), "Approach validator initialized");
       RCLCPP_INFO(get_logger(), "All kinematics solvers initialized successfully");
     } catch (const std::exception & e) {
@@ -751,10 +751,26 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
   );
   RCLCPP_INFO(get_logger(), "Distance to approach target: %.3f m", distance);
 
+
   move_group_->setPoseTarget(approach_pose);
+  move_group_->setGoalPositionTolerance(0.001);
+  move_group_->setGoalOrientationTolerance(0.01);
+
+  WeldSeam local_seam = seam;
+
+    const auto * joint_model_group = current_state->getJointModelGroup(config_.welder_group_name);
+    std::string base_link_name = joint_model_group->getLinkModelNames().front();
+
+    Eigen::Isometry3d world_to_base = current_state->getGlobalLinkTransform(base_link_name);
+    Eigen::Isometry3d base_to_world = world_to_base.inverse();
+    // Transform ONLY the local copy's waypoints for validator.
+    // Validator needs waypoints according to robot
+    for (auto & pose : local_seam.poses) {
+      pose = transform_pose_to_base_frame(pose, base_to_world);
+    }
 
   if (config_.use_approach_validator) {
-    approach_validator_->seamSetter(seam);
+    approach_validator_->seamSetter(local_seam);
   }
 
   for (int ompl_attempt = 1; ompl_attempt <= config_.max_ompl_planning_attempts; ++ompl_attempt) {
@@ -892,6 +908,34 @@ void WelderActionServer::shutdown_worker()
   if (worker_thread_.joinable()) {
     worker_thread_.join();
   }
+}
+
+geometry_msgs::msg::Pose WelderActionServer::transform_pose_to_base_frame(
+  const geometry_msgs::msg::Pose & world_pose,
+  const Eigen::Isometry3d & base_to_world_transform)
+{
+  // Convert ROS pose to Eigen
+  Eigen::Isometry3d eigen_world_pose = Eigen::Isometry3d::Identity();
+  eigen_world_pose.translation() << world_pose.position.x, world_pose.position.y, world_pose.position.z;
+  Eigen::Quaterniond q_world(world_pose.orientation.w, world_pose.orientation.x, world_pose.orientation.y, world_pose.orientation.z);
+  eigen_world_pose.linear() = q_world.toRotationMatrix();
+
+  // Apply the coordinate transform
+  Eigen::Isometry3d eigen_base_pose = base_to_world_transform * eigen_world_pose;
+
+  // Convert back to ROS pose
+  geometry_msgs::msg::Pose base_pose;
+  base_pose.position.x = eigen_base_pose.translation().x();
+  base_pose.position.y = eigen_base_pose.translation().y();
+  base_pose.position.z = eigen_base_pose.translation().z();
+
+  Eigen::Quaterniond q_base(eigen_base_pose.rotation());
+  base_pose.orientation.w = q_base.w();
+  base_pose.orientation.x = q_base.x();
+  base_pose.orientation.y = q_base.y();
+  base_pose.orientation.z = q_base.z();
+
+  return base_pose;
 }
 
 }  // namespace hold_and_weld

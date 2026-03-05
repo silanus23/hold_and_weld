@@ -55,13 +55,23 @@ bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
   residuals[1] = T(pos_error.y());
   residuals[2] = T(pos_error.z());
 
-  Eigen::Matrix3d rotation_error = target_pose_.rotation() * current_pose.rotation().transpose();
-  Eigen::AngleAxisd aa(rotation_error);
-  Eigen::Vector3d rot_error = aa.angle() * aa.axis();
+  Eigen::Quaterniond q_target(target_pose_.rotation());
+  Eigen::Quaterniond q_current(current_pose.rotation());
 
-  residuals[3] = T(rotation_weight_ * rot_error.x());
-  residuals[4] = T(rotation_weight_ * rot_error.y());
-  residuals[5] = T(rotation_weight_ * rot_error.z());
+  // Calculate quaternion error (q_target * q_current^-1)
+  Eigen::Quaterniond q_err = q_target * q_current.conjugate();
+
+  // Quaternions double-cover 3D rotations (q and -q are the same rotation).
+  // This ensures we always take the shortest angular path.
+  if (q_err.w() < 0.0) {
+    q_err.coeffs() *= -1.0;
+  }
+
+  // The vector part (x, y, z) is perfectly smooth and differentiable at zero.
+  // For small angles, it approximates (axis * theta / 2).
+  residuals[3] = T(rotation_weight_ * q_err.x());
+  residuals[4] = T(rotation_weight_ * q_err.y());
+  residuals[5] = T(rotation_weight_ * q_err.z());
 
   if (q_target_seed_.size() == 6) {
     for (int i = 0; i < 6; ++i) {

@@ -289,6 +289,16 @@ private:
 
     return pose;
   }    // MoveIt interface
+  /**
+   * Transforms a pose from the world frame to the robot's base frame.
+   * @param world_pose The pose in the world frame.
+   * @param base_to_world_transform The transform from base to world frame.
+   * @return The pose in the robot's base frame.
+   */
+  geometry_msgs::msg::Pose transform_pose_to_base_frame(
+    const geometry_msgs::msg::Pose & world_pose,
+    const Eigen::Isometry3d & base_to_world_transform);
+
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
 
     // MoveIt internal node execution
