@@ -1,6 +1,37 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_gripper">
+  <!--
+    Gripper Convention Template
+    This URDF follows the hold_and_weld gripper convention.
+    The gripper_metadata section below is parsed by GripperParser
+    to extract kinematic information for grasp planning.
+
+    Required elements:
+    - base_link: The static palm/base of the gripper
+    - finger elements: Each movable finger with its controlling joint
+    - Joints must be prismatic type with axis and limits defined
+  -->
   <xacro:macro name="gripper_macro" params="prefix">
+
+    <!-- This section is parsed by GripperParser to extract gripper kinematics -->
+    <gripper_metadata>
+      <!-- Base link name (static part of gripper) -->
+      <base_link name="${prefix}gripper_base"/>
+
+      <!-- Finger definitions: link name and controlling joint -->
+      <!-- finger_id: 1 or 2 (for two-finger parallel grippers) -->
+      <!-- The joint axis defines the opening direction -->
+      <finger finger_id="1" link="${prefix}left_finger" joint="${prefix}left_finger_joint"/>
+      <finger finger_id="2" link="${prefix}right_finger" joint="${prefix}right_finger_joint"/>
+
+      <!-- Gripper type: parallel, angular, vacuum, etc. -->
+      <gripper_type>parallel</gripper_type>
+
+      <!-- TCP (Tool Center Point) offset from base_link origin -->
+      <!-- This is where the gripper "grasps" - typically between fingers -->
+      <tcp_offset xyz="0 0 -0.12" rpy="0 0 0"/>
+    </gripper_metadata>
+
     <link name="${prefix}gripper_base">
       <visual>
         <geometry>

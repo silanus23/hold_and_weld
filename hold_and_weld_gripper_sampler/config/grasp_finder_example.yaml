@@ -1,0 +1,232 @@
+# =============================================================================
+# GraspFinder Configuration Example
+# =============================================================================
+# This YAML file defines all inputs for the grasp sampling pipeline.
+# Copy and modify this file for your specific workpiece and gripper setup.
+#
+# Coordinate system: All poses and dimensions are in meters and radians.
+# Frame: world (or as specified in frame_id)
+# =============================================================================
+
+/**:
+  ros__parameters:
+    frame_id: 'world'
+
+    # =========================================================================
+    # Primary Workpiece (the part to be grasped)
+    # =========================================================================
+    primary:
+      # Path to STEP file (relative to package share or absolute)
+      step_path: 'meshes/workpiece.step'
+      # Alternative: URDF path (will extract collision geometry)
+      # urdf_path: 'urdf/workpiece.urdf.xacro'
+
+      # Transform from STEP file origin to world frame
+      transform:
+        translation:
+          x: 1.2
+          y: -0.5
+          z: 0.65
+        rotation:  # Quaternion (x, y, z, w)
+          x: 0.0
+          y: 0.0
+          z: 0.0
+          w: 1.0
+
+    # =========================================================================
+    # Gripper Configuration
+    # =========================================================================
+    gripper:
+      # Path to gripper URDF with <gripper_metadata> section
+      urdf_path: 'urdf/grippers/parallel_gripper.urdf.xacro'
+
+      # Override URDF values if needed (optional)
+      # min_opening: 0.02   # meters
+      # max_opening: 0.15   # meters
+
+    # =========================================================================
+    # Secondary Shapes (fixtures, ground, obstacles)
+    # =========================================================================
+    # These are collision objects the gripper must avoid.
+    # Surfaces of primary touching these will be banned or partially excluded.
+    secondaries:
+      - id: 'ground_plane'
+        type: 'ground_plane'  # Built-in primitive
+        size_x: 2.0
+        size_y: 2.0
+        z_position: 0.0
+
+      - id: 'fixture_1'
+        type: 'step'
+        step_path: 'meshes/fixture.step'
+        transform:
+          translation:
+            x: 1.0
+            y: -0.5
+            z: 0.0
+          rotation:
+            x: 0.0
+            y: 0.0
+            z: 0.0
+            w: 1.0
+
+      - id: 'support_block'
+        type: 'box'
+        dimensions:
+          x: 0.1
+          y: 0.1
+          z: 0.3
+        transform:
+          translation:
+            x: 1.2
+            y: -0.3
+            z: 0.15
+          rotation:
+            x: 0.0
+            y: 0.0
+            z: 0.0
+            w: 1.0
+
+    # =========================================================================
+    # Exclusion Zones (welds, screws, forbidden areas)
+    # =========================================================================
+    # These define regions where the gripper CANNOT contact.
+    exclusion_zones:
+      circles:
+        - id: 'weld_point_1'
+          center:
+            x: 1.25
+            y: -0.45
+            z: 0.70
+          normal:
+            x: 0.0
+            y: 0.0
+            z: 1.0
+          radius: 0.015          # 15mm radius
+          projection_depth: 0.05  # How deep to project into part
+          clearance: 0.01         # Additional safety margin
+
+        - id: 'screw_hole_1'
+          center:
+            x: 1.15
+            y: -0.55
+            z: 0.70
+          normal:
+            x: 0.0
+            y: 0.0
+            z: 1.0
+          radius: 0.008
+          projection_depth: 0.03
+          clearance: 0.005
+
+      polygons:
+        - id: 'label_area'
+          corners:
+            - { x: 1.10, y: -0.40, z: 0.70 }
+            - { x: 1.20, y: -0.40, z: 0.70 }
+            - { x: 1.20, y: -0.35, z: 0.70 }
+            - { x: 1.10, y: -0.35, z: 0.70 }
+          projection_depth: 0.02
+          clearance: 0.005
+
+      lines:
+        - id: 'weld_seam_1'
+          start:
+            x: 1.10
+            y: -0.50
+            z: 0.65
+          end:
+            x: 1.30
+            y: -0.50
+            z: 0.65
+          exclusion_radius: 0.012  # 12mm radius around line
+          projection_depth: 0.04
+          clearance: 0.008
+
+    # =========================================================================
+    # Mesh Deflection Parameters
+    # =========================================================================
+    # Controls OCCT triangulation quality for exclusion zone geometry.
+    # These affect accuracy vs performance of collision checks.
+    #
+    # Linear deflection: Maximum distance between triangulated mesh and actual surface
+    # Angular deflection: Maximum angular deviation between adjacent triangles (radians)
+    #
+    # Smaller values = more accurate geometry but slower performance
+    # Larger values = faster but may miss small geometric features
+    #
+    # Defaults are usually fine. Tune if you have:
+    # - Very small exclusion zones (decrease for accuracy)
+    # - Large/simple exclusion zones (increase for speed)
+    # - Collision detection issues (decrease linear to 0.0001)
+    mesh_deflection:
+      linear: 0.001    # Default: 1mm tolerance (good for typical parts)
+      angular: 0.1     # Default: ~5.7 degrees (good balance)
+
+    # =========================================================================
+    # Sampling Configuration
+    # =========================================================================
+    sampling:
+      # Surface pairing constraints
+      min_angle_deg: 160.0        # Min angle between opposing normals (160-180)
+      max_angle_deg: 180.0        # Max angle (180 = perfectly anti-parallel)
+      min_gripper_opening: 0.02   # Minimum grip distance (meters)
+      max_gripper_opening: 0.15   # Maximum grip distance (meters)
+
+      # Sampling density
+      sample_density: 0.01        # Grid spacing on surfaces (meters)
+      normal_sample_density: 1.0  # Samples per cm² for normal checking
+
+      # Validation thresholds
+      max_lateral_deviation: 0.02  # Max diagonal offset for valid pair (meters)
+      alignment_threshold: 0.95    # cos(~18°) - projection must align with normal
+
+    # =========================================================================
+    # Orientation Finding Configuration
+    # =========================================================================
+    orientation:
+      finger_length: 0.10         # Finger length for collision checking (meters)
+      finger_radius: 0.02         # Finger radius (meters)
+
+      # Edge-based orientation finding
+      max_edge_candidates: 5       # Check more edges for thorough testing
+      dual_seed_dedup_tolerance_deg: 3.0
+      max_edges_per_contact: 0    # 0 = no limit
+
+      # Angle offsets to test around each edge direction (degrees)
+      angle_offsets: [-15.0, 0.0, 15.0]
+
+      # Search behavior
+      stop_on_first_valid: false  # true = faster, false = exhaustive
+
+      # Collision tolerance
+      collision_tolerance: 0.001  # 1mm
+
+    # =========================================================================
+    # Kissing Surface Configuration
+    # =========================================================================
+    kissing:
+      contact_threshold: 0.8      # Surfaces with >80% contact are banned
+
+    # =========================================================================
+    # FCL Configuration
+    # =========================================================================
+    fcl:
+      enabled: true               # Use FCL for fast collision checking
+      triangulation_deflection: 0.0001  # 0.1mm mesh precision
+
+    # =========================================================================
+    # Output Configuration
+    # =========================================================================
+    output:
+      # JSON output path (relative to package or absolute)
+      json_path: 'results/grasps.json'
+
+      # How many grasps to include in output (0 = all)
+      max_grasps: 50
+
+      # Minimum quality threshold (0.0 - 1.0)
+      min_quality: 0.0
+
+      # Include debug information in output
+      include_debug: true
