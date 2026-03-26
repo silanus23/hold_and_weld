@@ -25,16 +25,15 @@ from numpy.typing import NDArray
 
 
 class ArcSegment:
-    """Represent a 3D circular arc segment.
-
-    Defines an arc by center point, radius, and discretized points along the arc.
-    Compatible with SeamExtractor output format.
+    """3D circular arc segment defined by center, radius, and discretized points.
 
     Attributes:
         center: Center point of circle as numpy array [x, y, z]
         radius: Radius of circle in meters
         points: Discretized points along arc (N, 3)
-        away_from_wall_vector: Optional vector pointing away from material
+        start: First point of arc
+        end: Last point of arc
+        away_from_wall_vector: Optional normalized vector pointing away from material
     """
 
     def __init__(
@@ -44,16 +43,6 @@ class ArcSegment:
         radius: float,
         away_from_wall_vector: List[float] | NDArray | None = None,
     ) -> None:
-        """Initialize arc segment from PathCreator geometry output.
-
-        Args:
-            points: Discretized points along arc (N x 3) - smoothed path
-            center: Center point [x, y, z] from circle fit
-            radius: Radius in meters from circle fit
-            away_from_wall_vector: Optional vector [x, y, z] pointing away
-        Raises:
-            ValueError: If points are not 3D or radius is non-positive
-        """
         self.points = np.array(points, dtype=float)
         self.center = np.array(center, dtype=float)
 
@@ -90,10 +79,12 @@ class ArcSegment:
         """Create ArcSegment from PathCreator geometry output.
 
         Args:
-            geometry: Geometry dict with 'type'='arc', 'points', 'center', 'radius'
+            geometry: Dict with 'type'='arc', 'points', 'center', 'radius'
             away_from_wall_vector: Optional away vector
+
         Returns:
             ArcSegment instance
+
         Raises:
             ValueError: If geometry type is not 'arc' or missing required fields
         """
@@ -108,7 +99,7 @@ class ArcSegment:
         )
 
     def length(self) -> float:
-        """Calculate arc length in meters."""
+        """Return arc length in meters."""
         if len(self.points) < 2:
             return 0.0
 
@@ -116,12 +107,7 @@ class ArcSegment:
         return float(np.sum(distances))
 
     def tangent_at(self, index: int) -> NDArray:
-        """Calculate tangent vector at a discretized point.
-
-        Raises:
-            IndexError: If index out of bounds
-            ValueError: If cannot compute tangent
-        """
+        """Return tangent vector at discretized point index."""
         if index < 0 or index >= len(self.points):
             raise IndexError(
                 f'Index {index} out of bounds for {len(self.points)} points'
@@ -141,12 +127,12 @@ class ArcSegment:
         return tangent / norm
 
     def midpoint(self) -> NDArray:
-        """Get middle point of the arc."""
+        """Return middle point of arc."""
         mid_index = len(self.points) // 2
         return self.points[mid_index]
 
     def point_at(self, t: float) -> NDArray:
-        """Get point along arc at parameter t."""
+        """Return point at parameter t (0=start, 1=end)."""
         if t <= 0:
             return self.points[0]
         if t >= 1:
@@ -161,11 +147,10 @@ class ArcSegment:
         return (1 - alpha) * self.points[lower_index] + alpha * self.points[upper_index]
 
     def tangent(self) -> NDArray:
-        """Calculate normalized tangent vector at start of arc."""
+        """Return normalized tangent vector at start of arc."""
         return self.tangent_at(0)
 
     def __repr__(self) -> str:
-        """Return string representation of ArcSegment."""
         has_away = (
             'with away_vector'
             if self.away_from_wall_vector is not None

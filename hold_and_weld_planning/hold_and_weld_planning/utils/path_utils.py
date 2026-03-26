@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 """File I/O utilities for loading YAML configs and exporting JSON poses."""
 
 from datetime import datetime
@@ -28,20 +27,17 @@ from ..core.seam import Seam
 def load_weld_job(
     yaml_path: str | Path,
 ) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
-    """Load weld job configuration from a YAML file.
+    """Load weld job configuration from YAML file.
 
     Args:
-        yaml_path: Path to the YAML configuration file.
+        yaml_path: Path to YAML configuration file
 
     Returns:
-        A tuple containing the following elements:
-        - seams: List of Seam objects.
-        - parameters: Dictionary of weld parameters.
-        - surface_info: Dictionary containing surface geometry information.
+        Tuple of (seams, parameters, surface_info)
 
     Raises:
-        FileNotFoundError: If the YAML file does not exist.
-        ValueError: If the YAML structure is invalid.
+        FileNotFoundError: If YAML file not found
+        ValueError: If YAML structure invalid
     """
     yaml_path = Path(yaml_path)
 
@@ -86,20 +82,17 @@ def load_weld_job(
 def load_urdf_config(
     yaml_path: str | Path,
 ) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
-    """Load URDF-based weld configuration (URDF workflow).
+    """Load URDF-based weld configuration from YAML.
 
     Args:
-        yaml_path: Path to YAML config file.
+        yaml_path: Path to YAML config file
 
     Returns:
-        A tuple containing:
-        - seams: List of Seam objects.
-        - parameters: Dictionary of weld parameters.
-        - workpiece_config: Dictionary with 'main_part' and 'secondary_part'.
+        Tuple of (seams, parameters, workpiece_config)
 
     Raises:
-        FileNotFoundError: If config file not found.
-        ValueError: If config structure invalid.
+        FileNotFoundError: If config file not found
+        ValueError: If config structure invalid
     """
     yaml_path = Path(yaml_path)
 
@@ -143,15 +136,15 @@ def export_to_json(
     output_path: str | Path,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Export generated seam poses to a JSON file.
+    """Export generated seam poses to JSON file.
 
     Args:
-        seams: List of Seam objects. Poses must be generated before export.
-        output_path: Path where the JSON file will be written.
-        metadata: Optional metadata to include in the output file.
+        seams: List of generated Seam objects
+        output_path: Output file path
+        metadata: Optional metadata dict
 
     Raises:
-        RuntimeError: If any seam has not been generated yet.
+        RuntimeError: If any seam not generated yet
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -182,19 +175,7 @@ def export_to_json(
 
 
 def auto_generate_output_path(input_path: str | Path) -> Path:
-    """Generate output path in hold_and_weld_application/trajectories/.
-
-    This allows C++ action server to read JSON without rebuilding.
-
-    Output location:
-        src/hold_and_weld/hold_and_weld_application/trajectories/
-
-    Args:
-        input_path: Path to the input file.
-
-    Returns:
-        Path object for the output file.
-    """
+    """Generate output path in hold_and_weld_application/trajectories/ directory."""
     input_path = Path(input_path)
     job_name = input_path.stem
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

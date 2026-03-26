@@ -12,19 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Weld path planner - handles all geometric calculations for trajectory generation.
-
-This module generates weld torch poses along seam paths using dual surface normals
-from both meshes. It handles coordinate frame construction, work/travel angle
-application, and gap offset calculations.
-
-The planner uses normals pre-computed by SeamExtractor to determine torch orientation
-and gap positioning without needing manual specification of away_from_wall vectors.
-
-All seams generate dense waypoint paths with configurable spacing (default 10mm) to
-ensure proper torch orientation throughout the path, even for nominally straight seams
-where surface normals may vary.
-"""
+"""Generate weld torch poses along seam paths using dual surface normals."""
 
 from typing import Any, Dict, List
 
@@ -34,15 +22,7 @@ from scipy.spatial.transform import Rotation
 
 
 class WeldPlanner:
-    """Generate weld paths for seams using dual surface normals.
-
-    Modifies seam objects in-place following the Mutable State pattern.
-    Uses normals from both meshes (pre-classified as main/secondary by
-    SeamExtractor) to compute torch orientation and gap offset.
-
-    The planner applies work angle (torch tilt toward lean direction) and
-    travel angle (torch tilt along travel direction) to generate final poses.
-    """
+    """Generate weld torch poses along seam paths using dual surface normals."""
 
     def __init__(self, parameters: Dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
@@ -151,15 +131,7 @@ class WeldPlanner:
             )
 
     def _sample_by_distance(self, points: NDArray, spacing: float) -> List[int]:
-        """Sample point indices based on distance threshold.
-
-        Args:
-            points: Array of points (N, 3)
-            spacing: Minimum distance between samples in meters
-
-        Returns:
-            List of indices into points array
-        """
+        """Sample point indices at specified spacing intervals."""
         if len(points) == 0:
             return []
 
@@ -187,18 +159,7 @@ class WeldPlanner:
         is_edge_joint: bool,
         index: int,
     ) -> Dict[str, Any]:
-        """Compute torch pose at specific point index.
-
-        Args:
-            points: Array of seam points (N, 3)
-            normals_main: Main surface normals (N, 3)
-            normals_secondary: Secondary surface normals (N, 3)
-            is_edge_joint: Whether this is edge-to-edge joint
-            index: Index of point to compute pose for
-
-        Returns:
-            Pose dictionary with position, quaternion, and matrix
-        """
+        """Compute torch pose at point index with gap offset and angle rotations."""
         tangent = self._compute_tangent(points, index)
         main_normal = normals_main[index]
         secondary_normal = normals_secondary[index]
@@ -248,18 +209,7 @@ class WeldPlanner:
         return pose
 
     def _compute_tangent(self, points: NDArray, index: int) -> NDArray:
-        """Compute tangent vector at point index along seam path.
-
-        Uses central differences for interior points, forward/backward
-        differences for endpoints.
-
-        Args:
-            points: Array of seam points (N, 3)
-            index: Index of point where tangent is needed
-
-        Returns:
-            Normalized tangent vector (3,) pointing in travel direction
-        """
+        """Compute normalized tangent at index using central differences."""
         if index == 0:
             tangent = points[1] - points[0]
         elif index == len(points) - 1:
@@ -276,21 +226,7 @@ class WeldPlanner:
     def _compute_away_vector(
         self, tangent: NDArray, main_normal: NDArray, secondary_normal: NDArray
     ) -> NDArray:
-        """Compute away_from_wall vector perpendicular to seam.
-
-        Computes a vector perpendicular to both the tangent and main normal,
-        then checks its direction relative to secondary normal to ensure it
-        points away from the secondary piece (edge piece).
-
-        Args:
-            tangent: Normalized tangent vector along seam (3,)
-            main_normal: Normal from main (base/flat) surface (3,)
-            secondary_normal: Normal from secondary (edge) piece (3,)
-
-        Returns:
-            Normalized vector (3,) perpendicular to seam, pointing away
-            from secondary piece
-        """
+        """Compute vector perpendicular to seam, pointing away from secondary piece."""
         perpendicular = np.cross(main_normal, tangent)
         norm = np.linalg.norm(perpendicular)
 
@@ -313,22 +249,7 @@ class WeldPlanner:
         tangent: NDArray,
         main_direction: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Build orthonormal coordinate frame for torch.
-
-        Constructs right-handed coordinate system with:
-        - Normal (Z-axis): torch pointing direction
-        - Tangent (X-axis): travel direction
-        - Binormal (Y-axis): perpendicular to both
-
-        Recomputes tangent from binormal × normal to enforce strict orthogonality.
-
-        Args:
-            tangent: Approximate travel direction (3,)
-            main_direction: Desired torch pointing direction (3,)
-
-        Returns:
-            Tuple of (tangent, binormal, normal), each normalized (3,)
-        """
+        """Build orthonormal frame (tangent, binormal, normal) from travel and torch directions."""
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
         binormal = binormal / np.linalg.norm(binormal)
@@ -345,25 +266,7 @@ class WeldPlanner:
         binormal: NDArray,
         lean_direction: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Apply work angle rotation toward lean direction.
-
-        Rotates torch around tangent (travel) axis by work_angle_rad toward
-        the lean direction. For edge-to-surface joints, this tilts the torch
-        away from the vertical edge piece. For edge-to-edge joints, this
-        tilts inward along the main normal.
-
-        The rotation sign is determined by checking which side of the tangent
-        axis the lean_direction falls on.
-
-        Args:
-            normal: Current torch direction (3,)
-            tangent: Travel direction (3,)
-            binormal: Cross product of normal and tangent (3,)
-            lean_direction: Target direction for tilting (3,)
-
-        Returns:
-            Tuple of rotated (normal, binormal, tangent), each (3,)
-        """
+        """Rotate torch around travel axis by work angle toward lean direction."""
         sign = np.sign(np.dot(np.cross(normal, lean_direction), tangent))
         work_rot = Rotation.from_rotvec(sign * self.work_angle_rad * tangent)
 
@@ -379,20 +282,7 @@ class WeldPlanner:
         binormal: NDArray,
         tangent: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Apply travel angle rotation around binormal axis.
-
-        Rotates torch around binormal (perpendicular to travel) axis by
-        travel_angle_rad. This tilts the torch forward or backward along
-        the direction of travel.
-
-        Args:
-            normal: Current torch direction after work angle (3,)
-            binormal: Perpendicular to travel direction (3,)
-            tangent: Travel direction (3,)
-
-        Returns:
-            Tuple of rotated (normal, binormal, tangent), each (3,)
-        """
+        """Rotate torch around binormal axis by travel angle."""
         travel_rot = Rotation.from_rotvec(self.travel_angle_rad * binormal)
         tangent_final = travel_rot.apply(tangent)
         binormal_final = travel_rot.apply(binormal)
@@ -408,32 +298,7 @@ class WeldPlanner:
         normal: NDArray,
         index: int,
     ) -> Dict[str, Any]:
-        """Build pose data dictionary with position and orientation.
-
-        Constructs final pose as:
-        - 3D position (center of torch)
-        - Quaternion orientation
-        - 4x4 transformation matrix
-
-        The coordinate frame convention is:
-        - X-axis (tangent): travel direction
-        - Y-axis (binormal): perpendicular to travel
-        - Z-axis (normal): torch pointing direction
-
-        Args:
-            position: 3D position of torch center (3,)
-            tangent: Final travel direction after angles applied (3,)
-            binormal: Final perpendicular direction (3,)
-            normal: Final torch pointing direction (3,)
-            index: Sequential point index along seam
-
-        Returns:
-            Dictionary with keys:
-                - index: int point index
-                - position: list[float] of [x, y, z]
-                - quaternion: list[float] of [x, y, z, w]
-                - matrix: list[list[float]] 4x4 transformation matrix
-        """
+        """Build pose dict with position, quaternion, and transformation matrix."""
         rot_matrix = np.column_stack([tangent, binormal, normal])
         quat = Rotation.from_matrix(rot_matrix).as_quat()
 

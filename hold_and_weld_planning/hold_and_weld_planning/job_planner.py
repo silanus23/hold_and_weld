@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""JobPlanner - Orchestrate complete weld job planning pipeline.
-
-This module coordinates geometry generation, seam extraction, and pose planning
-to produce complete weld trajectories from URDF or CAD inputs.
-
-Supports two modes:
-- MESH mode: Uses manifold3d + CGAL for mesh-based intersection
-- OCCT mode: Uses pythonocc-core for exact CAD geometry intersection
-"""
+"""Orchestrate complete weld job planning from URDF/CAD to trajectories."""
 
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -43,15 +35,9 @@ from .urdf.urdf_processor import URDFProcessor
 
 class JobPlanner:
     """Orchestrate complete weld job planning from URDF/CAD to trajectories.
-
-    Coordinates the full pipeline:
-    1. Load and process inputs (URDF or CAD files)
-    2. Generate geometry (mesh or OCCT shapes)
-    3. Extract seam geometry
-    4. Generate torch poses
-
-    Supports URDF/URDF, STL/STL, STEP/STEP, and mixed input combinations.
-    This is the main entry point for programmatic use of the planning system.
+    
+    Main entry point for programmatic use of the planning system.
+    Supports URDF, STL, and STEP inputs with automatic mode detection.
     """
 
     def __init__(
@@ -63,30 +49,20 @@ class JobPlanner:
         parameters: Optional[Dict[str, Any]] = None,
         mode: str = 'auto',
     ) -> None:
-        """Initialize job planner with input paths and poses.
-
-        Parameters dict should contain:
-            - work_angle_deg: Work angle in degrees
-            - travel_angle_deg: Travel angle in degrees
-            - gap_mm: Gap distance in millimeters
-            - epsilon: Contact detection tolerance (default 0.01m for mesh, 1e-3 for OCCT)
-            - num_smooth_points: Points per seam (default 100)
-            - refine_iterations: Mesh subdivision iterations (default 32, mesh mode only)
+        """Initialize job planner.
 
         Args:
             main_path: Path to main part (URDF/STL/STEP, supports package://)
-            secondary_path: Path to secondary part (URDF/STL/STEP)
-            main_world_pose: Dict with 'xyz' and 'rpy' for main part pose
+            secondary_path: Path to secondary part
+            main_world_pose: Dict with 'xyz' and 'rpy' for main part
             secondary_world_pose: Dict with 'xyz' and 'rpy' for secondary
-            parameters: Welding parameters dict
-            mode: Processing mode - 'auto', 'mesh', or 'occt'
-                'auto': Detect from file extensions
-                'mesh': Force mesh-based processing (STL/URDF with manifold+CGAL)
-                'occt': Force OCCT processing (STEP/IGES or URDF with pythonocc)
+            parameters: Dict with work_angle_deg, travel_angle_deg, gap_mm,
+                       epsilon (optional), num_smooth_points (optional),
+                       refine_iterations (optional)
+            mode: 'auto', 'mesh', or 'occt'
 
         Raises:
-            ValueError: If required parameters are missing or mode invalid
-            ImportError: If OCCT mode requested but pythonocc not available
+            ValueError: If parameters missing or mode invalid
         """
         self.main_path = main_path
         self.secondary_path = secondary_path
@@ -123,15 +99,7 @@ class JobPlanner:
               f'tolerance={self.parameters["epsilon"]*1000}mm')
 
     def _detect_mode(self, main_path: str, secondary_path: str) -> str:
-        """Auto-detect processing mode from file extensions.
-
-        Args:
-            main_path: Main part file path
-            secondary_path: Secondary part file path
-
-        Returns:
-            'occt' or 'mesh'
-        """
+        """Auto-detect processing mode from file extensions."""
         main_ext = Path(main_path).suffix.lower()
         secondary_ext = Path(secondary_path).suffix.lower()
 
@@ -153,7 +121,7 @@ class JobPlanner:
             List of Seam objects with generated poses
 
         Raises:
-            RuntimeError: If any pipeline stage fails
+            RuntimeError: If pipeline stage fails
         """
         if self.mode == 'occt':
             return self._plan_job_occt()
@@ -161,11 +129,7 @@ class JobPlanner:
             return self._plan_job_mesh()
 
     def _plan_job_mesh(self) -> list:
-        """Execute mesh-based planning pipeline (manifold + CGAL).
-
-        Returns:
-            List of Seam objects with generated poses
-        """
+        """Execute mesh-based planning pipeline using manifold3d and CGAL."""
         print('Generating mesh shells (manifold3d)...')
         mesh_main, mesh_secondary = self._generate_shells()
 
@@ -202,11 +166,7 @@ class JobPlanner:
         return successful_seams
 
     def _plan_job_occt(self) -> list:
-        """Execute OCCT-based planning pipeline (pythonocc).
-
-        Returns:
-            List of Seam objects with generated poses
-        """
+        """Execute OCCT-based planning pipeline using pythonocc-core."""
         print('Generating OCCT shapes (pythonocc-core)...')
         shape_main, shape_secondary = self._generate_occt_shapes()
 
@@ -238,14 +198,7 @@ class JobPlanner:
         return successful_seams
 
     def _generate_shells(self) -> tuple:
-        """Generate trimesh shells for both parts (mesh mode).
-
-        Returns:
-            Tuple of (main_mesh, secondary_mesh) as trimesh objects
-
-        Raises:
-            RuntimeError: If shell generation fails
-        """
+        """Generate trimesh shells for both parts in mesh mode."""
         mesh_main = self._load_input_mesh(self.main_path, self.main_world_transform)
         mesh_secondary = self._load_input_mesh(
             self.secondary_path, self.secondary_world_transform
@@ -268,14 +221,7 @@ class JobPlanner:
         return mesh_main, mesh_secondary
 
     def _generate_occt_shapes(self) -> tuple:
-        """Generate OCCT shapes for both parts (OCCT mode).
-
-        Returns:
-            Tuple of (shape_main, shape_secondary) as TopoDS_Shape objects
-
-        Raises:
-            RuntimeError: If shape generation fails
-        """
+        """Generate OCCT TopoDS_Shape objects for both parts in OCCT mode."""
         shape_main = self._load_input_occt(self.main_path, self.main_world_transform)
         shape_secondary = self._load_input_occt(
             self.secondary_path, self.secondary_world_transform
@@ -287,21 +233,7 @@ class JobPlanner:
         return shape_main, shape_secondary
 
     def _load_input_mesh(self, path: str, world_transform: np.ndarray) -> trimesh.Trimesh:
-        """Load input as trimesh (mesh mode).
-
-        STL files are loaded via MeshLoader. URDF files are processed
-        via URDFProcessor and ShellGenerator.
-
-        Args:
-            path: Path to URDF or STL file
-            world_transform: 4x4 world pose matrix to apply
-
-        Returns:
-            Trimesh object ready for seam extraction
-
-        Raises:
-            RuntimeError: If loading or conversion fails
-        """
+        """Load URDF or STL as trimesh with world transform applied."""
         refine_iterations = self.parameters['refine_iterations']
 
         if Path(path).suffix.lower() == '.stl':
@@ -326,21 +258,7 @@ class JobPlanner:
         )
 
     def _load_input_occt(self, path: str, world_transform: np.ndarray):
-        """Load input as OCCT shape (OCCT mode).
-
-        STEP/IGES files are loaded via OCCTLoader. URDF files are processed
-        via URDFProcessor and OCCTGenerator.
-
-        Args:
-            path: Path to URDF, STEP, or IGES file
-            world_transform: 4x4 world pose matrix to apply
-
-        Returns:
-            TopoDS_Shape ready for seam extraction
-
-        Raises:
-            RuntimeError: If loading or conversion fails
-        """
+        """Load URDF, STEP, or IGES as OCCT shape with world transform applied."""
         path_suffix = Path(path).suffix.lower()
 
         if path_suffix in ['.step', '.stp', '.iges', '.igs']:
@@ -356,14 +274,7 @@ class JobPlanner:
             return occt_gen.create_shape_for_all_links()
 
     def _pose_to_matrix(self, pose: Optional[Dict[str, list]]) -> np.ndarray:
-        """Convert xyz/rpy pose dict to 4x4 transform matrix.
-
-        Args:
-            pose: Dict with 'xyz' and 'rpy' keys, or None for identity
-
-        Returns:
-            4x4 homogeneous transform matrix
-        """
+        """Convert xyz/rpy dict to 4x4 transformation matrix."""
         if pose is None:
             return np.eye(4)
 

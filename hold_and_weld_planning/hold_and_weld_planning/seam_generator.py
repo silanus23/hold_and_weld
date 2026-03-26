@@ -14,11 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Seam generator CLI - Generate weld seams from URDF geometry.
-
-Command-line interface for automated seam detection and trajectory generation
-from URDF collision geometry.
-"""
+"""Command-line interface for automated weld seam generation from URDF/CAD geometry."""
 
 import argparse
 from pathlib import Path
@@ -36,7 +32,6 @@ from hold_and_weld_planning.utils.path_utils import (
 
 
 def parse_arguments():
-    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description='Generate weld seams from URDF geometry',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -79,7 +74,7 @@ Examples:
 
 
 def main():
-    """Run seam generation workflow."""
+    """Run seam generation workflow from CLI."""
     args = parse_arguments()
 
     if args.input is None:

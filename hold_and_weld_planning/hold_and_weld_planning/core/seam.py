@@ -25,10 +25,9 @@ from .line_segment import LineSegment
 
 
 class Seam:
-    """Represent a weld seam.
+    """Weld seam with geometry and generated poses.
 
-    Wraps a LineSegment or ArcSegment for geometry and holds weld-specific
-    state (poses, normals, metadata).
+    Wraps LineSegment or ArcSegment with weld-specific metadata.
 
     Attributes:
         segment: LineSegment or ArcSegment containing geometry
@@ -44,20 +43,6 @@ class Seam:
         arc_segment: Optional[ArcSegment] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Initialize seam from dict or segment object.
-
-            auto-detection workflow (straight seams).
-            auto-detection workflow (curved seams).
-
-        Args:
-            seam_dict: Dictionary with 'start', 'end', optional
-            line_segment: Pre-constructed LineSegment. Used for URDF
-            arc_segment: Pre-constructed ArcSegment. Used for URDF
-            config: Optional metadata dict (is_edge_joint, normals, etc)
-        Raises:
-            ValueError: If no segment provided or multiple segments given
-            KeyError: If seam_dict missing required keys
-        """
         # Validate that exactly one source is provided
         sources_provided = sum(
             [seam_dict is not None, line_segment is not None, arc_segment is not None]
@@ -91,21 +76,21 @@ class Seam:
 
     @property
     def line_segment(self) -> Optional[LineSegment]:
-        """Get segment as LineSegment if it is one."""
+        """Return segment as LineSegment if applicable, else None."""
         if isinstance(self.segment, LineSegment):
             return self.segment
         return None
 
     @property
     def arc_segment(self) -> Optional[ArcSegment]:
-        """Get segment as ArcSegment if it is one."""
+        """Return segment as ArcSegment if applicable, else None."""
         if isinstance(self.segment, ArcSegment):
             return self.segment
         return None
 
     @property
     def segment_type(self) -> str:
-        """Get type of segment."""
+        """Return 'line', 'arc', or 'unknown'."""
         if isinstance(self.segment, LineSegment):
             return 'line'
         elif isinstance(self.segment, ArcSegment):
@@ -113,11 +98,18 @@ class Seam:
         return 'unknown'
 
     def length(self) -> float:
-        """Get length of seam segment."""
+        """Return seam length in meters."""
         return self.segment.length()
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert seam to dictionary for JSON export."""
+        """Convert to dictionary for JSON export.
+
+        Returns:
+            Dictionary with geometry and pose data
+
+        Raises:
+            RuntimeError: If poses not generated yet
+        """
         if not self.is_generated:
             raise RuntimeError('Cannot export seam - poses not generated yet')
 

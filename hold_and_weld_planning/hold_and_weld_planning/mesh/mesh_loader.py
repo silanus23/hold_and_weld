@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Load and process STL meshes for weld planning.
+
+Handles package:// URI resolution, mesh refinement, and manifold conversion.
+"""
+
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -25,8 +30,10 @@ import trimesh
 class MeshLoader:
     """Load STL mesh files and convert to manifold for weld planning pipeline.
 
-    Handles package:// URI resolution, mesh refinement to increase vertex
-    density, and conversion to manifold3d format for boolean operations.
+    Attributes:
+        manifold: Processed manifold3d object ready for boolean operations
+        world_transform: Applied 4x4 transformation matrix
+        refine_iterations: Number of subdivision iterations used
     """
 
     def __init__(
@@ -41,6 +48,7 @@ class MeshLoader:
             mesh_path: Path to mesh file (supports package:// URIs)
             world_transform: Global pose matrix (4x4) to apply after loading
             refine_iterations: Number of mesh subdivision iterations (default: 32)
+
         Raises:
             ValueError: If mesh loading or conversion fails
             FileNotFoundError: If file doesn't exist
@@ -63,16 +71,7 @@ class MeshLoader:
         self.manifold = self._build_manifold(mesh)
 
     def _resolve_package_path(self, path_str: str | Path) -> Path:
-        """Resolve package:// URI to absolute path.
-
-        Args:
-            path_str: Path string, either absolute or package:// URI
-        Returns:
-            Resolved absolute path as Path object
-        Raises:
-            FileNotFoundError: If package not found or file doesn't exist
-            ValueError: If package path format is invalid
-        """
+        """Resolve package:// URI to absolute filesystem path."""
         path_str = str(path_str)
 
         if path_str.startswith('package://'):
@@ -101,15 +100,7 @@ class MeshLoader:
         return resolved
 
     def _build_manifold(self, mesh: trimesh.Trimesh) -> manifold3d.Manifold:
-        """Convert trimesh to manifold, refine, and apply world transform.
-
-        Args:
-            mesh: Loaded trimesh object
-        Returns:
-            Transformed and refined manifold
-        Raises:
-            ValueError: If conversion fails
-        """
+        """Convert trimesh to manifold, refine for density, and apply world transform."""
         try:
             manifold_obj = manifold3d.Manifold(
                 manifold3d.Mesh(

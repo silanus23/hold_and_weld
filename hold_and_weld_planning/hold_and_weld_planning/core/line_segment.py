@@ -25,14 +25,11 @@ from numpy.typing import NDArray
 
 
 class LineSegment:
-    """Represent a 3D line segment defined by start and end points.
-
-    Pure geometry class - no application-specific logic.
-    Reusable for mesh edges, rays, seams, etc.
+    """3D line segment defined by start and end points.
 
     Attributes:
-        start: Start point as numpy array [x, y, z].
-        end: End point as numpy array [x, y, z].
+        start: Start point as numpy array [x, y, z]
+        end: End point as numpy array [x, y, z]
     """
 
     def __init__(
@@ -40,15 +37,6 @@ class LineSegment:
         start: List[float] | NDArray,
         end: List[float] | NDArray,
     ) -> None:
-        """Initialize line segment from start and end points.
-
-        Args:
-            start: Start point [x, y, z] as list or numpy array.
-            end: End point [x, y, z] as list or numpy array.
-
-        Raises:
-            ValueError: If points are not 3D.
-        """
         self.start = np.array(start, dtype=float)
         self.end = np.array(end, dtype=float)
 
@@ -56,28 +44,20 @@ class LineSegment:
             raise ValueError('Start and end must be 3D points [x, y, z]')
 
     def length(self) -> float:
-        """Calculate segment length in meters.
-
-        Returns:
-            Length of the segment as a float.
-        """
+        """Return segment length in meters."""
         return float(np.linalg.norm(self.end - self.start))
 
     def tangent(self) -> NDArray:
-        """Calculate normalized tangent vector along the segment.
-
-        Raises:
-            ValueError: If segment is degenerate (zero length).
-        """
+        """Return normalized tangent vector along segment."""
         length = self.length()
         if length < 1e-9:
             raise ValueError('Segment is degenerate (zero length)')
         return (self.end - self.start) / length
 
     def midpoint(self) -> NDArray:
-        """Get middle point of the segment."""
+        """Return middle point of segment."""
         return (self.start + self.end) / 2.0
 
     def point_at(self, t: float) -> NDArray:
-        """Get point along segment at parameter t."""
+        """Return point at parameter t (0=start, 1=end)."""
         return self.start + t * (self.end - self.start)
