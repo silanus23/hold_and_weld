@@ -15,7 +15,7 @@
 """Hold and Weld Planning Package - Weld seam trajectory generation."""
 
 from .core import ArcSegment, LineSegment, Seam
-from .job_planner import JobPlanner
+from .planning.job_planner import JobPlanner
 from .mesh import (
     MeshLoader,
     PathCreator,

@@ -14,6 +14,7 @@
 
 """Weld planning and trajectory generation."""
 
+from .job_planner import JobPlanner
 from .weld_planner import WeldPlanner
 
-__all__ = ['WeldPlanner']
+__all__ = ['JobPlanner', 'WeldPlanner']

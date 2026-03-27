@@ -23,7 +23,7 @@ import sys
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).parent))
 
-from hold_and_weld_planning.job_planner import JobPlanner
+from hold_and_weld_planning.planning.job_planner import JobPlanner
 from hold_and_weld_planning.utils.path_utils import (
     auto_generate_output_path,
     export_to_json,

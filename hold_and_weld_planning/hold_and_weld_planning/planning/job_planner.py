@@ -21,21 +21,21 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import trimesh
 
-from .mesh.mesh_loader import MeshLoader
-from .mesh.seam_extractor import SeamExtractor
-from .mesh.shell_generator import ShellGenerator
+from ..mesh.mesh_loader import MeshLoader
+from ..mesh.seam_extractor import SeamExtractor
+from ..mesh.shell_generator import ShellGenerator
 
-from .occt.occt_generator import OCCTGenerator
-from .occt.occt_loader import OCCTLoader
-from .occt.seam_extractor_occt import SeamExtractorOCCT
+from ..occt.occt_generator import OCCTGenerator
+from ..occt.occt_loader import OCCTLoader
+from ..occt.seam_extractor_occt import SeamExtractorOCCT
 
-from .planning.weld_planner import WeldPlanner
-from .urdf.urdf_processor import URDFProcessor
+from .weld_planner import WeldPlanner
+from ..urdf.urdf_processor import URDFProcessor
 
 
 class JobPlanner:
     """Orchestrate complete weld job planning from URDF/CAD to trajectories.
-    
+
     Main entry point for programmatic use of the planning system.
     Supports URDF, STL, and STEP inputs with automatic mode detection.
     """
@@ -79,7 +79,6 @@ class JobPlanner:
         else:
             self.mode = mode
 
-        # Set default tolerance based on mode
         if self.mode == 'occt':
             self.parameters.setdefault('epsilon', 1e-3)
         else:
