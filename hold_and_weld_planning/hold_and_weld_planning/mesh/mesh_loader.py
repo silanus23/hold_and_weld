@@ -17,6 +17,7 @@
 Handles package:// URI resolution, mesh refinement, and manifold conversion.
 """
 
+import logging
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -26,6 +27,7 @@ import numpy as np
 from numpy.typing import NDArray
 import trimesh
 
+logger = logging.getLogger(__name__)
 
 class MeshLoader:
     """Load STL mesh files and convert to manifold for weld planning pipeline.
@@ -58,36 +60,48 @@ class MeshLoader:
                 f'world_transform must be 4x4, got {world_transform.shape}'
             )
 
+        if refine_iterations < 0:
+            raise ValueError(f'refine_iterations must be non-negative, got {refine_iterations}')
+
         self.world_transform = world_transform
         self.refine_iterations = refine_iterations
 
+        logger.debug(f'Loading mesh from {mesh_path}')
         resolved_path = self._resolve_package_path(mesh_path)
+        logger.debug(f'Resolved path: {resolved_path}')
 
         try:
             mesh = trimesh.load(resolved_path)
         except Exception as e:
+            logger.error(f'Failed to load mesh from {resolved_path}: {e}')
             raise ValueError(f'Failed to load mesh: {e}')
 
+        if len(mesh.vertices) == 0:
+            raise ValueError(f'Loaded mesh has no vertices: {resolved_path}')
+
+        logger.debug(f'Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces')
         self.manifold = self._build_manifold(mesh)
+        logger.info(f'Mesh loaded and converted to manifold (refined {refine_iterations} iterations)')
 
     def _resolve_package_path(self, path_str: str | Path) -> Path:
         """Resolve package:// URI to absolute filesystem path."""
         path_str = str(path_str)
 
+        # Handle ROS2 package:// URI scheme
         if path_str.startswith('package://'):
             without_prefix = path_str[len('package://'):]
             parts = without_prefix.split('/', 1)
 
             if len(parts) != 2:
-                raise ValueError(f'Invalid package path: {path_str}')
+                raise ValueError(f'Invalid package path format (expected package://pkg_name/path): {path_str}')
 
             package_name = parts[0]
             relative_path = parts[1]
 
             try:
-
                 package_dir = get_package_share_directory(package_name)
             except Exception as e:
+                logger.error(f"Package '{package_name}' not found in ament index")
                 raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
 
             resolved = Path(package_dir) / relative_path
@@ -95,6 +109,7 @@ class MeshLoader:
             resolved = Path(path_str)
 
         if not resolved.exists():
+            logger.error(f'File does not exist: {resolved}')
             raise FileNotFoundError(f'File not found: {resolved}')
 
         return resolved
@@ -109,12 +124,15 @@ class MeshLoader:
                 )
             )
         except Exception as e:
+            logger.error(f'Manifold conversion failed: {e}')
             raise ValueError(f'Failed to convert mesh to manifold: {e}')
 
-        # Subdivide to increase vertex density
+        # Subdivide to increase vertex density for smoother seam extraction
         if self.refine_iterations > 0:
+            logger.debug(f'Refining mesh with {self.refine_iterations} iterations')
             manifold_obj = manifold_obj.refine(self.refine_iterations)
 
+        # Apply world transform (manifold3d uses 3x4 matrix: [R|t])
         mat_3x4 = self.world_transform[:3, :].tolist()
         manifold_obj = manifold_obj.transform(mat_3x4)
 

@@ -19,6 +19,7 @@ primitives (Box, Cylinder, Sphere). Provides deterministic geometry for
 precise seam extraction without mesh approximation.
 """
 
+import logging
 from typing import Any
 
 import numpy as np
@@ -36,6 +37,8 @@ from OCC.Core.TopoDS import TopoDS_Compound
 from OCC.Core.TopoDS import TopoDS_Shape
 from scipy.spatial.transform import Rotation
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
+
+logger = logging.getLogger(__name__)
 
 
 class OCCTGenerator:
@@ -80,6 +83,11 @@ class OCCTGenerator:
         builder = BRep_Builder()
         builder.MakeCompound(compound)
 
+        total_links = len(self.robot.links)
+        processed_links = 0
+
+        logger.info(f'Creating OCCT shapes for {total_links} link(s)')
+
         for link in self.robot.links:
             collisions = (
                 link.collisions
@@ -88,11 +96,18 @@ class OCCTGenerator:
             )
 
             if not collisions:
+                logger.debug(f'Link "{link.name}" has no collision geometry, skipping')
                 continue
 
-            link_shape = self.create_link_shape(link)
-            builder.Add(compound, link_shape)
+            try:
+                link_shape = self.create_link_shape(link)
+                builder.Add(compound, link_shape)
+                processed_links += 1
+            except Exception as e:
+                logger.warning(f'Failed to create shape for link "{link.name}": {e}')
+                continue
 
+        logger.info(f'Successfully created shapes for {processed_links}/{total_links} link(s)')
         return compound
 
     def create_link_shape(self, link: Any) -> TopoDS_Shape:
@@ -114,6 +129,8 @@ class OCCTGenerator:
         )
 
         shapes = []
+
+        logger.debug(f'Processing {len(collisions)} collision element(s) for link "{link.name}"')
 
         for idx, collision in enumerate(collisions):
             geom = collision.geometry
@@ -171,17 +188,27 @@ class OCCTGenerator:
             shapes.append(transformed_shape)
 
         # Fuse all collision shapes in this link
+        if len(shapes) == 0:
+            logger.warning(f'Link "{link.name}" produced no valid shapes')
+            raise ValueError(f'Link "{link.name}" has no valid collision geometry')
+        
         if len(shapes) == 1:
             return shapes[0]
 
+        logger.debug(f'Fusing {len(shapes)} shape(s) for link "{link.name}"')
         result = shapes[0]
-        for shape in shapes[1:]:
-            result = BRepAlgoAPI_Fuse(result, shape).Shape()
+        for i, shape in enumerate(shapes[1:], start=1):
+            fused = BRepAlgoAPI_Fuse(result, shape)
+            result = fused.Shape()
+            
+            if result.IsNull():
+                logger.error(f'Fuse operation failed for link "{link.name}" at shape {i+1}/{len(shapes)}')
+                raise ValueError(f'Failed to fuse shapes for link "{link.name}"')
 
         return result
 
     def _get_collision_transform(self, collision) -> np.ndarray:
-        """Extract 4x4 transform from URDF collision origin."""
+        """Extract 4x4 homogeneous transform from URDF collision origin."""
         origin = collision.origin if collision.origin else None
 
         if origin is None:
@@ -199,7 +226,13 @@ class OCCTGenerator:
         return T
 
     def _numpy_to_gp_trsf(self, matrix: np.ndarray) -> gp_Trsf:
-        """Convert numpy 4x4 matrix to OCCT gp_Trsf."""
+        """Convert numpy 4x4 homogeneous matrix to OCCT gp_Trsf transformation."""
+        # Validate that rotation part is roughly orthogonal (no shear/scale)
+        rot = matrix[:3, :3]
+        det = np.linalg.det(rot)
+        if not np.isclose(det, 1.0, atol=1e-3):
+            logger.warning(f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear')
+        
         trsf = gp_Trsf()
 
         trsf.SetValues(

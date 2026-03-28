@@ -29,3 +29,52 @@ parameters:
   gap_mm: 25.0
   work_angle_deg: 45.0
   travel_angle_deg: 5.0
+  
+  # PathCreator configuration - Advanced geometry processing parameters
+  # All parameters are optional - defaults shown below
+  path_creator:
+    # Outlier Removal
+    # Remove points that are statistical outliers based on inter-point distances
+    outlier_std_threshold: 5.0  # Number of standard deviations for outlier detection
+    
+    # Corner Detection - General
+    min_sub_path_length: 10  # Minimum points per sub-path after splitting at corners
+    min_points_for_corner_detection: 20  # Minimum total points needed to attempt corner detection
+    
+    # Corner Detection - Angle-based Method
+    # Detects corners by measuring angle change between before/after vectors
+    corner_min_angle: 25  # Minimum angle change in degrees to detect a corner (0-180)
+    corner_angle_window: 10  # Window size (points) for angle-based detection
+    
+    # Corner Detection - Curvature-based Method
+    # Detects corners by measuring discrete curvature magnitude
+    corner_curvature_window: 10  # Window size (points) for curvature-based detection
+    corner_curvature_threshold: 0.8  # Normalized curvature threshold (0-1, higher = sharper corners only)
+    
+    # Corner Detection - Combination & Filtering
+    corner_min_agreement: 1  # Minimum detection methods that must agree on a corner (1 or 2)
+    corner_tolerance: 5  # Maximum distance (points) between detections to group as same corner
+    corner_filter_window: 5  # Window size for local maxima filtering
+    
+    # Arc Merging
+    # Merge consecutive arc segments with similar radii
+    arc_radius_tolerance: 0.05  # Maximum radius difference in meters to merge arcs
+    arc_merge_num_points: 100  # Number of points for smoothed merged arc
+    
+    # Line Merging
+    # Merge consecutive collinear line segments
+    line_angle_tolerance_deg: 10.0  # Maximum angle difference in degrees to merge lines
+    line_merge_max_error: 0.001  # Maximum fit error to allow line merge
+    line_merge_max_iterations: 20  # Maximum iterations for iterative line merging
+    
+    # Small Line Absorption
+    # Absorb small line segments into adjacent arcs
+    min_line_size: 70  # Minimum line segment size (points) to keep separate from arcs
+    line_absorption_max_error: 0.01  # Maximum fit error to merge small lines into arcs
+    line_absorption_max_iterations: 10  # Maximum iterations for absorption process
+    
+    # First/Last Segment Merging (for closed paths)
+    # Merge first and last segments if path was split arbitrarily at a corner
+    first_last_angle_tolerance: 10  # Angle tolerance in degrees for merging first/last lines
+    first_last_radius_tolerance: 0.05  # Radius tolerance in meters for merging first/last arcs
+    first_last_gap_threshold: 0.01  # Maximum spatial gap in meters to allow merge

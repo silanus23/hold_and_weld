@@ -60,4 +60,5 @@ class LineSegment:
 
     def point_at(self, t: float) -> NDArray:
         """Return point at parameter t (0=start, 1=end)."""
+        # Linear interpolation: p(t) = start + t * (end - start)
         return self.start + t * (self.end - self.start)

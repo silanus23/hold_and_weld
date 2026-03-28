@@ -14,11 +14,14 @@
 
 """Generate weld torch poses along seam paths using dual surface normals."""
 
+import logging
 from typing import Any, Dict, List
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
+
+logger = logging.getLogger(__name__)
 
 
 class WeldPlanner:
@@ -56,6 +59,13 @@ class WeldPlanner:
                 f'got {parameters.get("waypoint_spacing_mm", 10.0)}'
             )
 
+        logger.debug(
+            f'WeldPlanner initialized: work_angle={parameters["work_angle_deg"]}°, '
+            f'travel_angle={parameters["travel_angle_deg"]}°, '
+            f'gap={parameters["gap_mm"]}mm, '
+            f'waypoint_spacing={parameters.get("waypoint_spacing_mm", 10.0)}mm'
+        )
+
     def generate_seam(self, seam: Any) -> None:
         """Generate dense waypoint path for seam. Modifies seam object in place.
 
@@ -88,9 +98,12 @@ class WeldPlanner:
         normals_secondary = seam.config['normals_secondary']
         is_edge_joint = seam.config['is_edge_joint']
 
+        logger.debug(f'Generating poses for seam with {len(points)} points')
+
         self._validate_arrays(points, normals_main, normals_secondary)
 
         sampled_indices = self._sample_by_distance(points, self.waypoint_spacing_m)
+        logger.debug(f'Sampled {len(sampled_indices)} waypoints from {len(points)} points')
 
         poses = []
         for idx in sampled_indices:
@@ -101,20 +114,12 @@ class WeldPlanner:
 
         seam.poses = poses
         seam.is_generated = True
+        logger.info(f'Generated {len(poses)} poses for seam')
 
     def _validate_arrays(
         self, points: NDArray, normals_main: NDArray, normals_secondary: NDArray
     ) -> None:
-        """Validate that input arrays have consistent lengths.
-
-        Args:
-            points: Seam points array
-            normals_main: Main normals array
-            normals_secondary: Secondary normals array
-
-        Raises:
-            ValueError: If arrays have mismatched lengths or too few points
-        """
+        """Validate input arrays have consistent lengths and sufficient points."""
         if len(points) < 2:
             raise ValueError('Need at least 2 points to generate poses')
 
@@ -131,7 +136,7 @@ class WeldPlanner:
             )
 
     def _sample_by_distance(self, points: NDArray, spacing: float) -> List[int]:
-        """Sample point indices at specified spacing intervals."""
+        """Return point indices sampled at specified spacing along path."""
         if len(points) == 0:
             return []
 
@@ -159,7 +164,7 @@ class WeldPlanner:
         is_edge_joint: bool,
         index: int,
     ) -> Dict[str, Any]:
-        """Compute torch pose at point index with gap offset and angle rotations."""
+        """Compute torch pose at index with gap offset and work/travel angle rotations."""
         tangent = self._compute_tangent(points, index)
         main_normal = normals_main[index]
         secondary_normal = normals_secondary[index]
@@ -185,6 +190,7 @@ class WeldPlanner:
             gap_offset_direction = (gap_offset_direction / gap_offset_direction_norm)
         else:
             # Fallback: use main_normal if direction is degenerate
+            logger.debug(f'Degenerate gap offset direction at index {index}, using main_normal')
             gap_offset_direction = (main_normal / np.linalg.norm(main_normal))
 
         tangent_base, binormal_base, normal_base = self._build_base_frame(
@@ -209,7 +215,7 @@ class WeldPlanner:
         return pose
 
     def _compute_tangent(self, points: NDArray, index: int) -> NDArray:
-        """Compute normalized tangent at index using central differences."""
+        """Compute normalized tangent vector at index using central differences."""
         if index == 0:
             tangent = points[1] - points[0]
         elif index == len(points) - 1:
@@ -226,16 +232,21 @@ class WeldPlanner:
     def _compute_away_vector(
         self, tangent: NDArray, main_normal: NDArray, secondary_normal: NDArray
     ) -> NDArray:
-        """Compute vector perpendicular to seam, pointing away from secondary piece."""
+        """Compute vector perpendicular to seam pointing away from secondary piece."""
         perpendicular = np.cross(main_normal, tangent)
         norm = np.linalg.norm(perpendicular)
 
         if norm < 1e-10:
+            logger.debug('Tangent nearly parallel to main_normal, using fallback axes')
             perpendicular = np.cross(np.array([0, 0, 1]), tangent)
             norm = np.linalg.norm(perpendicular)
             if norm < 1e-10:
                 perpendicular = np.cross(np.array([1, 0, 0]), tangent)
                 norm = np.linalg.norm(perpendicular)
+                if norm < 1e-10:
+                    # All fallbacks failed - degenerate tangent vector
+                    logger.warning('Degenerate tangent in _compute_away_vector, using [0, 1, 0]')
+                    perpendicular = np.array([0, 1, 0])
 
         perpendicular = perpendicular / np.linalg.norm(perpendicular)
 
@@ -249,7 +260,7 @@ class WeldPlanner:
         tangent: NDArray,
         main_direction: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Build orthonormal frame (tangent, binormal, normal) from travel and torch directions."""
+        """Build orthonormal frame (tangent, binormal, normal) from tangent and torch direction."""
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
         binormal = binormal / np.linalg.norm(binormal)
@@ -266,7 +277,7 @@ class WeldPlanner:
         binormal: NDArray,
         lean_direction: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Rotate torch around travel axis by work angle toward lean direction."""
+        """Rotate torch around tangent axis by work angle toward lean direction."""
         sign = np.sign(np.dot(np.cross(normal, lean_direction), tangent))
         work_rot = Rotation.from_rotvec(sign * self.work_angle_rad * tangent)
 
@@ -282,7 +293,7 @@ class WeldPlanner:
         binormal: NDArray,
         tangent: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Rotate torch around binormal axis by travel angle."""
+        """Rotate torch around binormal axis by travel angle (pushes/pulls along weld direction)."""
         travel_rot = Rotation.from_rotvec(self.travel_angle_rad * binormal)
         tangent_final = travel_rot.apply(tangent)
         binormal_final = travel_rot.apply(binormal)
@@ -298,7 +309,7 @@ class WeldPlanner:
         normal: NDArray,
         index: int,
     ) -> Dict[str, Any]:
-        """Build pose dict with position, quaternion, and transformation matrix."""
+        """Build pose dictionary with position, quaternion, and 4x4 transform matrix."""
         rot_matrix = np.column_stack([tangent, binormal, normal])
         quat = Rotation.from_matrix(rot_matrix).as_quat()
 

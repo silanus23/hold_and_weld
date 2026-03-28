@@ -18,6 +18,7 @@ Handles package:// URI resolution, applies world transforms, and provides
 OCCT TopoDS_Shape objects for exact geometric seam extraction.
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,8 @@ try:
     from ament_index_python.packages import get_package_share_directory
 except ImportError:
     get_package_share_directory = None
+
+logger = logging.getLogger(__name__)
 
 
 class OCCTLoader:
@@ -64,28 +67,22 @@ class OCCTLoader:
 
         self.world_transform = world_transform
 
+        logger.info(f'Loading CAD file: {cad_path}')
         resolved_path = self._resolve_package_path(cad_path)
+        logger.debug(f'Resolved path: {resolved_path}')
 
         try:
             shape = self._load_cad_file(resolved_path)
         except Exception as e:
+            logger.error(f'Failed to load CAD file: {e}')
             raise ValueError(f'Failed to load CAD file: {e}')
 
+        logger.debug('Applying world transform to loaded shape')
         self.shape = self._apply_transform(shape, world_transform)
+        logger.info('CAD file loaded and transformed successfully')
 
     def _resolve_package_path(self, path_str: str | Path) -> Path:
-        """Resolve package:// URI to absolute path.
-
-        Args:
-            path_str: Path string, either absolute or package:// URI
-
-        Returns:
-            Resolved absolute path as Path object
-
-        Raises:
-            FileNotFoundError: If package not found or file doesn't exist
-            ValueError: If package path format is invalid
-        """
+        """Resolve package:// URI to absolute filesystem path."""
         path_str = str(path_str)
 
         if path_str.startswith('package://'):
@@ -118,17 +115,7 @@ class OCCTLoader:
         return resolved
 
     def _load_cad_file(self, file_path: Path) -> TopoDS_Shape:
-        """Load CAD file and return OCCT shape.
-
-        Args:
-            file_path: Path to STEP or IGES file
-
-        Returns:
-            TopoDS_Shape loaded from file
-
-        Raises:
-            ValueError: If file format unsupported or loading fails
-        """
+        """Load CAD file based on extension (.step/.stp or .iges/.igs)."""
         suffix = file_path.suffix.lower()
 
         if suffix in ['.step', '.stp']:
@@ -142,69 +129,55 @@ class OCCTLoader:
             )
 
     def _load_step(self, file_path: Path) -> TopoDS_Shape:
-        """Load STEP file.
-
-        Args:
-            file_path: Path to STEP file
-
-        Returns:
-            TopoDS_Shape from STEP file
-
-        Raises:
-            RuntimeError: If STEP loading fails
-        """
+        """Load STEP file using STEPControl_Reader."""
         reader = STEPControl_Reader()
         status = reader.ReadFile(str(file_path))
 
         if status != IFSelect_RetDone:
+            logger.error(f'STEP reader failed for: {file_path}')
             raise RuntimeError(f'Failed to read STEP file: {file_path}')
 
+        logger.debug('Transferring STEP roots')
         reader.TransferRoots()
         shape = reader.OneShape()
 
         if shape.IsNull():
+            logger.error(f'STEP file contains no valid geometry: {file_path}')
             raise RuntimeError(f'STEP file contains no valid shapes: {file_path}')
 
+        logger.debug(f'STEP file loaded successfully: {file_path.name}')
         return shape
 
     def _load_iges(self, file_path: Path) -> TopoDS_Shape:
-        """Load IGES file.
-
-        Args:
-            file_path: Path to IGES file
-
-        Returns:
-            TopoDS_Shape from IGES file
-
-        Raises:
-            RuntimeError: If IGES loading fails
-        """
+        """Load IGES file using IGESControl_Reader."""
         reader = IGESControl_Reader()
         status = reader.ReadFile(str(file_path))
 
         if status != IFSelect_RetDone:
+            logger.error(f'IGES reader failed for: {file_path}')
             raise RuntimeError(f'Failed to read IGES file: {file_path}')
 
+        logger.debug('Transferring IGES roots')
         reader.TransferRoots()
         shape = reader.OneShape()
 
         if shape.IsNull():
+            logger.error(f'IGES file contains no valid geometry: {file_path}')
             raise RuntimeError(f'IGES file contains no valid shapes: {file_path}')
 
+        logger.debug(f'IGES file loaded successfully: {file_path.name}')
         return shape
 
     def _apply_transform(
         self, shape: TopoDS_Shape, transform: NDArray
     ) -> TopoDS_Shape:
-        """Apply 4x4 transformation matrix to OCCT shape.
-
-        Args:
-            shape: OCCT shape to transform
-            transform: 4x4 homogeneous transformation matrix
-
-        Returns:
-            Transformed TopoDS_Shape
-        """
+        """Apply 4x4 homogeneous transformation matrix to OCCT shape."""
+        # Validate transform has reasonable determinant
+        rot = transform[:3, :3]
+        det = np.linalg.det(rot)
+        if not np.isclose(det, 1.0, atol=1e-3):
+            logger.warning(f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear')
+        
         trsf = gp_Trsf()
 
         # Set transformation matrix (row-major)
@@ -215,5 +188,9 @@ class OCCTLoader:
         )
 
         transformed_shape = BRepBuilderAPI_Transform(shape, trsf).Shape()
+        
+        if transformed_shape.IsNull():
+            logger.error('Transform operation produced null shape')
+            raise RuntimeError('Failed to apply transformation to shape')
 
         return transformed_shape

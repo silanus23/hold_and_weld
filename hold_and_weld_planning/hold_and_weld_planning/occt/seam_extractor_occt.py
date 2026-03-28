@@ -31,10 +31,11 @@ kissing surfaces, then extracts exact seam curves and surface normals.
 # - Hardcoded fallback normals [0,0,1] should fail instead
 # - G1 continuity check samples only one point on edge
 
+import logging
 from typing import Dict, List, Tuple
-import warnings
 
 import numpy as np
+
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Common
@@ -58,6 +59,7 @@ from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.seam import Seam
 
+logger = logging.getLogger(__name__)
 
 class SeamExtractorOCCT:
     """Extract weld seams from OCCT shapes using face-to-face proximity detection.
@@ -77,6 +79,10 @@ class SeamExtractorOCCT:
                 - tolerance: Distance tolerance for contact detection (default 1e-3)
                 - up_vector: Up direction for main/secondary determination (default [0,0,1])
         """
+        if shape_1.IsNull():
+            raise ValueError('shape_1 is null')
+        if shape_2.IsNull():
+            raise ValueError('shape_2 is null')
         self.shape_1 = shape_1
         self.shape_2 = shape_2
         self.params = params
@@ -100,18 +106,21 @@ class SeamExtractorOCCT:
             Empty list if no seams found. Individual seam failures are logged
             but don't stop extraction.
         """
+        logger.info('Starting OCCT seam extraction')
         contact_candidates = self._find_contact_face_pairs()
 
         if not contact_candidates:
-            warnings.warn('No face pairs found within tolerance - shapes may not be touching')
+            logger.warning('No face pairs found within tolerance - shapes may not be touching')
             return []
 
+        logger.info(f'Found {len(contact_candidates)} contact face pair(s)')
         intersection_data = self._extract_intersection_edges(contact_candidates)
 
         if not intersection_data:
-            warnings.warn('No intersection edges found - check tolerance and geometry')
+            logger.warning('No intersection edges found - check tolerance and geometry')
             return []
 
+        logger.info(f'Extracted {len(intersection_data)} intersection edge(s)')
         seams = []
         failed_count = 0
 
@@ -119,25 +128,17 @@ class SeamExtractorOCCT:
             try:
                 edge_seams = self._process_single_edge(edge_data)
                 seams.extend(edge_seams)
+                logger.debug(f'Processed edge {idx + 1}/{len(intersection_data)}: {len(edge_seams)} seam(s)')
 
             except Exception as e:
                 failed_count += 1
-                warnings.warn(f'Failed to process edge {idx + 1}/{len(intersection_data)}: {e}')
+                logger.warning(f'Failed to process edge {idx + 1}/{len(intersection_data)}: {e}')
 
-        if failed_count > 0:
-            warnings.warn(f'Successfully extracted {len(seams)} seams, {failed_count} failed')
-
+        logger.info(f'Successfully extracted {len(seams)} seam(s), {failed_count} edge(s) failed')
         return seams
 
     def _process_single_edge(self, edge_data: Dict) -> List[Seam]:
-        """Process a single intersection edge into Seam objects.
-
-        Args:
-            edge_data: Dict with 'edge', 'face_A', 'face_B'
-
-        Returns:
-            List of Seam objects (typically one seam per edge)
-        """
+        """Process a single intersection edge into Seam objects."""
         edge = edge_data['edge']
         face_A = edge_data['face_A']
         face_B = edge_data['face_B']
@@ -157,44 +158,36 @@ class SeamExtractorOCCT:
         if len(points) < 2:
             raise RuntimeError('Edge sampling produced fewer than 2 points')
 
-        # Check for pipe joints (special case with inner holes)
-        has_hole_A = self._has_inner_holes(face_A)
-        has_hole_B = self._has_inner_holes(face_B)
+        # PIPE LOGIC DISABLED - under development (see commented methods below)
+        # Pipe joints would check for inner holes and extract normals from outer shaft surfaces
 
-        if has_hole_A or has_hole_B:
-            # PIPE JOINT: Extract normals from outer shaft surfaces
-            surfaces = self._get_pipe_surfaces(edge, face_A, face_B)
-            normals_main, normals_secondary = self._get_pipe_normals(points, surfaces)
-            is_edge_joint = True
+        # REGULAR JOINT: Determine surfaces for normal extraction
+        boundary_A = self._get_matching_boundary_edge(edge, face_A)
+        boundary_B = self._get_matching_boundary_edge(edge, face_B)
 
+        # Extract normals from appropriate surfaces (walls if boundaries
+        # exist, kissing faces otherwise)
+        if boundary_A is not None:
+            # Shape_1 has real boundary - use wall surface
+            wall_A = self._get_wall_surface_at_edge(boundary_A, self.shape_1, face_A)
+            normals_A = self._extract_normals_from_surface(points, wall_A)
         else:
-            # REGULAR JOINT: Determine surfaces for normal extraction
-            boundary_A = self._get_matching_boundary_edge(edge, face_A)
-            boundary_B = self._get_matching_boundary_edge(edge, face_B)
+            # No boundary - use kissing face (synthetic edge from curved intersection)
+            normals_A = self._extract_normals_from_surface(points, face_A)
 
-            # Extract normals from appropriate surfaces (walls if boundaries
-            # exist, kissing faces otherwise)
-            if boundary_A is not None:
-                # Shape_1 has real boundary - use wall surface
-                wall_A = self._get_wall_surface_at_edge(boundary_A, self.shape_1, face_A)
-                normals_A = self._extract_normals_from_surface(points, wall_A)
-            else:
-                # No boundary - use kissing face (synthetic edge from curved intersection)
-                normals_A = self._extract_normals_from_surface(points, face_A)
+        if boundary_B is not None:
+            # Shape_2 has real boundary - use wall surface
+            wall_B = self._get_wall_surface_at_edge(boundary_B, self.shape_2, face_B)
+            normals_B = self._extract_normals_from_surface(points, wall_B)
+        else:
+            # No boundary - use kissing face (synthetic edge from curved intersection)
+            normals_B = self._extract_normals_from_surface(points, face_B)
 
-            if boundary_B is not None:
-                # Shape_2 has real boundary - use wall surface
-                wall_B = self._get_wall_surface_at_edge(boundary_B, self.shape_2, face_B)
-                normals_B = self._extract_normals_from_surface(points, wall_B)
-            else:
-                # No boundary - use kissing face (synthetic edge from curved intersection)
-                normals_B = self._extract_normals_from_surface(points, face_B)
+        normals_main, normals_secondary = self._determine_main_secondary_normals(
+            normals_A, normals_B
+        )
 
-            normals_main, normals_secondary = self._determine_main_secondary_normals(
-                normals_A, normals_B
-            )
-
-            is_edge_joint = (boundary_A is not None) and (boundary_B is not None)
+        is_edge_joint = (boundary_A is not None) and (boundary_B is not None)
 
         geometry = self._detect_geometry(edge, points)
         edge_seams = self._wrap_in_seams(geometry, is_edge_joint, normals_main, normals_secondary)
@@ -202,12 +195,7 @@ class SeamExtractorOCCT:
         return edge_seams
 
     def _find_contact_face_pairs(self) -> List[Dict]:
-        """Find all face pairs within tolerance using proximity check.
-
-        Returns:
-            List of dicts with 'face_A' (from shape_1) and 'face_B' (from shape_2).
-            Empty list if no contacts found.
-        """
+        """Find all face pairs within tolerance using BRepExtrema_DistShapeShape proximity check."""
         faces_1 = []
         exp1 = TopExp_Explorer(self.shape_1, TopAbs_FACE)
         while exp1.More():
@@ -224,30 +212,27 @@ class SeamExtractorOCCT:
 
         for face_A in faces_1:
             for face_B in faces_2:
-                dist_checker = BRepExtrema_DistShapeShape(face_A, face_B)
+                try:
+                    dist_checker = BRepExtrema_DistShapeShape(face_A, face_B)
 
-                if dist_checker.IsDone():
-                    min_dist = dist_checker.Value()
+                    if dist_checker.IsDone():
+                        min_dist = dist_checker.Value()
 
-                    if min_dist <= self.tolerance:
-                        contact_candidates.append({
-                            'face_A': face_A,
-                            'face_B': face_B,
-                            'distance': min_dist
-                        })
+                        if min_dist <= self.tolerance:
+                            contact_candidates.append({
+                                'face_A': face_A,
+                                'face_B': face_B,
+                                'distance': min_dist
+                            })
+                except Exception as e:
+                    logger.debug(f'Failed to compute distance for face pair: {e}')
+                    continue
+
 
         return contact_candidates
 
     def _extract_intersection_edges(self, contact_candidates: List[Dict]) -> List[Dict]:
-        """Extract intersection edges from contact face pairs using Common operation.
-
-        Args:
-            contact_candidates: List of face pairs from proximity check
-
-        Returns:
-            List of dicts with 'edge', 'face_A', 'face_B'.
-            Empty list if no intersections found.
-        """
+        """Extract intersection edges from contact face pairs using BRepAlgoAPI_Common."""
         intersection_data = []
 
         for pair in contact_candidates:
@@ -274,7 +259,8 @@ class SeamExtractorOCCT:
                     })
                     edge_exp.Next()
 
-            except Exception:
+            except Exception as e:
+                logger.debug(f'Failed to extract intersection edges from face pair: {e}')
                 continue
 
         return intersection_data
@@ -282,18 +268,7 @@ class SeamExtractorOCCT:
     def _get_matching_boundary_edge(self, seam_edge: TopoDS_Shape,
                                     face: TopoDS_Shape
                                     ) -> TopoDS_Shape:
-        """Get the actual boundary edge from face that matches the seam edge.
-
-        Determines if the seam edge lies on a real boundary edge (edge-to-edge joint)
-        or is synthetic (created by Common operation on curved surfaces).
-
-        Args:
-            seam_edge: Intersection edge from Common operation
-            face: Face to search for matching boundary edge
-
-        Returns:
-            Matching boundary edge from original shape, or None if synthetic
-        """
+        """Get boundary edge from face that geometrically matches seam edge, or None if synthetic."""
         edge_exp = TopExp_Explorer(face, TopAbs_EDGE)
 
         while edge_exp.More():
@@ -307,7 +282,7 @@ class SeamExtractorOCCT:
         return None
 
     def _edges_are_geometrically_aligned(self, edge_1: TopoDS_Shape, edge_2: TopoDS_Shape) -> bool:
-        """Check if two edges lie on the same geometric curve."""
+        """Check if two edges lie on the same geometric curve within tolerance."""
         try:
             adaptor_1 = BRepAdaptor_Curve(edge_1)
             adaptor_2 = BRepAdaptor_Curve(edge_2)
@@ -318,6 +293,7 @@ class SeamExtractorOCCT:
             if curve_type_1 != curve_type_2:
                 return False
 
+            # Line alignment: check parallel directions and endpoints lie on same infinite line
             if curve_type_1 == GeomAbs_Line:
                 line_1 = adaptor_1.Line()
                 line_2 = adaptor_2.Line()
@@ -338,6 +314,7 @@ class SeamExtractorOCCT:
                 return (dist_start <= self.tolerance and
                         dist_end <= self.tolerance)
 
+            # Circle alignment: check centers, radii, and plane normals match
             elif curve_type_1 == GeomAbs_Circle:
                 circle_1 = adaptor_1.Circle()
                 circle_2 = adaptor_2.Circle()
@@ -359,6 +336,7 @@ class SeamExtractorOCCT:
                 dot = abs(normal_1.Dot(normal_2))
                 return dot > 0.9999
 
+            # General curves: sample points along edge_1 and check distance to edge_2
             else:
                 num_samples = 5
                 for i in range(num_samples):
@@ -382,7 +360,8 @@ class SeamExtractorOCCT:
 
                 return True
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f'Failed to check edge alignment: {e}')
             return False
 
     def _get_wall_surface_at_edge(self,
@@ -390,21 +369,7 @@ class SeamExtractorOCCT:
                                   shape: TopoDS_Shape,
                                   kissing_face: TopoDS_Shape
                                   ) -> TopoDS_Shape:
-        """Get wall surface using exact topological lookup.
-
-        For edge-to-edge joints, we need the perpendicular wall surface (not the kissing face).
-
-        Args:
-            boundary_edge: Real boundary edge from original shape
-            shape: Shape containing the edge
-            kissing_face: Kissing face to exclude
-
-        Returns:
-            Wall surface (non-kissing face at edge)
-
-        Raises:
-            RuntimeError: If topology lookup fails
-        """
+        """Get perpendicular wall surface at boundary edge (excludes kissing face)."""
         edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
         topexp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
 
@@ -427,242 +392,122 @@ class SeamExtractorOCCT:
 
         return wall_candidates[0]
 
-    def _has_inner_holes(self, face: TopoDS_Shape) -> bool:
-        """Check if face has inner holes (multiple wire boundaries).
+    # PIPE LOGIC COMMENTED OUT - INCOMPLETE/UNDER DEVELOPMENT
+    # def _has_inner_holes(self, face: TopoDS_Shape) -> bool:
+    #     """Check if face has inner holes (multiple wire boundaries)."""
+    #     wire_explorer = TopExp_Explorer(face, TopAbs_WIRE)
+    #     num_wires = 0
+    #     while wire_explorer.More():
+    #         num_wires += 1
+    #         wire_explorer.Next()
+    #     return num_wires > 1
 
-        Pipes have an outer boundary and an inner hole.
+    # def _get_pipe_surfaces(self, edge: TopoDS_Shape, face_1: TopoDS_Shape,
+    #                        face_2: TopoDS_Shape) -> Dict:
+    #     """Get outer shaft surfaces for pipe joint."""
+    #     has_hole_1 = self._has_inner_holes(face_1)
+    #     has_hole_2 = self._has_inner_holes(face_2)
+    #     shaft_1 = None
+    #     shaft_2 = None
+    #     if has_hole_1:
+    #         try:
+    #             shaft_1 = self._get_outer_shaft_surface(edge, self.shape_1, face_1)
+    #         except Exception as e:
+    #             warnings.warn(f'Could not get shaft_1 surface: {e}')
+    #     if has_hole_2:
+    #         try:
+    #             shaft_2 = self._get_outer_shaft_surface(edge, self.shape_2, face_2)
+    #         except Exception as e:
+    #             warnings.warn(f'Could not get shaft_2 surface: {e}')
+    #     return {'shaft_1': shaft_1, 'shaft_2': shaft_2}
 
-        Args:
-            face: Face to check
+    # def _get_outer_shaft_surface(self, edge: TopoDS_Shape, shape: TopoDS_Shape,
+    #                              kissing_face: TopoDS_Shape) -> TopoDS_Shape:
+    #     """Get outer shaft surface for pipe using G1 continuity check."""
+    #     neighbors = self._get_neighbor_faces(shape, kissing_face)
+    #     if not neighbors:
+    #         raise RuntimeError('No neighbor faces found for kissing surface')
+    #     discontinuous_faces = []
+    #     for neighbor in neighbors:
+    #         if not self._are_faces_continuous(kissing_face, neighbor, edge):
+    #             discontinuous_faces.append(neighbor)
+    #     if not discontinuous_faces:
+    #         return max(neighbors, key=lambda f: self._compute_face_area(f))
+    #     shaft_surface = max(discontinuous_faces, key=lambda f: self._compute_face_area(f))
+    #     return shaft_surface
 
-        Returns:
-            True if face has holes (>1 wire)
-        """
-        wire_explorer = TopExp_Explorer(face, TopAbs_WIRE)
+    # def _are_faces_continuous(self, face_1: TopoDS_Shape, face_2: TopoDS_Shape,
+    #                           shared_edge: TopoDS_Shape) -> bool:
+    #     """Check if faces meet smoothly (G1 continuity)."""
+    #     try:
+    #         adaptor = BRepAdaptor_Curve(shared_edge)
+    #         pnt = adaptor.Value(adaptor.FirstParameter())
+    #         point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
+    #         n1 = self._evaluate_normal_at_point(point, face_1)
+    #         n2 = self._evaluate_normal_at_point(point, face_2)
+    #         return np.abs(np.dot(n1, n2)) > 0.98
+    #     except Exception:
+    #         return False
 
-        num_wires = 0
-        while wire_explorer.More():
-            num_wires += 1
-            wire_explorer.Next()
+    # def _get_neighbor_faces(self, shape: TopoDS_Shape, target_face: TopoDS_Shape) -> List[TopoDS_Shape]:
+    #     """Get faces that share edges with target face."""
+    #     edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
+    #     topexp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
+    #     neighbors = set()
+    #     edge_exp = TopExp_Explorer(target_face, TopAbs_EDGE)
+    #     while edge_exp.More():
+    #         edge = edge_exp.Current()
+    #         if edge_face_map.Contains(edge):
+    #             face_list = edge_face_map.FindFromKey(edge)
+    #             it = TopTools_ListIteratorOfListOfShape(face_list)
+    #             while it.More():
+    #                 neighbor = topods.Face(it.Value())
+    #                 if not neighbor.IsSame(target_face):
+    #                     neighbors.add(neighbor)
+    #                 it.Next()
+    #         edge_exp.Next()
+    #     return list(neighbors)
 
-        return num_wires > 1
+    # def _compute_face_area(self, face: TopoDS_Shape) -> float:
+    #     """Compute surface area of a face."""
+    #     props = GProp_GProps()
+    #     brepgprop.SurfaceProperties(face, props)
+    #     return props.Mass()
 
-    def _get_pipe_surfaces(self,
-                           edge: TopoDS_Shape,
-                           face_1: TopoDS_Shape,
-                           face_2: TopoDS_Shape
-                           ) -> Dict:
-        """Get outer shaft surfaces for pipe joint.
-
-        Args:
-            edge: Intersection edge (seam)
-            face_1: Kissing face from shape_1
-            face_2: Kissing face from shape_2
-
-        Returns:
-            Dict with 'shaft_1' and 'shaft_2' keys (None if not a pipe)
-        """
-        has_hole_1 = self._has_inner_holes(face_1)
-        has_hole_2 = self._has_inner_holes(face_2)
-
-        shaft_1 = None
-        shaft_2 = None
-
-        if has_hole_1:
-            try:
-                shaft_1 = self._get_outer_shaft_surface(edge, self.shape_1, face_1)
-            except Exception as e:
-                warnings.warn(f'Could not get shaft_1 surface: {e}')
-
-        if has_hole_2:
-            try:
-                shaft_2 = self._get_outer_shaft_surface(edge, self.shape_2, face_2)
-            except Exception as e:
-                warnings.warn(f'Could not get shaft_2 surface: {e}')
-
-        return {'shaft_1': shaft_1, 'shaft_2': shaft_2}
-
-    def _get_outer_shaft_surface(self,
-                                 edge: TopoDS_Shape,
-                                 shape: TopoDS_Shape,
-                                 kissing_face: TopoDS_Shape
-                                 ) -> TopoDS_Shape:
-        """Get outer shaft surface for pipe using G1 continuity check.
-
-        The shaft surface is discontinuous (sharp edge) with the kissing face,
-        while fillet surfaces are smooth (G1 continuous).
-
-        Args:
-            edge: Seam edge
-            shape: Shape containing the shaft
-            kissing_face: Kissing face to exclude
-
-        Returns:
-            Outer shaft surface (largest discontinuous neighbor)
-
-        Raises:
-            RuntimeError: If no shaft surface found
-        """
-        neighbors = self._get_neighbor_faces(shape, kissing_face)
-
-        if not neighbors:
-            raise RuntimeError('No neighbor faces found for kissing surface')
-
-        # Find faces with sharp edges (discontinuous normals)
-        discontinuous_faces = []
-
-        for neighbor in neighbors:
-            if not self._are_faces_continuous(kissing_face, neighbor, edge):
-                discontinuous_faces.append(neighbor)
-
-        # If no sharp edges, fall back to largest neighbor
-        if not discontinuous_faces:
-            return max(neighbors, key=lambda f: self._compute_face_area(f))
-
-        # Return largest discontinuous face (the shaft)
-        shaft_surface = max(discontinuous_faces, key=lambda f: self._compute_face_area(f))
-
-        return shaft_surface
-
-    def _are_faces_continuous(self, face_1: TopoDS_Shape,
-                              face_2: TopoDS_Shape,
-                              shared_edge: TopoDS_Shape
-                              ) -> bool:
-        """Check if faces meet smoothly (G1 continuity).
-
-        Args:
-            face_1: First face
-            face_2: Second face
-            shared_edge: Edge they share
-
-        Returns:
-            True if normals are parallel (smooth transition like a fillet)
-        """
-        try:
-            adaptor = BRepAdaptor_Curve(shared_edge)
-            pnt = adaptor.Value(adaptor.FirstParameter())
-
-            point = np.array([pnt.X(), pnt.Y(), pnt.Z()])
-
-            n1 = self._evaluate_normal_at_point(point, face_1)
-            n2 = self._evaluate_normal_at_point(point, face_2)
-
-            return np.abs(np.dot(n1, n2)) > 0.98
-
-        except Exception:
-            return False
-
-    def _get_neighbor_faces(self,
-                            shape: TopoDS_Shape,
-                            target_face: TopoDS_Shape,
-                            ) -> List[TopoDS_Shape]:
-        """Get faces that share edges with target face.
-
-        Args:
-            shape: Shape to search
-            target_face: Face to find neighbors of
-
-        Returns:
-            List of neighbor faces
-        """
-        edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
-        topexp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
-
-        neighbors = set()
-        edge_exp = TopExp_Explorer(target_face, TopAbs_EDGE)
-
-        while edge_exp.More():
-            edge = edge_exp.Current()
-
-            if edge_face_map.Contains(edge):
-                face_list = edge_face_map.FindFromKey(edge)
-
-                it = TopTools_ListIteratorOfListOfShape(face_list)
-                while it.More():
-                    neighbor = topods.Face(it.Value())
-                    if not neighbor.IsSame(target_face):
-                        neighbors.add(neighbor)
-                    it.Next()
-
-            edge_exp.Next()
-
-        return list(neighbors)
-
-    def _compute_face_area(self, face: TopoDS_Shape) -> float:
-        """Compute surface area of a face.
-
-        Args:
-            face: Face to measure
-
-        Returns:
-            Surface area
-
-        Raises:
-            RuntimeError: If area computation fails
-        """
-        props = GProp_GProps()
-        brepgprop.SurfaceProperties(face, props)
-        return props.Mass()
-
-    def _get_pipe_normals(self,
-                          points: np.ndarray,
-                          surfaces: Dict
-                          ) -> Tuple[np.ndarray, np.ndarray]:
-        """Get normals for pipe joint from outer shafts.
-
-        Args:
-            points: Seam points (N, 3)
-            surfaces: Dict with 'shaft_1' and 'shaft_2'
-
-        Returns:
-            (normals_main, normals_secondary) each (N, 3)
-        """
-        shaft_1 = surfaces['shaft_1']
-        shaft_2 = surfaces['shaft_2']
-
-        normals_1 = []
-        normals_2 = []
-
-        for point in points:
-            if shaft_1:
-                try:
-                    n1 = self._evaluate_normal_at_point(point, shaft_1)
-                    normals_1.append(n1)
-                except Exception:
-                    normals_1.append(np.array([0, 0, 1]))
-            else:
-                normals_1.append(np.array([0, 0, 1]))
-
-            if shaft_2:
-                try:
-                    n2 = self._evaluate_normal_at_point(point, shaft_2)
-                    normals_2.append(n2)
-                except Exception:
-                    normals_2.append(np.array([0, 0, -1]))
-            else:
-                normals_2.append(np.array([0, 0, -1]))
-
-        normals_1 = np.array(normals_1)
-        normals_2 = np.array(normals_2)
-
-        normals_1 = self._make_normals_consistent(normals_1)
-        normals_2 = self._make_normals_consistent(normals_2)
-
-        return self._determine_main_secondary_normals(normals_1, normals_2)
+    # def _get_pipe_normals(self, points: np.ndarray, surfaces: Dict) -> Tuple[np.ndarray, np.ndarray]:
+    #     """Get normals for pipe joint from outer shafts."""
+    #     shaft_1 = surfaces['shaft_1']
+    #     shaft_2 = surfaces['shaft_2']
+    #     normals_1 = []
+    #     normals_2 = []
+    #     for point in points:
+    #         if shaft_1:
+    #             try:
+    #                 n1 = self._evaluate_normal_at_point(point, shaft_1)
+    #                 normals_1.append(n1)
+    #             except Exception:
+    #                 normals_1.append(np.array([0, 0, 1]))
+    #         else:
+    #             normals_1.append(np.array([0, 0, 1]))
+    #         if shaft_2:
+    #             try:
+    #                 n2 = self._evaluate_normal_at_point(point, shaft_2)
+    #                 normals_2.append(n2)
+    #             except Exception:
+    #                 normals_2.append(np.array([0, 0, -1]))
+    #         else:
+    #             normals_2.append(np.array([0, 0, -1]))
+    #     normals_1 = np.array(normals_1)
+    #     normals_2 = np.array(normals_2)
+    #     normals_1 = self._make_normals_consistent(normals_1)
+    #     normals_2 = self._make_normals_consistent(normals_2)
+    #     return self._determine_main_secondary_normals(normals_1, normals_2)
 
     def _extract_normals_from_surface(self,
                                       points: np.ndarray,
                                       surface: TopoDS_Shape
                                       ) -> np.ndarray:
-        """Extract normals from a single surface at given points.
-
-        Args:
-            points: Seam points (N, 3)
-            surface: Surface to extract normals from
-
-        Returns:
-            Normals array (N, 3) with consistent orientation
-        """
+        """Extract normals at each point on a surface."""
         normals = []
 
         for point in points:
@@ -672,9 +517,10 @@ class SeamExtractorOCCT:
             except Exception as e:
                 if normals:
                     normals.append(normals[-1])
+                    logger.debug(f'Failed to get normal from surface, using previous normal as fallback: {e}')
                 else:
                     normals.append(np.array([0, 0, 1]))
-                warnings.warn(f'Failed to get normal from surface: {e}')
+                    logger.debug(f'Failed to get normal from surface, using default fallback [0,0,1]: {e}')
 
         normals = np.array(normals)
         normals = self._make_normals_consistent(normals)
@@ -682,16 +528,7 @@ class SeamExtractorOCCT:
         return normals
 
     def _make_normals_consistent(self, normals: np.ndarray) -> np.ndarray:
-        """Ensure all normals point in consistent direction.
-
-        Flips normals that point opposite to the average direction.
-
-        Args:
-            normals: Array of normals (N, 3)
-
-        Returns:
-            Normals with consistent orientation (N, 3)
-        """
+        """Ensure all normals point in consistent direction by flipping those opposite to average."""
         if len(normals) == 0:
             return normals
 
@@ -713,71 +550,60 @@ class SeamExtractorOCCT:
         return np.array(fixed_normals)
 
     def _determine_main_secondary_normals(self,
-                                          normals_1: np.ndarray,
-                                          normals_2: np.ndarray
+                                          normals_A: np.ndarray,
+                                          normals_B: np.ndarray
                                           ) -> Tuple[np.ndarray, np.ndarray]:
-        """Determine which normals are main vs secondary using up vector.
+        """Determine which normals are main vs secondary using up vector alignment."""
+        avg_normal_A = np.mean(normals_A, axis=0)
+        avg_normal_B = np.mean(normals_B, axis=0)
 
-        The surface more aligned with up_vector becomes main.
+        norm_A = np.linalg.norm(avg_normal_A)
+        norm_B = np.linalg.norm(avg_normal_B)
 
-        Args:
-            normals_1: Normals from shape_1 (N, 3)
-            normals_2: Normals from shape_2 (N, 3)
+        if norm_A < 1e-10 or norm_B < 1e-10:
+            logger.warning('Zero-length average normal detected, defaulting to A as main')
+            return normals_A, normals_B
 
-        Returns:
-            (normals_main, normals_secondary) each (N, 3)
-        """
-        avg_normal_1 = np.mean(normals_1, axis=0)
-        avg_normal_2 = np.mean(normals_2, axis=0)
+        avg_normal_A = avg_normal_A / norm_A
+        avg_normal_B = avg_normal_B / norm_B
 
-        avg_normal_1 = avg_normal_1 / np.linalg.norm(avg_normal_1)
-        avg_normal_2 = avg_normal_2 / np.linalg.norm(avg_normal_2)
+        dot_A = np.dot(avg_normal_A, self.up_vector)
+        dot_B = np.dot(avg_normal_B, self.up_vector)
 
-        dot_1 = np.dot(avg_normal_1, self.up_vector)
-        dot_2 = np.dot(avg_normal_2, self.up_vector)
-
-        if dot_1 >= dot_2:
-            return normals_1, normals_2
+        if dot_A >= dot_B:
+            return normals_A, normals_B
         else:
-            return normals_2, normals_1
+            return normals_B, normals_A
 
     def _evaluate_normal_at_point(self, point: np.ndarray, face: TopoDS_Shape) -> np.ndarray:
-        """Evaluate surface normal at a point.
-
-        Handles planar surfaces specially for efficiency. Uses UV projection for general surfaces.
-
-        Args:
-            point: Point to evaluate at (3,)
-            face: Face to get normal from
-
-        Returns:
-            Unit normal vector (3,)
-
-        Raises:
-            RuntimeError: If normal cannot be computed
-        """
+        """Evaluate unit surface normal at point using UV projection (fast path for planes)."""
         adaptor = BRepAdaptor_Surface(face)
 
-        # Fast path for planes
+        # Fast path for planes - normal is constant everywhere
         if adaptor.GetType() == GeomAbs_Plane:
             normal_dir = adaptor.Plane().Axis().Direction()
 
+            # Respect face orientation (REVERSED means normal points inward)
             if face.Orientation() == TopAbs_REVERSED:
                 normal_dir.Reverse()
 
             normal = np.array([normal_dir.X(), normal_dir.Y(), normal_dir.Z()])
             return normal / np.linalg.norm(normal)
 
+        # General surfaces: project 3D point to UV parameter space, then evaluate normal
         pnt = gp_Pnt(point[0], point[1], point[2])
         surface = BRep_Tool.Surface(face)
 
+        # Find UV coordinates of nearest point on surface
         sas = ShapeAnalysis_Surface(surface)
         uv = sas.ValueOfUV(pnt, self.tolerance)
 
+        # Evaluate surface properties (1 = first derivatives needed for normal)
         props = GeomLProp_SLProps(surface, uv.X(), uv.Y(), 1, self.tolerance)
 
         if props.IsNormalDefined():
             normal_dir = props.Normal()
+            # Respect face orientation
             if face.Orientation() == TopAbs_REVERSED:
                 normal_dir.Reverse()
             normal = np.array([normal_dir.X(), normal_dir.Y(), normal_dir.Z()])
@@ -786,15 +612,7 @@ class SeamExtractorOCCT:
         raise RuntimeError(f'Normal not defined at point {point}')
 
     def _detect_geometry(self, edge: TopoDS_Shape, points: np.ndarray) -> Dict:
-        """Detect geometry type: line, arc, or polyline.
-
-        Args:
-            edge: OCCT edge
-            points: Sampled points (N, 3)
-
-        Returns:
-            Geometry dict with 'type' and parameters
-        """
+        """Detect geometry type (line, arc, or polyline) and extract geometric parameters."""
         edge_adapted = BRepAdaptor_Curve(edge)
         curve_type = edge_adapted.GetType()
 
@@ -834,17 +652,7 @@ class SeamExtractorOCCT:
                        normals_main: np.ndarray,
                        normals_secondary: np.ndarray
                        ) -> List[Seam]:
-        """Wrap geometry into Seam object(s).
-
-        Args:
-            geometry: Geometry dict from _detect_geometry
-            is_edge_joint: Whether this is edge-to-edge joint
-            normals_main: Main normals (N, 3)
-            normals_secondary: Secondary normals (N, 3)
-
-        Returns:
-            List of Seam objects (single seam per geometry)
-        """
+        """Wrap geometry and normals into Seam object with metadata."""
         seams = []
         points = geometry['points']
 

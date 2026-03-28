@@ -21,12 +21,15 @@ objects ready for weld planning.
 """
 
 from collections import defaultdict
+import logging
 from typing import Dict, List, Tuple
 import warnings
 
 import numpy as np
 from scipy import stats
 import trimesh
+
+logger = logging.getLogger(__name__)
 
 from .path_creator import PathCreator
 from ..core.arc_segment import ArcSegment
@@ -67,6 +70,9 @@ class SeamExtractor:
                 - gaussian_sigma_ratio: Gaussian weight width (default 0.3)
                 - normal_outlier_threshold_std: Outlier rejection threshold (default 2.0)
                 - up_vector: Up direction for edge-to-edge main selection (default [0, 0, 1])
+                - PathCreator config parameters (see PathCreator.process_path docstring for full list):
+                    - outlier_std_threshold, min_sub_path_length, min_points_for_corner_detection,
+                    - corner_min_angle, corner_angle_window, corner_curvature_window, etc.
         """
         self.mesh_1 = mesh_1
         self.mesh_2 = mesh_2
@@ -88,13 +94,37 @@ class SeamExtractor:
         self.up_vector = np.array(params.get('up_vector', [0, 0, 1]))
         self.up_vector = self.up_vector / np.linalg.norm(self.up_vector)
 
+        path_creator_keys = [
+            'outlier_std_threshold',
+            'min_sub_path_length',
+            'min_points_for_corner_detection',
+            'corner_min_angle',
+            'corner_angle_window',
+            'corner_curvature_window',
+            'corner_curvature_threshold',
+            'corner_min_agreement',
+            'corner_tolerance',
+            'corner_filter_window',
+            'arc_radius_tolerance',
+            'arc_merge_num_points',
+            'line_angle_tolerance_deg',
+            'line_merge_max_error',
+            'line_merge_max_iterations',
+            'min_line_size',
+            'line_absorption_max_error',
+            'line_absorption_max_iterations',
+            'first_last_angle_tolerance',
+            'first_last_radius_tolerance',
+            'first_last_gap_threshold',
+        ]
+        self.path_creator_config = {k: params[k] for k in path_creator_keys if k in params}
+
         # Validate meshes
         if not mesh_1.is_watertight:
             raise ValueError('mesh_1 is not watertight')
         if not mesh_2.is_watertight:
             raise ValueError('mesh_2 is not watertight')
 
-        # Initialize path creator
         self.path_creator = PathCreator()
 
     def extract_seams(self) -> List[Seam]:
@@ -115,16 +145,22 @@ class SeamExtractor:
         segments = self._compute_intersection_curve()
 
         if len(segments) == 0:
-            print('Warning: No intersection curve found between meshes')
+            logger.warning('No intersection curve found between meshes')
             return []
+
+        logger.info(f'Computed intersection curve: {len(segments)} edge segment(s)')
 
         paths = self._chain_segments_to_paths(segments)
 
         if len(paths) == 0:
-            print('Warning: Could not chain segments into paths')
+            logger.warning('Could not chain segments into paths')
             return []
 
+        logger.info(f'Chained into {len(paths)} continuous path(s)')
+
         seams = []
+        paths_succeeded = 0
+        paths_failed = 0
         for path_points in paths:
             try:
                 is_closed = (
@@ -136,6 +172,7 @@ class SeamExtractor:
                     path_points,
                     is_closed=is_closed,
                     num_points=self.num_smooth_points,
+                    config=self.path_creator_config,
                 )
 
                 for geometry in geometries:
@@ -143,16 +180,21 @@ class SeamExtractor:
                         points = geometry['points']
 
                         # Detect contact type for each mesh
-                        is_edge_contact_1, is_edge_contact_2, is_edge_joint = (
-                            self._determine_joint_type(points)
-                        )
+                        is_edge_contact_1 = self._is_seam_on_mesh_edge(points, self.mesh_1)
+                        is_edge_contact_2 = self._is_seam_on_mesh_edge(points, self.mesh_2)
+                        is_edge_joint = is_edge_contact_1 and is_edge_contact_2
 
-                        # Get normals using contact-type-aware logic
+                        joint_type_str = (
+                            "edge-to-edge" if is_edge_joint
+                            else f"edge-to-surface (mesh_1={'edge' if is_edge_contact_1 else 'surface'}, "
+                                 f"mesh_2={'edge' if is_edge_contact_2 else 'surface'})"
+                        )
+                        logger.debug(f'Detected joint type: {joint_type_str}')
+
                         normals_1, normals_2 = self._get_normals_for_points(
                             points, is_edge_contact_1, is_edge_contact_2
                         )
 
-                        # Determine main/secondary normals
                         normals_main, normals_secondary = self._determine_main_secondary_normals(
                             normals_1, normals_2, is_edge_joint,
                             is_edge_contact_1, is_edge_contact_2
@@ -165,22 +207,22 @@ class SeamExtractor:
                         seams.append(seam)
 
                     except Exception as e:
-                        print(f'Warning: Failed to process sub-path: {e}')
+                        logger.warning(f'Failed to process sub-path: {e}')
                         continue
 
+                paths_succeeded += 1
+
             except Exception as e:
-                print(f'Warning: Failed to process path: {e}')
+                logger.warning(f'PathCreator.process_path() failed for path: {e}')
+                paths_failed += 1
                 continue
 
+        logger.info(f'Extracted {len(seams)} seam(s) from {len(paths)} path(s) '
+                   f'({paths_succeeded} succeeded, {paths_failed} failed)')
         return seams
 
     def _compute_intersection_curve(self) -> np.ndarray:
-        """Compute intersection curve between mesh_1 and mesh_2 using CGAL.
-
-        Returns:
-            (P, 2, 3) float64 array of intersection edge segments,
-            or empty array if no intersection found
-        """
+        """Compute intersection curve between mesh_1 and mesh_2 using CGAL."""
         verts1 = np.asarray(self.mesh_1.vertices, dtype=np.float64)
         faces1 = np.asarray(self.mesh_1.faces, dtype=np.int32)
         verts2 = np.asarray(self.mesh_2.vertices, dtype=np.float64)
@@ -191,20 +233,13 @@ class SeamExtractor:
                 verts1, faces1, verts2, faces2, self.inflate
             )
         except RuntimeError as e:
-            print(f'Error: CGAL corefinement failed: {e}')
+            logger.error(f'CGAL corefinement failed: {e}')
             return np.empty((0, 2, 3))
 
         return segments
 
     def _chain_segments_to_paths(self, segments: np.ndarray) -> List[np.ndarray]:
-        """Chain intersection edge segments into continuous ordered point paths.
-
-        Args:
-            segments: (P, 2, 3) array of edge segments
-
-        Returns:
-            List of (N, 3) point arrays, one per continuous path
-        """
+        """Chain intersection edge segments into continuous ordered point paths."""
         if len(segments) == 0:
             return []
 
@@ -248,6 +283,7 @@ class SeamExtractor:
                         break
 
                 if next_key is None:
+                    # Path ended - check if it loops back to start
                     for nkey, npt in neighbors:
                         if nkey == start_key and len(path_points) > 2:
                             path_points.append(path_points[0].copy())
@@ -262,46 +298,23 @@ class SeamExtractor:
             if len(path_points) >= self.min_segment_length:
                 paths.append(np.array(path_points))
 
+            logger.debug(f'Chained {len(segments)} segment(s) into {len(paths)} path(s), '
+                         f'{sum(len(p) for p in paths)} total points')
+
         return paths
-
-    def _determine_joint_type(
-        self,
-        seam_points: np.ndarray,
-    ) -> Tuple[bool, bool, bool]:
-        """Determine joint type by checking geometry with statistical analysis.
-
-        Args:
-            seam_points: Points along the seam (N, 3)
-
-        Returns:
-            Tuple of (is_edge_contact_1, is_edge_contact_2, is_edge_joint)
-        """
-        is_edge_contact_1 = self._is_seam_on_mesh_edge(seam_points, self.mesh_1)
-        is_edge_contact_2 = self._is_seam_on_mesh_edge(seam_points, self.mesh_2)
-        is_edge_joint = is_edge_contact_1 and is_edge_contact_2
-
-        return is_edge_contact_1, is_edge_contact_2, is_edge_joint
 
     def _is_seam_on_mesh_edge(
         self,
         seam_points: np.ndarray,
         mesh: trimesh.Trimesh,
     ) -> bool:
-        """Check if seam lies on geometric edge via bimodality coefficient.
+        """Check if seam lies on geometric edge using bimodality coefficient of nearby face normals.
 
-        Uses Gaussian weighting to prioritize middle points and bimodality
-        coefficient to detect one trend (surface) vs two trends (edge).
-
-        Bimodality coefficient = (skewness^2 + 1) / (kurtosis + 3)
-        Values > 0.555 indicate bimodal distribution (edge)
-        Values < 0.555 indicate unimodal distribution (surface)
-
-        Args:
-            seam_points: Points along seam (N, 3)
-            mesh: Mesh to check against
-
-        Returns:
-            True if seam is on edge (based on weighted bimodality score)
+        Searches for triangle mesh faces near each seam point. Edge contact shows bimodal
+        normal distribution (two surfaces meeting), surface contact shows unimodal distribution.
+        Bimodality coefficient (BC) = (skew^2 + 1) / (kurtosis + 3).
+        BC > 0.555 indicates bimodal (edge), BC < 0.555 indicates unimodal (surface).
+        Gaussian weights prioritize center points for robustness.
         """
         bbox_size = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])
         search_radius = bbox_size * self.edge_detection_search_radius_ratio
@@ -326,6 +339,7 @@ class SeamExtractor:
             nearby_faces = list(nearby_faces)
 
             if len(nearby_faces) < 4:
+                # Need at least 4 triangle mesh faces for reliable bimodality statistics
                 edge_scores.append(0.0)
                 continue
 
@@ -362,19 +376,18 @@ class SeamExtractor:
                 edge_scores.append(0.0)
 
         edge_scores = np.array(edge_scores)
-        weighted_score = np.sum(weights * edge_scores) / np.sum(weights)
+        weight_sum = np.sum(weights)
+
+        if weight_sum < 1e-10:
+            logger.warning('Gaussian weights sum to zero, cannot compute weighted edge score')
+            return False
+
+        weighted_score = np.sum(weights * edge_scores) / weight_sum
 
         return weighted_score > self.edge_detection_threshold
 
     def _compute_gaussian_weights(self, num_points: int) -> np.ndarray:
-        """Compute Gaussian weights centered on middle of seam.
-
-        Args:
-            num_points: Number of points along seam
-
-        Returns:
-            Array of weights (num_points,) with peak at center
-        """
+        """Compute Gaussian weights centered on middle of seam to prioritize stable center points."""
         if num_points < 3:
             return np.ones(num_points)
 
@@ -392,16 +405,7 @@ class SeamExtractor:
         is_edge_contact_1: bool,
         is_edge_contact_2: bool
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Get normals for both meshes at seam points.
-
-        Args:
-            points: Seam points (N, 3)
-            is_edge_contact_1: Whether seam is on mesh_1's edge
-            is_edge_contact_2: Whether seam is on mesh_2's edge
-
-        Returns:
-            (normals_1, normals_2) each (N, 3)
-        """
+        """Get normals for both meshes at seam points using contact-type-aware face selection."""
         normals_1 = []
         normals_2 = []
 
@@ -410,8 +414,17 @@ class SeamExtractor:
 
             if is_edge_contact_1 and is_edge_contact_2:
                 # Edge-to-edge: get both faces at each edge
-                face_1a, face_1b = self._get_face_candidates_at_point(point, self.mesh_1)
-                face_2a, face_2b = self._get_face_candidates_at_point(point, self.mesh_2)
+                try:
+                    face_1a, face_1b = self._get_face_candidates_at_point(point, self.mesh_1)
+                except Exception as e:
+                    logger.warning(f'Failed to get face candidates on mesh_1: {e}, using face index 0 as fallback')
+                    face_1a = face_1b = 0
+
+                try:
+                    face_2a, face_2b = self._get_face_candidates_at_point(point, self.mesh_2)
+                except Exception as e:
+                    logger.warning(f'Failed to get face candidates on mesh_2: {e}, using face index 0 as fallback')
+                    face_2a = face_2b = 0
 
                 normal_1a = self.mesh_1.face_normals[face_1a]
                 normal_1b = self.mesh_1.face_normals[face_1b]
@@ -430,8 +443,12 @@ class SeamExtractor:
 
             elif is_edge_contact_1:
                 # Mesh 1 edge, Mesh 2 surface
-                _, _, face_id_2 = trimesh.proximity.closest_point(self.mesh_2, [point])
-                normal_2 = self.mesh_2.face_normals[face_id_2[0]]
+                try:
+                    _, _, face_id_2 = trimesh.proximity.closest_point(self.mesh_2, [point])
+                    normal_2 = self.mesh_2.face_normals[face_id_2[0]]
+                except Exception as e:
+                    logger.warning(f'Failed to get closest point on mesh_2: {e}')
+                    normal_2 = np.array([0, 0, 1])
 
                 face_1a, face_1b = self._get_face_candidates_at_point(point, self.mesh_1)
                 normal_1a = self.mesh_1.face_normals[face_1a]
@@ -444,8 +461,12 @@ class SeamExtractor:
 
             elif is_edge_contact_2:
                 # Mesh 2 edge, Mesh 1 surface
-                _, _, face_id_1 = trimesh.proximity.closest_point(self.mesh_1, [point])
-                normal_1 = self.mesh_1.face_normals[face_id_1[0]]
+                try:
+                    _, _, face_id_1 = trimesh.proximity.closest_point(self.mesh_1, [point])
+                    normal_1 = self.mesh_1.face_normals[face_id_1[0]]
+                except Exception as e:
+                    logger.warning(f'Failed to get closest point on mesh_1: {e}')
+                    normal_1 = np.array([0, 0, 1])
 
                 face_2a, face_2b = self._get_face_candidates_at_point(point, self.mesh_2)
                 normal_2a = self.mesh_2.face_normals[face_2a]
@@ -458,13 +479,21 @@ class SeamExtractor:
 
             else:
                 # Surface-to-surface
-                _, _, face_id_1 = trimesh.proximity.closest_point(self.mesh_1, [point])
-                normal_1 = self.mesh_1.face_normals[face_id_1[0]]
+                # TODO(@silanus23): Consider vanishing this
+                try:
+                    _, _, face_id_1 = trimesh.proximity.closest_point(self.mesh_1, [point])
+                    normal_1 = self.mesh_1.face_normals[face_id_1[0]]
+                except Exception as e:
+                    logger.warning(f'Failed to get closest point on mesh_1: {e}')
+                    normal_1 = np.array([0, 0, 1])
 
-                _, _, face_id_2 = trimesh.proximity.closest_point(self.mesh_2, [point])
-                normal_2 = self.mesh_2.face_normals[face_id_2[0]]
+                try:
+                    _, _, face_id_2 = trimesh.proximity.closest_point(self.mesh_2, [point])
+                    normal_2 = self.mesh_2.face_normals[face_id_2[0]]
+                except Exception as e:
+                    logger.warning(f'Failed to get closest point on mesh_2: {e}')
+                    normal_2 = np.array([0, 0, 1])
 
-            # Project to tangent plane
             normal_1 = self._project_normal_to_tangent_plane(normal_1, tangent)
             normal_2 = self._project_normal_to_tangent_plane(normal_2, tangent)
 
@@ -474,7 +503,6 @@ class SeamExtractor:
         normals_1 = np.array(normals_1)
         normals_2 = np.array(normals_2)
 
-        # Remove outliers
         normals_1 = self._reject_normal_outliers_weighted(normals_1)
         normals_2 = self._reject_normal_outliers_weighted(normals_2)
 
@@ -485,17 +513,13 @@ class SeamExtractor:
         point: np.ndarray,
         mesh: trimesh.Trimesh
     ) -> Tuple[int, int]:
-        """Get two faces sharing the edge closest to this point.
-
-        Args:
-            point: 3D point on seam (3,)
-            mesh: Mesh to query
-
-        Returns:
-            (face_id_1, face_id_2) - Two faces sharing the closest edge
-        """
-        _, _, face_id = trimesh.proximity.closest_point(mesh, [point])
-        closest_face_id = face_id[0]
+        """Get two faces sharing the edge closest to this point."""
+        try:
+            _, _, face_id = trimesh.proximity.closest_point(mesh, [point])
+            closest_face_id = face_id[0]
+        except Exception as e:
+            logger.warning(f'Failed to get closest point on mesh: {e}, returning face 0 as fallback')
+            return 0, 0
 
         face_vertices = mesh.faces[closest_face_id]
         face_edges = [
@@ -515,6 +539,10 @@ class SeamExtractor:
                 min_dist = dist
                 closest_edge = (v1, v2)
 
+        if closest_edge is None:
+            logger.warning(f'No valid edge found in face {closest_face_id}, returning duplicate face')
+            return int(closest_face_id), int(closest_face_id)
+
         v1, v2 = closest_edge
         faces_with_v1 = np.where(np.any(mesh.faces == v1, axis=1))[0]
         faces_with_v2 = np.where(np.any(mesh.faces == v2, axis=1))[0]
@@ -533,16 +561,7 @@ class SeamExtractor:
         seg_start: np.ndarray,
         seg_end: np.ndarray
     ) -> float:
-        """Calculate minimum distance from point to line segment.
-
-        Args:
-            point: 3D point [x, y, z]
-            seg_start: Segment start [x, y, z]
-            seg_end: Segment end [x, y, z]
-
-        Returns:
-            Distance in meters
-        """
+        """Calculate minimum distance from point to line segment."""
         segment = seg_end - seg_start
         length_sq = np.dot(segment, segment)
 
@@ -562,25 +581,22 @@ class SeamExtractor:
         is_edge_contact_1: bool,
         is_edge_contact_2: bool,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Determine which normals are main vs secondary.
-
-        Args:
-            normals_1: Normals from mesh_1 (N, 3)
-            normals_2: Normals from mesh_2 (N, 3)
-            is_edge_joint: Whether edge-to-edge joint
-            is_edge_contact_1: Whether mesh_1 is edge
-            is_edge_contact_2: Whether mesh_2 is edge
-
-        Returns:
-            (normals_main, normals_secondary) each (N, 3)
-        """
+        """Determine which normals are main vs secondary based on joint type and up vector."""
         if is_edge_joint:
-            # Edge-to-edge: use UP vector to pick main
+            # Edge-to-edge: both geometrically equivalent, use up-vector as tie-breaker
+            # to consistently pick which is "main" (whichever is more horizontal/upward-facing)
             avg_normal_1 = np.mean(normals_1, axis=0)
             avg_normal_2 = np.mean(normals_2, axis=0)
 
-            avg_normal_1 = avg_normal_1 / np.linalg.norm(avg_normal_1)
-            avg_normal_2 = avg_normal_2 / np.linalg.norm(avg_normal_2)
+            norm_1 = np.linalg.norm(avg_normal_1)
+            norm_2 = np.linalg.norm(avg_normal_2)
+
+            if norm_1 < 1e-10 or norm_2 < 1e-10:
+                logger.warning('Zero-length average normal detected, defaulting to mesh_1 as main')
+                return normals_1, normals_2
+
+            avg_normal_1 = avg_normal_1 / norm_1
+            avg_normal_2 = avg_normal_2 / norm_2
 
             dot_1 = np.dot(avg_normal_1, self.up_vector)
             dot_2 = np.dot(avg_normal_2, self.up_vector)
@@ -600,30 +616,30 @@ class SeamExtractor:
         self,
         normals: np.ndarray,
     ) -> np.ndarray:
-        """Reject normals that don't fit the trend using Gaussian weighting.
-
-        Args:
-            normals: Array of normals (N, 3)
-
-        Returns:
-            Cleaned normals array (N, 3)
-        """
+        """Reject normals that don't fit the trend using weighted statistical threshold."""
         if len(normals) < 3:
             return normals
 
         weights = self._compute_gaussian_weights(len(normals))
+        weight_sum = np.sum(weights)
+
+        if weight_sum < 1e-10:
+            logger.debug('Weights sum to zero in outlier rejection, skipping')
+            return normals
+
         weighted_sum = np.sum(weights[:, np.newaxis] * normals, axis=0)
-        avg_normal = weighted_sum / np.sum(weights)
+        avg_normal = weighted_sum / weight_sum
 
         norm = np.linalg.norm(avg_normal)
         if norm < 1e-10:
+            logger.debug('Average normal has zero length, skipping outlier rejection')
             return normals
 
         avg_normal = avg_normal / norm
         dots = np.einsum('ij,j->i', normals, avg_normal)
 
-        mean_dot = np.sum(weights * dots) / np.sum(weights)
-        variance = np.sum(weights * (dots - mean_dot) ** 2) / np.sum(weights)
+        mean_dot = np.sum(weights * dots) / weight_sum
+        variance = np.sum(weights * (dots - mean_dot) ** 2) / weight_sum
         std_dot = np.sqrt(variance)
 
         if std_dot < 1e-10:
@@ -635,18 +651,14 @@ class SeamExtractor:
         cleaned_normals = normals.copy()
         cleaned_normals[outlier_mask] = avg_normal
 
+        num_outliers = np.sum(outlier_mask)
+        if num_outliers > 0:
+            logger.debug(f'Replaced {num_outliers} outlier normal(s) out of {len(normals)}')
+
         return cleaned_normals
 
     def _compute_tangent(self, points: np.ndarray, index: int) -> np.ndarray:
-        """Compute tangent vector at point index.
-
-        Args:
-            points: Array of points (N, 3)
-            index: Index of point
-
-        Returns:
-            Normalized tangent vector
-        """
+        """Compute normalized tangent vector at point index using forward/backward differences."""
         if index == 0:
             tangent = points[1] - points[0]
         elif index == len(points) - 1:
@@ -663,15 +675,7 @@ class SeamExtractor:
     def _project_normal_to_tangent_plane(
         self, normal: np.ndarray, tangent: np.ndarray
     ) -> np.ndarray:
-        """Project normal into plane perpendicular to tangent.
-
-        Args:
-            normal: Raw face normal
-            tangent: Normalized tangent vector along seam
-
-        Returns:
-            Projected and normalized normal
-        """
+        """Project normal into plane perpendicular to tangent and normalize."""
         projected = normal - np.dot(normal, tangent) * tangent
         norm = np.linalg.norm(projected)
 
@@ -689,22 +693,7 @@ class SeamExtractor:
         normals_main: np.ndarray,
         normals_secondary: np.ndarray,
     ) -> Seam:
-        """Wrap path data into Seam object.
-
-        Args:
-            geometry: Geometry dict from PathCreator with 'type', 'points', etc.
-            is_edge_joint: Whether edge-on-edge joint
-            is_edge_contact_1: Whether mesh_1 has edge contact
-            is_edge_contact_2: Whether mesh_2 has edge contact
-            normals_main: Main normals (N, 3)
-            normals_secondary: Secondary normals (N, 3)
-
-        Returns:
-            Seam object with LineSegment or ArcSegment
-
-        Raises:
-            ValueError: If geometry type is unsupported
-        """
+        """Wrap geometry and normals into Seam object with metadata."""
         points = geometry['points']
 
         if geometry['type'] == 'line':
@@ -720,6 +709,7 @@ class SeamExtractor:
             seam = Seam(arc_segment=arc_segment)
 
         else:
+            logger.error(f'Unknown geometry type: {geometry["type"]}')
             raise ValueError(f'Unknown geometry type: {geometry["type"]}')
 
         seam.config['is_edge_joint'] = is_edge_joint

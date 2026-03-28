@@ -20,42 +20,112 @@ geometry detection to classify paths as lines, arcs, or complex curves.
 
 """
 
-from typing import Dict, List
+import logging
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from scipy.interpolate import splev, splprep
 from scipy.optimize import least_squares
 from sklearn.decomposition import PCA
 
+logger = logging.getLogger(__name__)
+
 
 class PathCreator:
-    """Smooth raw vertex paths and detect geometric primitives."""
+    """Smooth raw vertex paths and detect geometric primitives.
+
+    Configuration Parameters (passed via config dict to process_path):
+        outlier_std_threshold: Standard deviations for outlier detection (default: 5.0)
+        min_sub_path_length: Min points per sub-path after corner split (default: 10)
+        min_points_for_corner_detection: Min points to attempt corner detection (default: 20)
+        corner_min_angle: Min angle change for corner detection in degrees (default: 25)
+        corner_angle_window: Window size for angle-based detection (default: 10)
+        corner_curvature_window: Window size for curvature-based detection (default: 10)
+        corner_curvature_threshold: Normalized curvature threshold 0-1 (default: 0.8)
+        corner_min_agreement: Min methods that must agree on corner (default: 1)
+        corner_tolerance: Max distance between corners to group (default: 5)
+        corner_filter_window: Window for local maxima filtering (default: 5)
+        arc_radius_tolerance: Max radius difference to merge arcs in meters (default: 0.05)
+        arc_merge_num_points: Points for smoothed merged arc (default: 100)
+        line_angle_tolerance_deg: Max angle diff to merge lines in degrees (default: 10.0)
+        line_merge_max_error: Max fit error to allow line merge (default: 0.001)
+        line_merge_max_iterations: Max iterations for line merging (default: 20)
+        min_line_size: Min line points to keep separate from arcs (default: 70)
+        line_absorption_max_error: Max error to merge small lines into arcs (default: 0.01)
+        line_absorption_max_iterations: Max iterations for absorption (default: 10)
+        first_last_angle_tolerance: Angle tolerance for first/last merge (default: 10)
+        first_last_radius_tolerance: Radius tolerance for first/last merge (default: 0.05)
+        first_last_gap_threshold: Gap threshold for first/last merge in meters (default: 0.01)
+    """
 
     def process_path(
         self,
         points: np.ndarray,
         is_closed: bool = False,
         num_points: int = 100,
-        line_error_threshold: float = 0.0001,
-        circle_error_threshold: float = 0.0001,
+        line_error_threshold: float = 0.0001,  # Legacy parameter, unused
+        circle_error_threshold: float = 0.0001,  # Legacy parameter, unused
         spline_smoothing_factor: float = 0.0,
+        config: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
-        """Process path: detect corners, smooth, classify, merge primitives.
+        """Process raw path: detect corners, smooth with splines, classify geometry, merge primitives.
 
         Args:
-            points: (N, 3) raw path points
-            is_closed: True for closed loops
+            points: Raw path points (N, 3)
+            is_closed: Whether path forms closed loop
             num_points: Points per smoothed segment
-            line_error_threshold: Unused, kept for compatibility
-            circle_error_threshold: Unused, kept for compatibility
-            spline_smoothing_factor: Spline smoothing factor
+            spline_smoothing_factor: B-spline smoothing factor (0 = interpolation)
+            config: Optional dict with tuning parameters (see class docstring for available keys)
 
         Returns:
-            List of geometry dicts with 'type', 'points', and parameters
+            List of geometry dicts with 'type' ('line'/'arc'), 'points', 'center', and fit parameters
         """
-        points_cleaned = self._remove_outliers(points, std_threshold=5.0)
+        cfg = config or {}
 
-        sub_paths = self._split_path_at_corners(points_cleaned, min_sub_path_length=10)
+        std_threshold = cfg.get('outlier_std_threshold', 5.0)
+
+        min_sub_path_length = cfg.get('min_sub_path_length', 10)
+        min_points_for_corners = cfg.get('min_points_for_corner_detection', 20)
+        corner_min_angle = cfg.get('corner_min_angle', 25)
+        corner_angle_window = cfg.get('corner_angle_window', 10)
+        corner_curvature_window = cfg.get('corner_curvature_window', 10)
+        corner_curvature_threshold = cfg.get('corner_curvature_threshold', 0.8)
+        corner_min_agreement = cfg.get('corner_min_agreement', 1)
+        corner_tolerance = cfg.get('corner_tolerance', 5)
+        corner_filter_window = cfg.get('corner_filter_window', 5)
+
+        arc_radius_tolerance = cfg.get('arc_radius_tolerance', 0.05)
+        arc_merge_num_points = cfg.get('arc_merge_num_points', 100)
+        line_angle_tolerance_deg = cfg.get('line_angle_tolerance_deg', 10.0)
+        line_merge_max_error = cfg.get('line_merge_max_error', 0.001)
+        line_merge_max_iterations = cfg.get('line_merge_max_iterations', 20)
+
+        min_line_size = cfg.get('min_line_size', 70)
+        line_absorption_max_error = cfg.get('line_absorption_max_error', 0.01)
+        line_absorption_max_iterations = cfg.get('line_absorption_max_iterations', 10)
+
+        first_last_angle_tolerance = cfg.get('first_last_angle_tolerance', 10)
+        first_last_radius_tolerance = cfg.get('first_last_radius_tolerance', 0.05)
+        first_last_gap_threshold = cfg.get('first_last_gap_threshold', 0.01)
+
+        logger.info(f'Processing path with {len(points)} points (closed={is_closed})')
+
+        points_cleaned = self._remove_outliers(points, std_threshold=std_threshold)
+        logger.debug(f'After outlier removal: {len(points_cleaned)} points')
+
+        sub_paths = self._split_path_at_corners(
+            points_cleaned,
+            min_sub_path_length=min_sub_path_length,
+            min_points_for_corners=min_points_for_corners,
+            corner_min_angle=corner_min_angle,
+            corner_angle_window=corner_angle_window,
+            corner_curvature_window=corner_curvature_window,
+            corner_curvature_threshold=corner_curvature_threshold,
+            corner_min_agreement=corner_min_agreement,
+            corner_tolerance=corner_tolerance,
+            corner_filter_window=corner_filter_window,
+        )
+        logger.debug(f'Split into {len(sub_paths)} sub-path(s) at detected corners')
 
         segments_with_raw = []
 
@@ -88,12 +158,16 @@ class PathCreator:
 
             segments_with_raw.append((geometry, raw_segment))
 
-        # Merge first+last if closed path split arbitrarily
         if len(segments_with_raw) > 1:
             first_geom = segments_with_raw[0][0]
             last_geom = segments_with_raw[-1][0]
 
-            if self._should_merge_first_last(sub_paths, first_geom, last_geom):
+            if self._should_merge_first_last(
+                sub_paths, first_geom, last_geom,
+                angle_tolerance=first_last_angle_tolerance,
+                radius_tolerance=first_last_radius_tolerance,
+                gap_threshold=first_last_gap_threshold,
+            ):
                 first_raw = segments_with_raw[0][1]
                 last_raw = segments_with_raw[-1][1]
 
@@ -123,11 +197,25 @@ class PathCreator:
 
                 segments_with_raw = [(merged_geom, combined_raw)] + segments_with_raw[1:-1]
 
-        result = self._merge_consecutive_arcs(segments_with_raw, radius_tolerance=0.05)
-        result = self._merge_consecutive_lines(result, angle_tolerance_deg=10.0,
-                                               max_merge_error=0.001)
-        result = self._merge_small_lines_into_arcs(result, min_line_size=70, max_merge_error=0.01)
+        result = self._merge_consecutive_arcs(
+            segments_with_raw,
+            radius_tolerance=arc_radius_tolerance,
+            num_points=arc_merge_num_points,
+        )
+        result = self._merge_consecutive_lines(
+            result,
+            angle_tolerance_deg=line_angle_tolerance_deg,
+            max_merge_error=line_merge_max_error,
+            max_iterations=line_merge_max_iterations,
+        )
+        result = self._merge_small_lines_into_arcs(
+            result,
+            min_line_size=min_line_size,
+            max_merge_error=line_absorption_max_error,
+            max_iterations=line_absorption_max_iterations,
+        )
 
+        logger.info(f'Path processing complete: {len(result)} final segment(s)')
         return result
 
     def _should_merge_first_last(
@@ -135,20 +223,15 @@ class PathCreator:
         sub_paths: List[np.ndarray],
         first_geom: Dict,
         last_geom: Dict,
+        angle_tolerance: float = 10,
+        radius_tolerance: float = 0.05,
+        gap_threshold: float = 0.01,
     ) -> bool:
-        """Check if first and last segments should merge (closed path split arbitrarily).
-
-        Args:
-            sub_paths: List of sub-path point arrays
-            first_geom: First segment geometry dict
-            last_geom: Last segment geometry dict
-
-        Returns:
-            True if segments should be merged, False otherwise
-        """
+        """Check if first and last segments should merge (closed path split arbitrarily)."""
         if len(sub_paths) <= 1:
             return False
 
+        # TODO(@silanus23): Test this check more
         if first_geom['type'] != last_geom['type']:
             return False
 
@@ -158,14 +241,14 @@ class PathCreator:
             cos_angle = abs(np.dot(dir1, dir2))
             angle_deg = np.degrees(np.arccos(np.clip(cos_angle, 0, 1)))
 
-            if angle_deg > 10:
+            if angle_deg > angle_tolerance:
                 return False
 
         elif first_geom['type'] == 'arc':
             r1 = first_geom['radius']
             r2 = last_geom['radius']
 
-            if abs(r1 - r2) > 0.05:
+            if abs(r1 - r2) > radius_tolerance:
                 return False
 
         first_path = sub_paths[0]
@@ -173,7 +256,7 @@ class PathCreator:
 
         gap = np.linalg.norm(last_path[-1] - first_path[0])
 
-        if gap > 0.01:
+        if gap > gap_threshold:
             return False
 
         return True
@@ -182,27 +265,38 @@ class PathCreator:
         self,
         points: np.ndarray,
         min_sub_path_length: int = 10,
+        min_points_for_corners: int = 20,
+        corner_min_angle: float = 25,
+        corner_angle_window: int = 10,
+        corner_curvature_window: int = 10,
+        corner_curvature_threshold: float = 0.8,
+        corner_min_agreement: int = 1,
+        corner_tolerance: int = 5,
+        corner_filter_window: int = 5,
     ) -> List[np.ndarray]:
-        """Detect corners and split path.
-
-        Args:
-            points: Input path points (N, 3)
-            min_sub_path_length: Minimum points per sub-path
-
-        Returns:
-            List of sub-path point arrays
-        """
-        if len(points) < 20:
+        """Detect corners and split path into sub-paths."""
+        if len(points) < min_points_for_corners:
             return [points]
 
-        angle_corners = self._detect_corners_by_angle(points, min_angle=25, window=10)
-        curvature_corners = self._detect_corners_by_curvature(points, window=10, threshold=0.8)
+        angle_corners = self._detect_corners_by_angle(
+            points,
+            min_angle=corner_min_angle,
+            window=corner_angle_window,
+            filter_window=corner_filter_window,
+        )
+        curvature_corners = self._detect_corners_by_curvature(
+            points,
+            window=corner_curvature_window,
+            threshold=corner_curvature_threshold,
+        )
 
         corner_indices = self._combine_corner_detections(
             [angle_corners, curvature_corners],
-            min_agreement=1,
-            tolerance=5,
+            min_agreement=corner_min_agreement,
+            tolerance=corner_tolerance,
         )
+
+        logger.info(f'Detected {len(corner_indices)} corner(s) in path')
 
         if not corner_indices:
             return [points]
@@ -218,6 +312,7 @@ class PathCreator:
             if len(sub_path) >= min_sub_path_length:
                 sub_paths.append(sub_path)
             else:
+                # Merge tiny sub-path with previous to avoid degenerate segments
                 if sub_paths:
                     sub_paths[-1] = np.vstack([sub_paths[-1], sub_path[1:]])
                 else:
@@ -230,17 +325,22 @@ class PathCreator:
         points: np.ndarray,
         min_angle: float = 25,
         window: int = 10,
+        filter_window: int = 5,
     ) -> List[int]:
-        """Detect corners by angle change.
+        """Detect corners by angle change between before/after vectors."""
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError(f'Points must be (N, 3) array, got shape {points.shape}')
 
-        Args:
-            points: Input path points (N, 3)
-            min_angle: Minimum angle change in degrees to detect corner
-            window: Number of points to look ahead/behind
+        if window <= 0:
+            raise ValueError(f'Window must be positive, got {window}')
 
-        Returns:
-            List of corner point indices
-        """
+        if not (0 < min_angle <= 180):
+            raise ValueError(f'min_angle must be in (0, 180], got {min_angle}')
+
+        if len(points) < 2 * window:
+            logger.debug(f'Path too short ({len(points)} points) for corner detection with window={window}')
+            return []
+
         corners = []
 
         for i in range(window, len(points) - window):
@@ -259,7 +359,8 @@ class PathCreator:
             if angle_deg > min_angle:
                 corners.append(i)
 
-        return self._filter_to_local_maxima(corners, points, window=5)
+        logger.debug(f'Angle-based detection found {len(corners)} candidate(s) before filtering')
+        return self._filter_to_local_maxima(corners, points, window=filter_window)
 
     def _detect_corners_by_curvature(
         self,
@@ -267,17 +368,18 @@ class PathCreator:
         window: int = 10,
         threshold: float = 0.8,
     ) -> List[int]:
-        """Detect corners by curvature.
+        """Detect corners by discrete curvature magnitude."""
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError(f'Points must be (N, 3) array, got shape {points.shape}')
 
-        Args:
-            points: Input path points (N, 3)
-            window: Number of points for curvature calculation
-            threshold: Normalized curvature threshold (0-1)
+        if window <= 0:
+            raise ValueError(f'Window must be positive, got {window}')
 
-        Returns:
-            List of corner point indices
-        """
+        if not (0 < threshold <= 1):
+            raise ValueError(f'Threshold must be in (0, 1], got {threshold}')
+
         if len(points) < window * 2:
+            logger.debug(f'Path too short ({len(points)} points) for curvature detection with window={window}')
             return []
 
         curvatures = []
@@ -296,9 +398,11 @@ class PathCreator:
         curvatures = np.array(curvatures)
 
         if len(curvatures) == 0 or np.max(curvatures) < 1e-10:
+            logger.debug('No significant curvature variation detected')
             return []
 
         max_curvature = np.max(curvatures)
+        logger.debug(f'Max curvature: {max_curvature:.6f}')
         normalized = curvatures / max_curvature
 
         corners = []
@@ -309,6 +413,7 @@ class PathCreator:
                 if normalized[i] == np.max(normalized[local_start:local_end]):
                     corners.append(i)
 
+        logger.debug(f'Curvature-based detection found {len(corners)} corner(s)')
         return corners
 
     def _combine_corner_detections(
@@ -317,16 +422,7 @@ class PathCreator:
         min_agreement: int = 1,
         tolerance: int = 5,
     ) -> List[int]:
-        """Combine corner detections from multiple methods.
-
-        Args:
-            corner_lists: List of corner detection results from different methods
-            min_agreement: Minimum number of methods that must agree
-            tolerance: Maximum distance between corners to be considered the same
-
-        Returns:
-            List of combined corner indices
-        """
+        """Combine corner detections from multiple methods using spatial grouping."""
         if not corner_lists:
             return []
 
@@ -353,6 +449,8 @@ class PathCreator:
         verified = []
         for group in groups:
             if len(group) >= min_agreement:
+                # Use median as robust central estimate - less sensitive to outliers than mean
+                # when multiple detection methods report slightly different indices for same corner
                 verified.append(int(np.median(group)))
 
         return sorted(verified)
@@ -363,26 +461,23 @@ class PathCreator:
         points: np.ndarray,
         window: int = 5,
     ) -> List[int]:
-        """Filter to local maxima of angle change.
-
-        Args:
-            indices: Candidate corner indices
-            points: Input path points (N, 3)
-            window: Window size for finding local maxima
-
-        Returns:
-            List of filtered corner indices that are local maxima
-        """
+        """Filter candidate corners to local maxima of angle change."""
         if not indices:
             return []
 
+        if window <= 0:
+            raise ValueError(f'Window must be positive, got {window}')
+
+        # Use larger window for stable angle measurement
+        angle_window = max(window * 2, 10)
+
         angles = {}
         for idx in indices:
-            if idx < 10 or idx >= len(points) - 10:
+            if idx < angle_window or idx >= len(points) - angle_window:
                 continue
 
-            v1 = points[idx] - points[idx - 10]
-            v2 = points[idx + 10] - points[idx]
+            v1 = points[idx] - points[idx - angle_window]
+            v2 = points[idx + angle_window] - points[idx]
 
             norm1 = np.linalg.norm(v1)
             norm2 = np.linalg.norm(v2)
@@ -412,16 +507,9 @@ class PathCreator:
         self,
         segments_with_raw: List[tuple],
         radius_tolerance: float = 0.05,
+        num_points: int = 100,
     ) -> List[Dict]:
-        """Merge consecutive arcs with similar radii.
-
-        Args:
-            segments_with_raw: List of (geometry_dict, raw_points) tuples
-            radius_tolerance: Maximum radius difference to merge arcs
-
-        Returns:
-            List of merged geometry dictionaries
-        """
+        """Merge consecutive arcs with similar radii."""
         if len(segments_with_raw) <= 1:
             return [seg[0] for seg in segments_with_raw]
 
@@ -457,10 +545,11 @@ class PathCreator:
 
             if len(arc_group_geoms) > 1:
                 combined_raw = np.vstack(arc_group_raw)
+                # Refit circle to combined points for best accuracy
                 center, radius, error = self._fit_circle(combined_raw)
 
                 smoothed = self._apply_spline_smoothing(
-                    combined_raw, is_closed=False, num_points=100
+                    combined_raw, is_closed=False, num_points=num_points
                 )
 
                 merged_geom = {
@@ -471,6 +560,7 @@ class PathCreator:
                     'error': error,
                 }
 
+                logger.debug(f'Merged {len(arc_group_geoms)} consecutive arcs into one (radius={radius:.4f}m)')
                 merged.append(merged_geom)
                 i = j
             else:
@@ -484,19 +574,10 @@ class PathCreator:
         segments: List[Dict],
         angle_tolerance_deg: float = 10.0,
         max_merge_error: float = 0.001,
+        max_iterations: int = 20,
     ) -> List[Dict]:
-        """Merge consecutive lines if collinear.
-
-        Args:
-            segments: List of geometry dictionaries
-            angle_tolerance_deg: Maximum angle difference in degrees to merge
-            max_merge_error: Maximum fit error to allow merge
-
-        Returns:
-            List of merged geometry dictionaries
-        """
+        """Merge consecutive collinear lines iteratively."""
         iteration = 0
-        max_iterations = 20
 
         while iteration < max_iterations:
             iteration += 1
@@ -521,6 +602,7 @@ class PathCreator:
                 combined_points = np.vstack([seg1['points'], seg2['points']])
                 center, direction, error = self._fit_line(combined_points)
 
+                # Reject merge if fit quality degrades
                 if error >= max_merge_error:
                     continue
 
@@ -532,6 +614,7 @@ class PathCreator:
                     'error': error,
                 }
 
+                logger.debug(f'Merged 2 collinear lines (angle diff={angle_deg:.2f}°, error={error:.6f})')
                 segments = segments[:i] + [merged_line] + segments[i+2:]
                 merge_found = True
                 break
@@ -546,21 +629,13 @@ class PathCreator:
         segments: List[Dict],
         min_line_size: int = 70,
         max_merge_error: float = 0.01,
+        max_iterations: int = 10,
     ) -> List[Dict]:
-        """Merge small lines into adjacent arcs.
-
-        Args:
-            segments: List of geometry dictionaries
-            min_line_size: Minimum line segment size to keep separate
-            max_merge_error: Maximum fit error to allow merge
-
-        Returns:
-            List of merged geometry dictionaries
-        """
+        """Absorb small line segments into adjacent arcs."""
         changed = True
         iteration = 0
 
-        while changed and iteration < 10:
+        while changed and iteration < max_iterations:
             changed = False
             iteration += 1
 
@@ -582,7 +657,6 @@ class PathCreator:
                 while j >= 0 and j not in absorbed:
                     if (segments[j]['type'] == 'line' and
                             len(segments[j]['points']) < min_line_size):
-
                         left_indices.insert(0, j)
                         j -= 1
                     elif segments[j]['type'] == 'arc':
@@ -608,6 +682,7 @@ class PathCreator:
                 if len(absorb_indices) > 1:
                     combined_points = np.vstack([segments[idx]['points'] for
                                                 idx in absorb_indices])
+                    # Refit circle to combined geometry
                     center, radius, error = self._fit_circle(combined_points)
 
                     if radius is not None and error < max_merge_error:
@@ -618,6 +693,7 @@ class PathCreator:
                             'radius': radius,
                             'error': error,
                         }
+                        logger.debug(f'Merged {len(absorb_indices)} segment(s) into arc (radius={radius:.4f}m)')
                         new_segments.append(merged_segment)
                         absorbed.update(absorb_indices)
                         changed = True
@@ -635,15 +711,16 @@ class PathCreator:
         points: np.ndarray,
         std_threshold: float = 5.0,
     ) -> np.ndarray:
-        """Remove outlier points.
+        """Remove outlier points using statistical distance threshold.
 
-        Args:
-            points: Input path points (N, 3)
-            std_threshold: Number of standard deviations for outlier detection
-
-        Returns:
-            Cleaned point array with outliers removed
+        A conservative method to handle big problems.
         """
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError(f'Points must be (N, 3) array, got shape {points.shape}')
+
+        if std_threshold <= 0:
+            raise ValueError(f'std_threshold must be positive, got {std_threshold}')
+
         if len(points) < 3:
             return points
 
@@ -656,11 +733,16 @@ class PathCreator:
         std_dist = np.std(distances)
 
         if std_dist < 1e-10:
+            logger.info('Outlier removal skipped (no significant point spacing variation)')
             return points
 
         outlier_mask = distances > (mean_dist + std_threshold * std_dist)
         keep_mask = np.ones(len(points), dtype=bool)
         keep_mask[:-1] = ~outlier_mask
+
+        num_removed = np.sum(~keep_mask)
+        if num_removed > 0:
+            logger.info(f'Removed {num_removed} outlier point(s)')
 
         return points[keep_mask]
 
@@ -671,17 +753,7 @@ class PathCreator:
         num_points: int = 100,
         smoothing_factor: float = 0.0,
     ) -> np.ndarray:
-        """Apply B-spline smoothing.
-
-        Args:
-            points: Input path points (N, 3)
-            is_closed: True for closed loops
-            num_points: Number of points in smoothed output
-            smoothing_factor: Spline smoothing factor (0 = interpolation)
-
-        Returns:
-            Smoothed point array (num_points, 3)
-        """
+        """Apply B-spline smoothing to path points."""
         vertices = np.asarray(points, dtype=np.float64)
 
         if len(vertices) < 4:
@@ -691,7 +763,8 @@ class PathCreator:
 
         try:
             tck, u = splprep([x, y, z], s=smoothing_factor, per=1 if is_closed else 0)
-        except Exception:
+        except Exception as e:
+            logger.warning(f'Spline fitting failed: {e}, returning original points')
             return vertices
 
         u_new = np.linspace(0, 1, num_points)
@@ -705,16 +778,7 @@ class PathCreator:
         tie_error_threshold: float = 0.0001,
         max_realistic_radius: float = 2.0,
     ) -> tuple[str, dict]:
-        """Classify segment as line or arc.
-
-        Args:
-            points: Segment points (N, 3)
-            tie_error_threshold: Error threshold for tie-breaking
-            max_realistic_radius: Maximum realistic arc radius
-
-        Returns:
-            Tuple of (geometry_type, parameters_dict)
-        """
+        """Classify segment as line or arc by comparing fit errors."""
         if len(points) < 3:
             center, direction, error = self._fit_line(points)
             return 'line', {
@@ -727,6 +791,7 @@ class PathCreator:
         circle_center, radius, circle_error = self._fit_circle(points)
 
         if line_error < tie_error_threshold and circle_error < tie_error_threshold:
+            # Large radius arc is geometrically indistinguishable from a line
             if radius is not None and radius > max_realistic_radius:
                 return 'line', {
                     'center': line_center,
@@ -757,14 +822,7 @@ class PathCreator:
         self,
         points: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, float]:
-        """Fit 3D line using PCA.
-
-        Args:
-            points: Input points (N, 3)
-
-        Returns:
-            Tuple of (center, direction, error)
-        """
+        """Fit 3D line using PCA, return center, direction, and error."""
         if len(points) < 2:
             return points[0], np.array([1, 0, 0]), 0.0
 
@@ -786,14 +844,7 @@ class PathCreator:
         self,
         points: np.ndarray,
     ) -> tuple[np.ndarray, float, float]:
-        """Fit circle using least squares.
-
-        Args:
-            points: Input points (N, 3)
-
-        Returns:
-            Tuple of (center, radius, error)
-        """
+        """Fit circle using least squares in PCA-projected 2D plane."""
         if len(points) < 3:
             return None, None, float('inf')
 
@@ -806,6 +857,7 @@ class PathCreator:
         center_2d_guess = np.mean(points_2d, axis=0)
         radius_guess = np.mean(np.linalg.norm(points_2d - center_2d_guess, axis=1))
 
+        # Nonlinear least squares: minimize deviation from constant radius
         def residuals(params):
             cx, cy, r = params
             distances = np.sqrt(
@@ -825,5 +877,6 @@ class PathCreator:
 
             return center_3d, abs(radius), error
 
-        except Exception:
+        except Exception as e:
+            logger.warning(f'Circle fit failed: {e}')
             return None, None, float('inf')

@@ -17,6 +17,7 @@
 """Command-line interface for automated weld seam generation from URDF/CAD geometry."""
 
 import argparse
+import logging
 from pathlib import Path
 import sys
 
@@ -73,12 +74,25 @@ Examples:
     return parser.parse_args()
 
 
+def setup_logging(verbose: bool) -> None:
+    """Configure logging based on verbosity level."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(levelname)s - %(name)s - %(message)s',
+        force=True,
+    )
+
+
 def main():
     """Run seam generation workflow from CLI."""
     args = parse_arguments()
+    
+    setup_logging(args.verbose)
+    logger = logging.getLogger(__name__)
 
     if args.input is None:
-        print('ERROR: No input file specified and default config not found')
+        logger.error('No input file specified and default config not found')
         print('Use --input to specify a YAML configuration file')
         return 1
 
@@ -92,6 +106,9 @@ def main():
 
         main_world_pose = workpiece_config['main_part'].get('world_pose')
         secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
+        
+        # Extract mode from workpiece config
+        mode = workpiece_config.get('mode', 'auto')
 
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
@@ -100,14 +117,10 @@ def main():
             print(f'  Travel angle: {parameters["travel_angle_deg"]}')
             print(f'  Gap: {parameters["gap_mm"]}mm')
             print()
-
-        if args.verbose:
             print(f'  Main part URDF: {main_path}')
             print(f'  Secondary part URDF: {secondary_path}')
+            print(f'  Mode: {mode}')
             print()
-
-        # Extract mode from workpiece config
-        mode = workpiece_config.get('mode', 'auto')
 
         planner = JobPlanner(
             main_path=main_path,
@@ -118,16 +131,13 @@ def main():
             mode=mode,
         )
 
-        print('Starting weld job planning')
-        print()
+        logger.info('Starting weld job planning')
 
         generated_seams = planner.plan_job()
 
         if not generated_seams:
-            print('ERROR: No seams generated')
+            logger.error('No seams generated')
             return 1
-
-        print()
 
         if args.verbose:
             num_edge = sum(
@@ -152,8 +162,7 @@ def main():
                 )
             print()
 
-        print(f'Successfully generated {len(generated_seams)} seam(s)')
-        print()
+        logger.info(f'Successfully generated {len(generated_seams)} seam(s)')
 
         if args.output is None:
             output_path = auto_generate_output_path(args.input)
@@ -167,33 +176,23 @@ def main():
             'work_angle_deg': parameters['work_angle_deg'],
             'travel_angle_deg': parameters['travel_angle_deg'],
             'gap_mm': parameters['gap_mm'],
+            'pipeline': mode,
         }
 
-        output_data = {'metadata': metadata, 'seams': {}}
-
-        for idx, seam in enumerate(generated_seams):
-            seam_id = f'seam_{idx:03d}'
-
-            seam_dict = seam.to_dict()
-
-            seam_dict['is_edge_joint'] = bool(seam.config.get('is_edge_joint', False))
-            output_data['seams'][seam_id] = seam_dict
-
         export_to_json(generated_seams, output_path, metadata)
-        print(f'Exported to: {output_path}')
+        logger.info(f'Exported to: {output_path}')
         return 0
 
     except FileNotFoundError as e:
-        print(f'ERROR: {e}')
+        logger.error(f'{e}')
         return 1
     except ValueError as e:
-        print(f'ERROR: Invalid configuration - {e}')
+        logger.error(f'Invalid configuration - {e}')
         return 1
     except Exception as e:
-        print(f'ERROR: {e}')
+        logger.error(f'{e}')
         if args.verbose:
             import traceback
-
             traceback.print_exc()
         return 1
 

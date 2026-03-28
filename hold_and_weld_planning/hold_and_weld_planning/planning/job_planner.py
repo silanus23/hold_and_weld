@@ -14,12 +14,15 @@
 
 """Orchestrate complete weld job planning from URDF/CAD to trajectories."""
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 import trimesh
+
+logger = logging.getLogger(__name__)
 
 from ..mesh.mesh_loader import MeshLoader
 from ..mesh.seam_extractor import SeamExtractor
@@ -76,6 +79,7 @@ class JobPlanner:
 
         if mode == 'auto':
             self.mode = self._detect_mode(main_path, secondary_path)
+            logger.info(f'Auto-detected mode: {self.mode.upper()}')
         else:
             self.mode = mode
 
@@ -92,13 +96,14 @@ class JobPlanner:
             if param not in self.parameters:
                 raise ValueError(f"Missing required parameter: '{param}'")
 
-        print(f'JobPlanner initialized in {self.mode.upper()} mode')
-        print(f'  work_angle={self.parameters["work_angle_deg"]}deg, '
-              f'gap={self.parameters["gap_mm"]}mm, '
-              f'tolerance={self.parameters["epsilon"]*1000}mm')
+        logger.info(f'JobPlanner initialized in {self.mode.upper()} mode')
+        logger.info(f'Parameters: work_angle={self.parameters["work_angle_deg"]}°, '
+                   f'travel_angle={self.parameters["travel_angle_deg"]}°, '
+                   f'gap={self.parameters["gap_mm"]}mm, '
+                   f'tolerance={self.parameters["epsilon"]*1000:.3f}mm')
 
     def _detect_mode(self, main_path: str, secondary_path: str) -> str:
-        """Auto-detect processing mode from file extensions."""
+        """Auto-detect processing mode (mesh vs occt) from file extensions."""
         main_ext = Path(main_path).suffix.lower()
         secondary_ext = Path(secondary_path).suffix.lower()
 
@@ -129,75 +134,75 @@ class JobPlanner:
 
     def _plan_job_mesh(self) -> list:
         """Execute mesh-based planning pipeline using manifold3d and CGAL."""
-        print('Generating mesh shells (manifold3d)...')
+        logger.info('Generating mesh shells (manifold3d)...')
         mesh_main, mesh_secondary = self._generate_shells()
 
-        print(f'Mesh 1: watertight={mesh_main.is_watertight}, '
-              f'faces={len(mesh_main.faces)}, bounds={mesh_main.bounds}')
-        print(f'Mesh 2: watertight={mesh_secondary.is_watertight}, '
-              f'faces={len(mesh_secondary.faces)}, bounds={mesh_secondary.bounds}')
+        logger.debug(f'Mesh 1: watertight={mesh_main.is_watertight}, '
+                    f'faces={len(mesh_main.faces)}, bounds={mesh_main.bounds}')
+        logger.debug(f'Mesh 2: watertight={mesh_secondary.is_watertight}, '
+                    f'faces={len(mesh_secondary.faces)}, bounds={mesh_secondary.bounds}')
 
-        print('Extracting seams from geometry (CGAL)...')
+        logger.info('Extracting seams from geometry (CGAL)...')
         seam_extractor = SeamExtractor(mesh_main, mesh_secondary, self.parameters)
         seams = seam_extractor.extract_seams()
 
         if not seams:
-            print('Warning: No seams detected')
+            logger.warning('No seams detected')
             return []
 
-        print(f'Detected {len(seams)} seam(s)')
+        logger.info(f'Detected {len(seams)} seam(s)')
 
-        print('Generating weld poses...')
+        logger.info('Generating weld poses...')
         weld_planner = WeldPlanner(self.parameters)
 
         for idx, seam in enumerate(seams):
             try:
                 weld_planner.generate_seam(seam)
                 num_poses = len(seam.poses) if seam.poses else 0
-                print(f'  Seam {idx}: {num_poses} poses generated')
+                logger.debug(f'Seam {idx}: {num_poses} pose(s) generated')
             except Exception as e:
-                print(f'Warning: Failed to generate poses for seam {idx}: {e}')
+                logger.warning(f'Failed to generate poses for seam {idx}: {e}')
                 continue
 
         successful_seams = [s for s in seams if s.is_generated]
-        print(f'Successfully planned {len(successful_seams)} seam(s)')
+        logger.info(f'Successfully planned {len(successful_seams)}/{len(seams)} seam(s)')
 
         return successful_seams
 
     def _plan_job_occt(self) -> list:
         """Execute OCCT-based planning pipeline using pythonocc-core."""
-        print('Generating OCCT shapes (pythonocc-core)...')
+        logger.info('Generating OCCT shapes (pythonocc-core)...')
         shape_main, shape_secondary = self._generate_occt_shapes()
 
-        print('Extracting seams from geometry (OCCT)...')
+        logger.info('Extracting seams from geometry (OCCT)...')
         seam_extractor = SeamExtractorOCCT(shape_main, shape_secondary, self.parameters)
         seams = seam_extractor.extract_seams()
 
         if not seams:
-            print('Warning: No seams detected')
+            logger.warning('No seams detected')
             return []
 
-        print(f'Detected {len(seams)} seam(s)')
+        logger.info(f'Detected {len(seams)} seam(s)')
 
-        print('Generating weld poses...')
+        logger.info('Generating weld poses...')
         weld_planner = WeldPlanner(self.parameters)
 
         for idx, seam in enumerate(seams):
             try:
                 weld_planner.generate_seam(seam)
                 num_poses = len(seam.poses) if seam.poses else 0
-                print(f'  Seam {idx}: {num_poses} poses generated')
+                logger.debug(f'Seam {idx}: {num_poses} pose(s) generated')
             except Exception as e:
-                print(f'Warning: Failed to generate poses for seam {idx}: {e}')
+                logger.warning(f'Failed to generate poses for seam {idx}: {e}')
                 continue
 
         successful_seams = [s for s in seams if s.is_generated]
-        print(f'Successfully planned {len(successful_seams)} seam(s)')
+        logger.info(f'Successfully planned {len(successful_seams)}/{len(seams)} seam(s)')
 
         return successful_seams
 
     def _generate_shells(self) -> tuple:
-        """Generate trimesh shells for both parts in mesh mode."""
+        """Generate watertight trimesh shells for both parts."""
         mesh_main = self._load_input_mesh(self.main_path, self.main_world_transform)
         mesh_secondary = self._load_input_mesh(
             self.secondary_path, self.secondary_world_transform
@@ -208,31 +213,28 @@ class JobPlanner:
         if not mesh_secondary.is_watertight:
             raise RuntimeError('Secondary mesh is not watertight')
 
-        print(
-            f'  Main mesh: {len(mesh_main.vertices)} vertices, '
+        logger.info(
+            f'Main mesh: {len(mesh_main.vertices)} vertices, '
             f'{len(mesh_main.faces)} faces'
         )
-        print(
-            f'  Secondary mesh: {len(mesh_secondary.vertices)} vertices, '
+        logger.info(
+            f'Secondary mesh: {len(mesh_secondary.vertices)} vertices, '
             f'{len(mesh_secondary.faces)} faces'
         )
 
         return mesh_main, mesh_secondary
 
     def _generate_occt_shapes(self) -> tuple:
-        """Generate OCCT TopoDS_Shape objects for both parts in OCCT mode."""
+        """Generate OCCT TopoDS_Shape objects for both parts."""
         shape_main = self._load_input_occt(self.main_path, self.main_world_transform)
         shape_secondary = self._load_input_occt(
             self.secondary_path, self.secondary_world_transform
         )
 
-        print('  Main shape: OCCT TopoDS_Shape')
-        print('  Secondary shape: OCCT TopoDS_Shape')
-
         return shape_main, shape_secondary
 
     def _load_input_mesh(self, path: str, world_transform: np.ndarray) -> trimesh.Trimesh:
-        """Load URDF or STL as trimesh with world transform applied."""
+        """Load URDF or STL as trimesh and apply world transform."""
         refine_iterations = self.parameters['refine_iterations']
 
         if Path(path).suffix.lower() == '.stl':
@@ -257,7 +259,7 @@ class JobPlanner:
         )
 
     def _load_input_occt(self, path: str, world_transform: np.ndarray):
-        """Load URDF, STEP, or IGES as OCCT shape with world transform applied."""
+        """Load URDF, STEP, or IGES as OCCT shape and apply world transform."""
         path_suffix = Path(path).suffix.lower()
 
         if path_suffix in ['.step', '.stp', '.iges', '.igs']:
@@ -273,12 +275,17 @@ class JobPlanner:
             return occt_gen.create_shape_for_all_links()
 
     def _pose_to_matrix(self, pose: Optional[Dict[str, list]]) -> np.ndarray:
-        """Convert xyz/rpy dict to 4x4 transformation matrix."""
+        """Convert xyz/rpy dict to 4x4 homogeneous transformation matrix."""
         if pose is None:
             return np.eye(4)
 
         xyz = pose.get('xyz', [0.0, 0.0, 0.0])
         rpy = pose.get('rpy', [0.0, 0.0, 0.0])
+
+        if len(xyz) != 3:
+            raise ValueError(f'xyz must have 3 elements, got {len(xyz)}')
+        if len(rpy) != 3:
+            raise ValueError(f'rpy must have 3 elements, got {len(rpy)}')
 
         rot_matrix = Rotation.from_euler('xyz', rpy).as_matrix()
 

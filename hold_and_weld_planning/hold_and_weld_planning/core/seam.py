@@ -43,7 +43,7 @@ class Seam:
         arc_segment: Optional[ArcSegment] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
-        # Validate that exactly one source is provided
+        # Validate mutual exclusion: exactly one segment source must be provided
         sources_provided = sum(
             [seam_dict is not None, line_segment is not None, arc_segment is not None]
         )
@@ -55,12 +55,13 @@ class Seam:
         if sources_provided > 1:
             raise ValueError('Cannot provide multiple segment sources')
 
-        # Create segment from provided source
+        # Initialize segment from the provided source
         if line_segment is not None:
             self.segment = line_segment
         elif arc_segment is not None:
             self.segment = arc_segment
         elif seam_dict is not None:
+            # Legacy dict format: construct LineSegment from start/end
             if 'start' not in seam_dict:
                 raise KeyError("seam_dict must contain 'start' key")
             if 'end' not in seam_dict:
@@ -110,6 +111,7 @@ class Seam:
         Raises:
             RuntimeError: If poses not generated yet
         """
+        # Enforce that poses must be generated before export
         if not self.is_generated:
             raise RuntimeError('Cannot export seam - poses not generated yet')
 
@@ -132,15 +134,17 @@ class Seam:
         if self.config:
             result['config'] = {}
             for k, v in self.config.items():
+                # Skip large internal arrays that aren't needed in exported JSON
                 if k in ['normals_mesh_1', 'normals_mesh_2', 'normals_main',
                          'normals_secondary', 'smoothed_points']:
                     continue
 
+                # Convert numpy types to native Python types for JSON serialization
                 if hasattr(v, 'item') and hasattr(v, 'shape') and v.shape == ():
-                    result['config'][k] = v.item()
+                    result['config'][k] = v.item()  # Scalar numpy value
                 elif hasattr(v, 'tolist'):
-                    result['config'][k] = v.tolist()
+                    result['config'][k] = v.tolist()  # Numpy array
                 else:
-                    result['config'][k] = v
+                    result['config'][k] = v  # Already JSON-serializable
 
         return result
