@@ -280,6 +280,71 @@ TEST_F(KinematicsSolverTest, JointLimits_AllJointsChecked)
       << "Joint " << i << " upper limit check failed";
   }
 }
+// Add these two tests to hold_and_weld_application/test/kinematics_solver_test.cpp
+
+TEST_F(KinematicsSolverTest, FK_SafetyPosition_MatchesSimulation)
+{
+  // Safety position from dual_robot_coordinator and verified via tf2_echo
+  std::vector<double> q_safety = {
+    0.023651569837446047,   // joint_1_s
+    -0.26461837297040824,   // joint_2_l
+    0.6452120650720712,     // joint_3_u
+    0.029834907718187077,   // joint_4_r
+    -0.9100501487202467,    // joint_5_b
+    6.264760220707309       // joint_6_t
+  };
+
+  Eigen::Isometry3d T = solver_->compute_fk(q_safety);
+
+  // Expected TCP pose from tf2_echo robot2_base_link robot2_wire_tip
+  // Translation: [0.659, 0.006, 1.785]
+  EXPECT_NEAR(T.translation().x(), 0.659, 0.001);
+  EXPECT_NEAR(T.translation().y(), 0.006, 0.001);
+  EXPECT_NEAR(T.translation().z(), 1.785, 0.001);
+
+  // Expected orientation from tf2_echo
+  // Quaternion (xyzw): [-0.000, -0.383, -0.001, 0.924]
+  Eigen::Quaterniond q(T.rotation());
+  EXPECT_NEAR(q.x(), 0.000, 0.001);
+  EXPECT_NEAR(q.y(), -0.383, 0.001);
+  EXPECT_NEAR(q.z(), 0.000, 0.001);
+  EXPECT_NEAR(q.w(), 0.924, 0.001);
+
+  // Verify rotation matrix determinant (should be 1 for valid rotation)
+  double det = T.rotation().determinant();
+  EXPECT_NEAR(det, 1.0, 1e-6);
+}
+
+TEST_F(KinematicsSolverTest, Jacobian_WristSingularity_DetectsRankDeficiency)
+{
+  // Wrist singularity configuration: joint_5_b = 0 causes joints 4 and 6 axes to align
+  // This is a theoretical wrist singularity for 6-DOF manipulators
+  std::vector<double> q_singular = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+  Eigen::MatrixXd J = solver_->compute_jacobian(q_singular);
+
+  // Compute singular value decomposition
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
+  auto singular_values = svd.singularValues();
+
+  double sigma_min = singular_values(5);  // Smallest singular value
+  double sigma_max = singular_values(0);  // Largest singular value
+
+  // At singularity: condition number should be very large
+  double condition = sigma_max / sigma_min;
+  EXPECT_GT(condition, 100.0) << "Condition number should explode at singularity";
+
+  // Smallest singular value should be near zero
+  EXPECT_LT(sigma_min, 0.01) << "Smallest singular value should be near zero at singularity";
+
+  // Yoshikawa manipulability index should be low
+  double yoshikawa = solver_->compute_yoshikawa_index(q_singular);
+  EXPECT_LT(yoshikawa, 0.01) << "Yoshikawa index should be low at singularity";
+
+  // Verify the singularity detector works
+  EXPECT_TRUE(solver_->is_near_singularity(q_singular, 0.01))
+    << "is_near_singularity() should detect this configuration as singular";
+}
 
 int main(int argc, char ** argv)
 {
