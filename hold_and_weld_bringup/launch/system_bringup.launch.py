@@ -19,16 +19,54 @@ Launches full system: Gazebo, MoveIt, RViz, gripper, welder, and coordinator.
 Uses industry-standard parallel launch approach where nodes handle their own dependencies.
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+import yaml
+
+
+def load_yaml(package_name, file_path):
+    """Load a YAML file from a package."""
+    package_share = get_package_share_directory(package_name)
+    absolute_file_path = os.path.join(package_share, file_path)
+    try:
+        with open(absolute_file_path, 'r') as file:
+            return yaml.safe_load(file)
+    except EnvironmentError:
+        return None
 
 
 def generate_launch_description():
     """Launch complete dual-robot welding system."""
+    # Read robot2 safety joint positions from welding.yaml and flatten into
+    # [-J name value ...] spawn arguments for Gazebo.
+    welding_yaml = load_yaml('hold_and_weld_bringup', 'config/tasks/welding.yaml')
+    safety_joints = (
+        welding_yaml.get('safety_pose', {}).get('joint_positions', {})
+        if welding_yaml else {}
+    )
+    # Build xacro args string for robot2 initial joint positions.
+    # Joint order in gp25_arm_prefix.xacro: j1=joint_1_s, j2=joint_2_l, ...
+    joint_index_map = {
+        'robot2_joint_1_s': 'robot2_initial_pos_j1',
+        'robot2_joint_2_l': 'robot2_initial_pos_j2',
+        'robot2_joint_3_u': 'robot2_initial_pos_j3',
+        'robot2_joint_4_r': 'robot2_initial_pos_j4',
+        'robot2_joint_5_b': 'robot2_initial_pos_j5',
+        'robot2_joint_6_t': 'robot2_initial_pos_j6',
+    }
+    robot2_initial_positions = ' '.join(
+        f'{xacro_arg}:={safety_joints[joint_name]}'
+        for joint_name, xacro_arg in joint_index_map.items()
+        if joint_name in safety_joints
+    )
+
     declared_arguments = [
         DeclareLaunchArgument(
             'use_gazebo_gui',
@@ -68,6 +106,7 @@ def generate_launch_description():
             'robot_name': 'dual_gp25_system',
             'urdf_file': 'dual_robot.xacro',
             'controller_config': 'controllers.yaml',
+            'robot2_initial_positions': robot2_initial_positions,
         }.items(),
     )
 

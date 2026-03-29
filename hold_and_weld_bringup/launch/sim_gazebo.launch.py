@@ -23,6 +23,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command,
@@ -72,6 +73,22 @@ def generate_launch_description():
             default_value='controllers.yaml',
             description='Controller configuration file',
         ),
+        DeclareLaunchArgument(
+            'spawn_robot',
+            default_value='true',
+            description=(
+                'Spawn the robot in Gazebo. Set to false when the caller handles spawning.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'robot2_initial_positions',
+            default_value='',
+            description=(
+                'Space-separated xacro args for robot2 initial joint positions, e.g. '
+                '"robot2_initial_pos_j1:=0.02 robot2_initial_pos_j2:=-0.26 ...". '
+                'Populated by system_bringup.launch.py from welding.yaml safety_pose.'
+            ),
+        ),
     ]
 
     use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
@@ -79,6 +96,8 @@ def generate_launch_description():
     robot_name = LaunchConfiguration('robot_name')
     urdf_file = LaunchConfiguration('urdf_file')
     controller_config = LaunchConfiguration('controller_config')
+    spawn_robot = LaunchConfiguration('spawn_robot')
+    robot2_initial_positions = LaunchConfiguration('robot2_initial_positions')
 
     world_path = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_description'), 'worlds', world_file]
@@ -100,6 +119,8 @@ def generate_launch_description():
             ' ',
             'controller_config_file:=',
             controller_config_path,
+            ' ',
+            robot2_initial_positions,
         ]),
         value_type=str,
     )
@@ -158,6 +179,7 @@ def generate_launch_description():
             '-x', '0', '-y', '0', '-z', '0',
         ],
         output='screen',
+        condition=IfCondition(spawn_robot),
     )
 
     nodes = [

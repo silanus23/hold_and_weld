@@ -35,49 +35,6 @@ DualRobotCoordinator::on_configure(const rclcpp_lifecycle::State & /*state*/)
   auto_start_ = this->get_parameter("auto_start").as_bool();
   RCLCPP_INFO(logger_, "Auto-start: %s", auto_start_ ? "enabled" : "disabled");
 
-  // Wait for MoveIt and controllers to be available before creating
-  // MoveGroupInterface to prevent race conditions on startup
-  RCLCPP_INFO(logger_, "Waiting for required services to become available");
-  auto temp_node = std::make_shared<rclcpp::Node>("coordinator_service_waiter");
-
-  // MoveIt's compute_cartesian_path service indicates that move_group is running
-  auto cartesian_path_client = temp_node->create_client<moveit_msgs::srv::GetCartesianPath>(
-    "/compute_cartesian_path");
-
-  RCLCPP_INFO(logger_, "Waiting for MoveIt compute_cartesian_path service");
-  constexpr int MAX_WAIT_SECONDS = 60;
-  int wait_count = 0;
-
-  while (!cartesian_path_client->wait_for_service(std::chrono::seconds(1))) {
-    if (!rclcpp::ok()) {
-      RCLCPP_ERROR(logger_, "Interrupted while waiting for MoveIt service");
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    }
-
-    wait_count++;
-
-    if (wait_count >= MAX_WAIT_SECONDS) {
-      RCLCPP_ERROR(
-        logger_,
-        "MoveIt service not available after %d seconds. Is move_group running?",
-        MAX_WAIT_SECONDS);
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    } else if (wait_count % 10 == 0) {
-      RCLCPP_WARN(
-        logger_,
-        "Still waiting for MoveIt service (%d/%d seconds)",
-        wait_count,
-        MAX_WAIT_SECONDS);
-    } else if (wait_count % 5 == 0) {
-      RCLCPP_INFO(
-        logger_,
-        "Waiting for MoveIt service (%d/%d seconds)",
-        wait_count,
-        MAX_WAIT_SECONDS);
-    }
-  }
-  RCLCPP_INFO(logger_, "MoveIt is available");
-
   // Create controller action clients for readiness checking
   robot1_controller_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
     this->get_node_base_interface(),
@@ -114,6 +71,9 @@ DualRobotCoordinator::on_configure(const rclcpp_lifecycle::State & /*state*/)
     this->get_node_logging_interface(),
     this->get_node_waitables_interface(),
     "trigger_welder");
+
+  constexpr int MAX_WAIT_SECONDS = 30;
+  int wait_count = 0;
 
   RCLCPP_INFO(logger_, "Waiting for gripper action server");
   wait_count = 0;
@@ -181,35 +141,6 @@ DualRobotCoordinator::on_configure(const rclcpp_lifecycle::State & /*state*/)
   }
   RCLCPP_INFO(logger_, "Connected to welder action server");
 
-  // Initialize MoveIt for welder safety positioning
-  try {
-    RCLCPP_INFO(logger_, "Initializing MoveIt for welder safety positioning");
-
-    rclcpp::NodeOptions node_options;
-    node_options.automatically_declare_parameters_from_overrides(true);
-
-    // MoveGroupInterface requires a separate node — lifecycle nodes are not supported
-    moveit_node_ = std::make_shared<rclcpp::Node>(
-      "coordinator_moveit_internal",
-      node_options);
-
-    //  robot name should be parameterized.
-    welder_move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
-      moveit_node_, "robot2_gp25_welder_arm");
-
-    welder_move_group_->setPlanningTime(5.0);
-    welder_move_group_->setNumPlanningAttempts(10);
-    welder_move_group_->setMaxVelocityScalingFactor(0.2);
-    welder_move_group_->setMaxAccelerationScalingFactor(0.2);
-
-    RCLCPP_INFO(logger_, "MoveIt initialized successfully for safety moves");
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Failed to initialize MoveIt: %s", e.what());
-    welder_move_group_.reset();
-    moveit_node_.reset();
-    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-  }
-
   trigger_service_ = this->create_service<std_srvs::srv::Trigger>(
     "~/trigger_sequence",
     std::bind(&DualRobotCoordinator::handle_trigger_service, this,
@@ -255,10 +186,6 @@ DualRobotCoordinator::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
     readiness_timer_.reset();
   }
 
-  if (welder_move_group_) {
-    welder_move_group_->stop();
-  }
-
   RCLCPP_INFO(logger_, "Dual Robot Coordinator deactivated");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
@@ -275,8 +202,6 @@ DualRobotCoordinator::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   gripper_client_.reset();
   welder_client_.reset();
   trigger_service_.reset();
-  welder_move_group_.reset();
-  moveit_node_.reset();
 
   RCLCPP_INFO(logger_, "Dual Robot Coordinator cleaned up");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
@@ -294,17 +219,6 @@ DualRobotCoordinator::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
   if (gripper_client_) {gripper_client_.reset();}
   if (welder_client_) {welder_client_.reset();}
   if (trigger_service_) {trigger_service_.reset();}
-
-  try {
-    if (welder_move_group_) {
-      welder_move_group_->stop();
-      welder_move_group_.reset();
-    }
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "[Shutdown] Failed to stop welder move group: %s", e.what());
-  }
-
-  if (moveit_node_) {moveit_node_.reset();}
 
   RCLCPP_INFO(logger_, "Dual Robot Coordinator shutdown complete");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
@@ -422,63 +336,6 @@ void DualRobotCoordinator::execute_sequence()
   }
 
   RCLCPP_INFO(logger_, "Starting dual-robot coordinated sequence");
-
-  step_welder_safety();
-}
-
-void DualRobotCoordinator::step_welder_safety()
-{
-  RCLCPP_INFO(logger_, "[Step 1/3] Moving welder to safety position");
-
-  // TODO(@silanus23): Replace with YAML-driven joint target
-  std::map<std::string, double> safety_joints;
-  safety_joints["robot2_joint_1_s"] = 0.02367382699844696;
-  safety_joints["robot2_joint_2_l"] = -0.26463564871997514;
-  safety_joints["robot2_joint_3_u"] = 0.6452811253697497;
-  safety_joints["robot2_joint_4_r"] = 0.02990070287091831;
-  safety_joints["robot2_joint_5_b"] = -0.9101291555788971;
-  safety_joints["robot2_joint_6_t"] = 6.26474330075644;
-
-  try {
-    std::lock_guard<std::mutex> lock(move_group_mutex_);
-
-    welder_move_group_->setJointValueTarget(safety_joints);
-    welder_move_group_->setMaxVelocityScalingFactor(0.3);
-    welder_move_group_->setPlanningTime(5.0);
-
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = (welder_move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-
-    if (!success) {
-      RCLCPP_ERROR(logger_, "Failed to plan welder safety move! Sequence aborted");
-      {
-        std::lock_guard<std::mutex> state_lock(state_mutex_);
-        sequence_running_ = false;
-      }
-      return;
-    }
-
-    RCLCPP_INFO(logger_, "Safety move planned, executing");
-    auto result = welder_move_group_->execute(plan);
-
-    if (result != moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_ERROR(logger_, "Failed to execute welder safety move! Sequence aborted");
-      {
-        std::lock_guard<std::mutex> state_lock(state_mutex_);
-        sequence_running_ = false;
-      }
-      return;
-    }
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Exception during welder safety move: %s. Sequence aborted", e.what());
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      sequence_running_ = false;
-    }
-    return;
-  }
-
-  RCLCPP_INFO(logger_, "Welder moved to safety position");
 
   step_gripper_job();
 }

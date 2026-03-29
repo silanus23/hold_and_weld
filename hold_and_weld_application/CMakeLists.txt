@@ -118,8 +118,6 @@ ament_target_dependencies(hold_and_weld_coordinator
   std_srvs
   control_msgs
   controller_manager_msgs
-  moveit_msgs
-  moveit_ros_planning_interface
 )
 
 target_link_libraries(hold_and_weld_coordinator

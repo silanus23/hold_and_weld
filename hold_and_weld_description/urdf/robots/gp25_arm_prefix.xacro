@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_arm_macro">
-  <xacro:macro name="gp25_arm_macro" params="parent prefix x:=0 y:=0 z:=0 roll:=0 pitch:=0 yaw:=0">
+  <xacro:macro name="gp25_arm_macro" params="parent prefix x:=0 y:=0 z:=0 roll:=0 pitch:=0 yaw:=0
+               initial_pos_j1:=0 initial_pos_j2:=0 initial_pos_j3:=0
+               initial_pos_j4:=0 initial_pos_j5:=0 initial_pos_j6:=0">
     <joint name="${prefix}base_joint" type="fixed">
       <parent link="${parent}"/>
       <child link="${prefix}base_link"/>
@@ -269,7 +271,9 @@
           <param name="min">-3.14159</param>
           <param name="max">3.14159</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_pos_j1}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
       <joint name="${prefix}joint_2_l">
@@ -277,7 +281,9 @@
           <param name="min">-1.83260</param>
           <param name="max">2.70526</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_pos_j2}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
       <joint name="${prefix}joint_3_u">
@@ -285,7 +291,9 @@
           <param name="min">-1.50098</param>
           <param name="max">2.79253</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_pos_j3}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
       <joint name="${prefix}joint_4_r">
@@ -293,7 +301,9 @@
           <param name="min">-3.49066</param>
           <param name="max">3.49066</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_pos_j4}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
       <joint name="${prefix}joint_5_b">
@@ -301,7 +311,9 @@
           <param name="min">-2.61799</param>
           <param name="max">2.61799</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_pos_j5}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
       <joint name="${prefix}joint_6_t">
@@ -309,7 +321,9 @@
           <param name="min">-7.94163</param>
           <param name="max">7.94163</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_pos_j6}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
     </ros2_control>

@@ -25,8 +25,7 @@
 #include <control_msgs/action/follow_joint_trajectory.hpp>
 #include "hold_and_weld_application/action/trigger_gripper.hpp"
 #include "hold_and_weld_application/action/trigger_welder.hpp"
-#include <moveit/move_group_interface/move_group_interface.hpp>
-#include <moveit_msgs/srv/get_cartesian_path.hpp>
+
 
 namespace hold_and_weld
 {
@@ -62,7 +61,7 @@ public:
   // Lifecycle callbacks
   /**
    * @brief Configure lifecycle transition callback.
-   * Initializes action clients, services, and MoveIt interface.
+   * Initializes action clients and services.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -128,15 +127,9 @@ private:
 
   /**
    * @brief Execute the complete dual-robot coordinated sequence.
-   * Steps: 1) Move welder to safety, 2) Execute gripper job, 3) Execute welder job.
+   * Steps: 1) Execute gripper job, 2) Execute welder job.
    */
   void execute_sequence();
-
-  /**
-   * @brief Move the welder arm to a safe position (async).
-   * Calls step_gripper_job() upon completion.
-   */
-  void step_welder_safety();
 
   /**
    * @brief Execute gripper job (async).
@@ -204,11 +197,6 @@ private:
 
   // Mutexes
   std::mutex state_mutex_;
-  std::mutex move_group_mutex_;
-
-  // MoveIt interface for safety positioning
-  std::shared_ptr<rclcpp::Node> moveit_node_;
-  std::shared_ptr<moveit::planning_interface::MoveGroupInterface> welder_move_group_;
 
   // Logger
   rclcpp::Logger logger_;

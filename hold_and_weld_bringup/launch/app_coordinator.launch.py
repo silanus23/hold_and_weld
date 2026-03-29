@@ -38,7 +38,6 @@ def load_yaml(package_name, file_path):
     """Load a YAML file from a package."""
     package_share = get_package_share_directory(package_name)
     absolute_file_path = os.path.join(package_share, file_path)
-
     try:
         with open(absolute_file_path, 'r') as file:
             return yaml.safe_load(file)
