@@ -14,6 +14,8 @@
 
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -140,8 +142,8 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
         continue;
       }
 
-      auto normal_1_opt = get_surface_normal_at_point(contact_1, pair.face_1);
-      auto normal_2_opt = get_surface_normal_at_point(contact_2, pair.face_2);
+      auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
+      auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
 
       // Skip if normals couldn't be computed
       if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
@@ -207,8 +209,8 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
         continue;
       }
 
-      auto normal_1_opt = get_surface_normal_at_point(contact_1, pair.face_1);
-      auto normal_2_opt = get_surface_normal_at_point(contact_2, pair.face_2);
+      auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
+      auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
 
       // Skip if normals couldn't be computed
       if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
@@ -304,7 +306,7 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
       const auto & s2 = topology.get_surface(id2);
 
       // Check 1: Distance is within gripper range (CHEAP - do first)
-      double min_distance = compute_min_distance(s1.face, s2.face);
+      double min_distance = geometry::face_min_distance(s1.face, s2.face);
       if (min_distance < config_.min_gripper_opening) {
         rejected_distance_too_small++;
         RCLCPP_DEBUG(logger_, "  Pair [%d, %d]: REJECTED - distance %.4f m < min %.4f m",
@@ -683,8 +685,8 @@ bool ContactPointSampler::is_valid_pairing(
     return false;
   }
 
-  auto normal_1_opt = get_surface_normal_at_point(contact_1, face_1);
-  auto normal_2_opt = get_surface_normal_at_point(contact_2, face_2);
+  auto normal_1_opt = geometry::surface_normal_at_point(contact_1, face_1);
+  auto normal_2_opt = geometry::surface_normal_at_point(contact_2, face_2);
 
   if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
     return false;
@@ -716,85 +718,6 @@ bool ContactPointSampler::is_valid_pairing(
   }
 
   return true;
-}
-
-double ContactPointSampler::compute_min_distance(
-  const TopoDS_Face & face_1,
-  const TopoDS_Face & face_2) const
-{
-  try {
-    BRepExtrema_DistShapeShape dist(face_1, face_2);
-    dist.Perform();
-
-    if (dist.IsDone() && dist.NbSolution() > 0) {
-      return dist.Value();
-    }
-
-    return std::numeric_limits<double>::max();
-  } catch (const std::exception & e) {
-    RCLCPP_DEBUG(logger_, "Exception in compute_min_distance: %s", e.what());
-    return std::numeric_limits<double>::max();
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "Unknown exception in compute_min_distance");
-    return std::numeric_limits<double>::max();
-  }
-}
-
-std::optional<gp_Vec> ContactPointSampler::get_surface_normal_at_point(
-  const gp_Pnt & point,
-  const TopoDS_Face & face) const
-{
-  try {
-    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-
-    GeomAPI_ProjectPointOnSurf projector(point, surf);
-
-    if (projector.NbPoints() == 0) {
-      Standard_Real u_min, u_max, v_min, v_max;
-      BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-      double u_mid = (u_min + u_max) / 2.0;
-      double v_mid = (v_min + v_max) / 2.0;
-
-      GeomLProp_SLProps props(surf, u_mid, v_mid, 1, 1e-6);
-
-      if (!props.IsNormalDefined()) {
-        RCLCPP_DEBUG(logger_, "Normal undefined at face center - returning nullopt");
-        return std::nullopt;
-      }
-
-      gp_Vec normal = props.Normal();
-
-      if (face.Orientation() == TopAbs_REVERSED) {
-        normal.Reverse();
-      }
-
-      return normal;
-    }
-
-    double u, v;
-    projector.Parameters(1, u, v);
-
-    GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
-
-    if (!props.IsNormalDefined()) {
-      RCLCPP_DEBUG(logger_, "Normal undefined at projected point - returning nullopt");
-      return std::nullopt;
-    }
-
-    gp_Vec normal = props.Normal();
-
-    if (face.Orientation() == TopAbs_REVERSED) {
-      normal.Reverse();
-    }
-
-    return normal;
-  } catch (const std::exception & e) {
-    RCLCPP_DEBUG(logger_, "Exception in get_surface_normal_at_point: %s", e.what());
-    return std::nullopt;
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "Unknown exception in get_surface_normal_at_point");
-    return std::nullopt;
-  }
 }
 
 bool ContactPointSampler::has_antiparallel_local_normals(

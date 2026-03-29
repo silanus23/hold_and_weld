@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
+#include <optional>
 #include <vector>
 
 #include <BRepBuilderAPI_Transform.hxx>
@@ -27,6 +28,8 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <STEPControl_Reader.hxx>
+#include <Geom_Surface.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
@@ -169,6 +172,31 @@ Eigen::Vector3d extract_translation(const gp_Trsf & transform);
  * @return Rotation as Eigen::Quaterniond (normalized)
  */
 Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform);
+
+/**
+ * @brief Compute minimum distance between two faces
+ *
+ * Uses BRepExtrema_DistShapeShape for exact distance computation.
+ * Returns std::numeric_limits<double>::max() on failure.
+ *
+ * @param face_1 First face
+ * @param face_2 Second face
+ * @return Minimum distance between the two faces [m]
+ */
+double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2);
+
+/**
+ * @brief Compute surface normal at a point on a face
+ *
+ * Projects the point onto the face's underlying surface to find UV parameters,
+ * then evaluates the surface normal there. Falls back to the face center normal
+ * if projection fails. Handles TopAbs_REVERSED faces correctly.
+ *
+ * @param point Query point (should lie on or near the face)
+ * @param face Face to evaluate normal on
+ * @return Normal vector if defined, std::nullopt otherwise
+ */
+std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS_Face & face);
 
 }  // namespace geometry
 }  // namespace hold_and_weld_gripper_sampler

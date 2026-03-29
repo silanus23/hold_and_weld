@@ -123,14 +123,6 @@ private:
     const TopoDS_Face & face_1,
     const TopoDS_Face & face_2) const;
 
-  double compute_min_distance(
-    const TopoDS_Face & face_1,
-    const TopoDS_Face & face_2) const;
-
-  std::optional<gp_Vec> get_surface_normal_at_point(
-    const gp_Pnt & point,
-    const TopoDS_Face & face) const;
-
   bool has_antiparallel_local_normals(
     const TopoDS_Face & face_1,
     const TopoDS_Face & face_2,
