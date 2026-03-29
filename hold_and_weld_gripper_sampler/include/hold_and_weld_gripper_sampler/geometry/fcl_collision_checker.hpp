@@ -57,7 +57,10 @@ public:
   using Transform3 = fcl::Transform3<FCLScalar>;
 
   /**
-   * @brief Construct collision checker with gripper and primary shape
+   * @brief Construct collision checker with gripper and primary shape only
+   *
+   * Use when exclusion volumes, secondaries and ground plane will be added
+   * incrementally via the add_* methods (e.g. in tests).
    *
    * @param gripper Parsed gripper with finger and base shapes
    * @param primary_shape Primary workpiece shape for collision checking
@@ -66,6 +69,29 @@ public:
   FCLCollisionChecker(
     const ParsedGripper & gripper,
     const TopoDS_Shape & primary_shape,
+    double linear_deflection = 0.0001);
+
+  /**
+   * @brief Fully-wired constructor — all collision volumes provided upfront
+   *
+   * Preferred over the incremental add_* API when all data is available at
+   * construction time (i.e. from GraspFinder::initialize()).
+   *
+   * @param gripper Parsed gripper with finger and base shapes
+   * @param primary_shape Primary workpiece shape for collision checking
+   * @param exclusion_volumes Exclusion zone shapes (with clearance already applied)
+   * @param secondary_shapes Fixture / ground shapes
+   * @param enable_ground_plane Whether to add an infinite ground plane
+   * @param ground_z Z-coordinate of the ground plane surface
+   * @param linear_deflection Triangulation precision (default 0.1mm)
+   */
+  FCLCollisionChecker(
+    const ParsedGripper & gripper,
+    const TopoDS_Shape & primary_shape,
+    const std::vector<TopoDS_Shape> & exclusion_volumes,
+    const std::vector<TopoDS_Shape> & secondary_shapes,
+    bool enable_ground_plane,
+    double ground_z,
     double linear_deflection = 0.0001);
 
   /**

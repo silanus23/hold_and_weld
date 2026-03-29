@@ -95,6 +95,27 @@ FCLCollisionChecker::FCLCollisionChecker(
   }
 }
 
+FCLCollisionChecker::FCLCollisionChecker(
+  const ParsedGripper & gripper,
+  const TopoDS_Shape & primary_shape,
+  const std::vector<TopoDS_Shape> & exclusion_volumes,
+  const std::vector<TopoDS_Shape> & secondary_shapes,
+  bool enable_ground_plane,
+  double ground_z,
+  double linear_deflection)
+: FCLCollisionChecker(gripper, primary_shape, linear_deflection)
+{
+  if (!exclusion_volumes.empty()) {
+    add_exclusion_volumes(exclusion_volumes);
+  }
+  if (!secondary_shapes.empty()) {
+    add_secondary_shapes(secondary_shapes);
+  }
+  if (enable_ground_plane) {
+    add_ground_plane(ground_z);
+  }
+}
+
 void FCLCollisionChecker::add_exclusion_volumes(const std::vector<TopoDS_Shape> & exclusion_volumes)
 {
   RCLCPP_DEBUG(logger_, "Adding %zu exclusion volumes", exclusion_volumes.size());

@@ -193,40 +193,26 @@ std::string GraspFinder::initialize()
     if (config_.use_fcl) {
       RCLCPP_INFO(logger_, "Initializing FCL collision checker...");
 
+      const auto & exclusion_volumes = exclusion_constraint_->get_collision_volumes();
+      const auto & secondaries = kissing_constraint_->get_secondary_shapes();
+      const bool use_ground = config_.enable_ground_plane_check && config_.use_fcl_for_ground_plane;
+
+      RCLCPP_INFO(logger_, "  Exclusion volumes: %zu", exclusion_volumes.size());
+      RCLCPP_INFO(logger_, "  Secondary shapes:  %zu", secondaries.size());
+      RCLCPP_INFO(logger_, "  Ground plane:      %s (z=%.3f m)",
+        use_ground ? "enabled" : "disabled", config_.ground_z);
+
       fcl_checker_ = std::make_shared<geometry::FCLCollisionChecker>(
         gripper_,
         primary_shape_,
+        exclusion_volumes,
+        secondaries,
+        use_ground,
+        config_.ground_z,
         config_.triangulation_deflection
       );
 
-      RCLCPP_INFO(logger_, "FCL checker created");
-
-      // Add exclusion volumes to FCL
-      const auto & exclusion_volumes = exclusion_constraint_->get_collision_volumes();
-      if (!exclusion_volumes.empty()) {
-        RCLCPP_INFO(logger_, "  Adding %zu exclusion volumes to FCL...", exclusion_volumes.size());
-        fcl_checker_->add_exclusion_volumes(exclusion_volumes);
-        RCLCPP_INFO(logger_, "Exclusion volumes added");
-      } else {
-        RCLCPP_INFO(logger_, "  No exclusion volumes to add");
-      }
-
-      // Add secondary shapes to FCL
-      const auto & secondaries = kissing_constraint_->get_secondary_shapes();
-      if (!secondaries.empty()) {
-        RCLCPP_INFO(logger_, "  Adding %zu secondary shapes to FCL...", secondaries.size());
-        fcl_checker_->add_secondary_shapes(secondaries);
-        RCLCPP_INFO(logger_, "Secondary shapes added");
-      } else {
-        RCLCPP_INFO(logger_, "  No secondary shapes to add");
-      }
-
-      // Add ground plane to FCL if enabled
-      if (config_.enable_ground_plane_check && config_.use_fcl_for_ground_plane) {
-        RCLCPP_INFO(logger_, "  Adding ground plane to FCL...");
-        fcl_checker_->add_ground_plane(config_.ground_z, 100.0, 0.1, 0.0, 0.0);
-        RCLCPP_INFO(logger_, "Ground plane added to FCL (z=%.3f m)", config_.ground_z);
-      }
+      RCLCPP_INFO(logger_, "FCL checker created and fully wired");
 
       if (!fcl_checker_->is_valid()) {
         RCLCPP_WARN(logger_, "   FCL checker initialization failed, falling back to OCCT");
@@ -398,7 +384,7 @@ GraspFinderResult GraspFinder::find()
 
     result.grasps.reserve(candidates.size());
     for (const auto & candidate : candidates) {
-      result.grasps.push_back(to_grasp(candidate));
+      result.grasps.push_back(angle_finding::to_grasp(candidate));
     }
 
     sort_by_quality(result.grasps);

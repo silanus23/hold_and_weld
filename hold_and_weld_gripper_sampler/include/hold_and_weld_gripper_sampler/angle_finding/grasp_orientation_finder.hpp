@@ -29,6 +29,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/core/grasp.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
@@ -86,6 +87,14 @@ struct GraspCandidate
   double grip_distance;
   double quality_score;        // Distance from edges (higher = better)
 };
+
+/**
+ * @brief Convert GraspCandidate (OCCT types) to Grasp (Eigen types)
+ *
+ * @param candidate GraspCandidate from orientation finding
+ * @return Grasp with Eigen types ready for downstream use
+ */
+Grasp to_grasp(const GraspCandidate & candidate);
 
 /**
  * @brief Finds valid gripper orientations for contact point pairs

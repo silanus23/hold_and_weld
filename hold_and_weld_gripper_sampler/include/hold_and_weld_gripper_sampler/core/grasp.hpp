@@ -158,21 +158,7 @@ struct Grasp
   }
 };
 
-namespace angle_finding
-{
-struct GraspCandidate;
-}  // namespace angle_finding
 
-/**
- * @brief Convert GraspCandidate (OCCT types) to Grasp (Eigen types)
- *
- * This function is declared here but implemented in grasp_orientation_finder.cpp
- * to avoid OCCT header dependencies in this file.
- *
- * @param candidate GraspCandidate from orientation finding
- * @return Grasp with Eigen types ready for downstream use
- */
-Grasp to_grasp(const angle_finding::GraspCandidate & candidate);
 
 /**
  * @brief Sort grasps by quality score descending (best first)

@@ -46,8 +46,10 @@
 
 namespace hold_and_weld_gripper_sampler
 {
+namespace angle_finding
+{
 
-Grasp to_grasp(const angle_finding::GraspCandidate & candidate)
+Grasp to_grasp(const GraspCandidate & candidate)
 {
   return Grasp::create(
     geometry::extract_translation(candidate.gripper_transform),
@@ -61,8 +63,6 @@ Grasp to_grasp(const angle_finding::GraspCandidate & candidate)
   );
 }
 
-namespace angle_finding
-{
 GraspOrientationFinder::GraspOrientationFinder(
   const TopoDS_Shape & primary_shape,
   const ParsedGripper & gripper,
