@@ -105,7 +105,7 @@ int main(int argc, char ** argv)
   RCLCPP_INFO(logger, "Exclusion circles: %zu", config.exclusion_circles.size());
   RCLCPP_INFO(logger, "Exclusion polygons: %zu", config.exclusion_polygons.size());
   RCLCPP_INFO(logger, "Exclusion lines: %zu", config.exclusion_lines.size());
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   auto mapper = std::make_shared<geometry::GeometryMapper>();
   geometry::Topology topology;
@@ -162,7 +162,7 @@ int main(int argc, char ** argv)
   RCLCPP_INFO(logger, "  Edges: %zu", topology.num_edges());
   RCLCPP_INFO(logger, "  Corners: %zu", topology.num_corners());
   RCLCPP_INFO(logger, "  Shape null: %s", primary_shape.IsNull() ? "YES (ERROR!)" : "NO");
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   // Load gripper
   RCLCPP_INFO(logger, "LOADING GRIPPER");
@@ -200,7 +200,7 @@ int main(int argc, char ** argv)
     gripper.finger_1.IsNull() ? "YES (ERROR!)" : "NO");
   RCLCPP_INFO(logger, "  Finger 2 shape null: %s",
     gripper.finger_2.IsNull() ? "YES (ERROR!)" : "NO");
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   RCLCPP_INFO(logger, "Configured secondaries: %zu", config.secondaries.size());
   std::vector<TopoDS_Shape> secondary_shapes;
@@ -245,7 +245,7 @@ int main(int argc, char ** argv)
   }
 
   RCLCPP_INFO(logger, "Total secondary shapes loaded: %zu", secondary_shapes.size());
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   // Prepare exclusion zones
   RCLCPP_INFO(logger, "EXCLUSION ZONES");
@@ -289,7 +289,7 @@ int main(int argc, char ** argv)
   } else {
     RCLCPP_INFO(logger, "Exclusion lines: 0 (none defined)");
   }
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   // Create GraspFinder
   RCLCPP_INFO(logger, "CREATING GRASP FINDER");
@@ -313,7 +313,7 @@ int main(int argc, char ** argv)
   RCLCPP_INFO(logger, "FCL: %s, Kissing threshold: %.1f%%",
     config.finder_config.use_fcl ? "ENABLED" : "DISABLED",
     config.finder_config.kissing_contact_threshold * 100.0);
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   GraspFinder finder(
     mapper,
@@ -334,7 +334,7 @@ int main(int argc, char ** argv)
   auto end_time = std::chrono::steady_clock::now();
   double elapsed_seconds = std::chrono::duration<double>(end_time - start_time).count();
 
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   if (!result.success) {
     RCLCPP_ERROR(logger, "Grasp finding failed: %s", result.error_message.c_str());
@@ -342,7 +342,7 @@ int main(int argc, char ** argv)
   }
 
   RCLCPP_INFO(logger, "Time elapsed: %.2f seconds", elapsed_seconds);
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
   RCLCPP_INFO(logger, "Pipeline statistics:");
   RCLCPP_INFO(logger, "  Valid surfaces: %zu", result.num_valid_surfaces);
   RCLCPP_INFO(logger, "  Banned surfaces: %zu", result.num_banned_surfaces);
@@ -350,7 +350,7 @@ int main(int argc, char ** argv)
   RCLCPP_INFO(logger, "  Contact pairs: %zu", result.num_contact_pairs);
   RCLCPP_INFO(logger, "  Grasp candidates: %zu", result.num_candidates);
   RCLCPP_INFO(logger, "  Final grasps: %zu", result.grasps.size());
-  RCLCPP_INFO(logger, "");
+  RCLCPP_INFO(logger, " ");
 
   // Write JSON output to hold_and_weld_application/grasps folder
   // Use source directory for development, not install

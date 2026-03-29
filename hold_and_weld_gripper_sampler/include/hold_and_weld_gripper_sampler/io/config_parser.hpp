@@ -187,7 +187,7 @@ private:
   std::string base_dir_;
 
   /**
-   * @brief Navigate to ros__parameters node (handles /**:/ros__parameters: format)
+   * @brief Navigate to ros__parameters node (handles wildcard and ros__parameters: YAML formats)
    */
   YAML::Node get_parameters_node(const YAML::Node & root) const;
 

@@ -52,6 +52,7 @@ std::vector<core::SampleArea> EdgeAvoidanceFilter::evaluate(
   const std::vector<int> & valid_surface_ids
 ) const
 {
+  (void)shape;
   const auto & surfaces = topology.get_all_surfaces();
   std::vector<core::SampleArea> sample_areas;
 

@@ -154,13 +154,11 @@ TEST_F(KissingSurfaceConstraintTest, FullContactBansSurface)
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
 
-  // At least one surface should be banned (the bottom face)
-  // Note: Exact result depends on boolean operation success
-  // This test verifies the mechanism works, not exact geometry
+  // Bottom face must be banned — it is fully covered by the ground secondary
   std::vector<int> banned = constraint.get_banned_surface_ids();
 
-  // The test box has 6 faces, at most 1 should be banned (bottom)
-  EXPECT_LE(banned.size(), 6u);
+  EXPECT_GE(banned.size(), 1u) << "Bottom face touching ground plane must be banned";
+  EXPECT_LE(banned.size(), 6u) << "Cannot ban more faces than the box has";
 }
 
 TEST_F(KissingSurfaceConstraintTest, CollisionWhenInsideSecondary)
@@ -294,11 +292,9 @@ TEST_F(KissingSurfaceConstraintTest, GripperOpensCorrectly)
   EXPECT_FALSE(collision_max);
 }
 
-TEST_F(KissingSurfaceConstraintTest, ToleranceAffectsCollisionDetection)
+TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
 {
-  TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
-
-  // Secondary shape at z=0
+  // Secondary: ground plane occupying z=-0.01 to z=0, top face at z=0
   gp_Trsf secondary_pos;
   secondary_pos.SetTranslation(gp_Vec(-0.5, -0.5, -0.01));
   TopoDS_Shape secondary = BRepPrimAPI_MakeBox(1.0, 1.0, 0.01).Shape();
@@ -306,28 +302,26 @@ TEST_F(KissingSurfaceConstraintTest, ToleranceAffectsCollisionDetection)
 
   std::vector<TopoDS_Shape> secondaries = {secondary};
 
-  KissingSurfaceConstraint constraint(
-    mapper_, gripper_, secondaries);
+  // Gripper bottom (finger tips) at z=0.005 → 5mm gap to secondary top face
+  Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+  pose.translation() = Eigen::Vector3d(0.0, 0.0, 0.005);
 
+  TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(primary);
-  constraint.analyze_constraints(topology);
 
-  // Place gripper just above secondary shape
-  gp_Trsf near_secondary;
-  near_secondary.SetTranslation(gp_Vec(0.0, 0.0, 0.005));
+  // Loose tolerance: 10mm > 5mm gap → collision reported
+  KissingSurfaceConstraint constraint_loose(
+    mapper_, gripper_, secondaries, 0.8, 0.010);
+  constraint_loose.analyze_constraints(topology);
+  EXPECT_TRUE(constraint_loose.intersects_secondary(0.03, pose))
+    << "10mm tolerance must detect gripper 5mm above secondary";
 
-  Eigen::Isometry3d eigen_transform = Eigen::Isometry3d::Identity();
-  eigen_transform.translation() = extract_translation(near_secondary);
-  eigen_transform.linear() = extract_quaternion(near_secondary).toRotationMatrix();
-
-  // Tight tolerance (should detect collision)
-  bool collision_tight = constraint.intersects_secondary(0.03, eigen_transform);
-
-  // Loose tolerance (may not detect collision at this distance)
-  bool collision_loose = constraint.intersects_secondary(0.03, eigen_transform);
-
-  // Tight tolerance more likely to report collision
-  EXPECT_TRUE(collision_tight || collision_loose || true);  // Don't fail, just verify no crash
+  // Tight tolerance: 1mm < 5mm gap → no collision reported
+  KissingSurfaceConstraint constraint_tight(
+    mapper_, gripper_, secondaries, 0.8, 0.001);
+  constraint_tight.analyze_constraints(topology);
+  EXPECT_FALSE(constraint_tight.intersects_secondary(0.03, pose))
+    << "1mm tolerance must not fire for gripper 5mm above secondary";
 }
 
 TEST_F(KissingSurfaceConstraintTest, CollisionWithAnySecondary)
@@ -369,14 +363,16 @@ TEST_F(KissingSurfaceConstraintTest, CollisionWithAnySecondary)
   EXPECT_TRUE(constraint.intersects_secondary(0.03, at_bottom_iso));
 
   // Collision with left fixture
+  // Collision with left fixture — place gripper solidly inside it
+  // Left fixture: X=-0.1 to -0.05, Y=0.0 to 0.1, Z=0.0 to 0.1
+  // Gripper at (-0.075, 0.05, 0.05) puts fingers inside the fixture volume
   gp_Trsf at_left;
-  at_left.SetTranslation(gp_Vec(-0.05, 0.0, 0.05));
+  at_left.SetTranslation(gp_Vec(-0.075, 0.05, 0.05));
   Eigen::Isometry3d eigen_at_left = Eigen::Isometry3d::Identity();
   eigen_at_left.translation() = extract_translation(at_left);
   eigen_at_left.linear() = extract_quaternion(at_left).toRotationMatrix();
-  bool left_collision = constraint.intersects_secondary(0.03, eigen_at_left);
-  // May or may not collide depending on exact positioning
-  EXPECT_NO_FATAL_FAILURE({(void)left_collision;});
+  EXPECT_TRUE(constraint.intersects_secondary(0.03, eigen_at_left))
+    << "Gripper inside left fixture volume must report collision";
 
   // No collision in clear space
   gp_Trsf clear_space;
@@ -460,6 +456,39 @@ TEST_F(KissingSurfaceConstraintTest, HighThresholdBansFewerSurfaces)
   // High threshold should ban same or fewer surfaces
   EXPECT_LE(constraint_high.get_banned_surface_ids().size(),
             constraint_low.get_banned_surface_ids().size() + 1);  // +1 for tolerance
+}
+
+TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
+{
+  // Secondary: ground plane at z=0
+  gp_Trsf secondary_pos;
+  secondary_pos.SetTranslation(gp_Vec(-0.5, -0.5, -0.01));
+  TopoDS_Shape secondary = BRepPrimAPI_MakeBox(1.0, 1.0, 0.01).Shape();
+  secondary = BRepBuilderAPI_Transform(secondary, secondary_pos, Standard_True).Shape();
+
+  std::vector<TopoDS_Shape> secondaries = {secondary};
+
+  KissingSurfaceConstraint constraint(mapper_, gripper_, secondaries, 0.5);
+
+  // First analysis: box sitting on secondary — bottom face must be banned
+  TopoDS_Shape touching_box = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
+  Topology touching_topology = mapper_->load_from_shape(touching_box);
+  constraint.analyze_constraints(touching_topology);
+
+  size_t first_banned_count = constraint.get_banned_surface_ids().size();
+  EXPECT_GE(first_banned_count, 1u) << "First analysis must ban the touching face";
+
+  // Second analysis: box elevated 1m above secondary — no face is in contact
+  gp_Trsf elevated_pos;
+  elevated_pos.SetTranslation(gp_Vec(0.0, 0.0, 1.0));
+  TopoDS_Shape elevated_box = BRepBuilderAPI_Transform(
+    BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape(), elevated_pos, Standard_True).Shape();
+  Topology elevated_topology = mapper_->load_from_shape(elevated_box);
+  constraint.analyze_constraints(elevated_topology);
+
+  // Results must be replaced, not accumulated
+  EXPECT_EQ(constraint.get_banned_surface_ids().size(), 0u)
+    << "Re-analysis must clear previous banned surfaces, not accumulate them";
 }
 
 int main(int argc, char ** argv)

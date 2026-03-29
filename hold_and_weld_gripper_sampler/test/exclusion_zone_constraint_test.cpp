@@ -373,20 +373,21 @@ TEST_F(ExclusionZoneConstraintTest, CircleClearanceIsSymmetric)
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
 
-  // Approach from above (+Z)
-  gp_Trsf above_transform;
-  above_transform.SetTranslation(gp_Vec(0.1, 0.1, 0.05 + 0.03));
+  // Place gripper clearly inside the exclusion cylinder (at its center)
+  gp_Trsf inside_transform;
+  inside_transform.SetTranslation(gp_Vec(0.1, 0.1, 0.05));
 
-  // Approach from below (-Z)
-  gp_Trsf below_transform;
-  below_transform.SetTranslation(gp_Vec(0.1, 0.1, 0.05 - 0.03));
+  // Place gripper clearly outside (1 m away)
+  gp_Trsf outside_transform;
+  outside_transform.SetTranslation(gp_Vec(1.0, 1.0, 1.0));
 
-  bool collision_above = constraint.intersects_exclusion_zone(above_transform, 0.02);
-  bool collision_below = constraint.intersects_exclusion_zone(below_transform, 0.02);
+  bool collision_inside = constraint.intersects_exclusion_zone(inside_transform, 0.02);
+  bool collision_outside = constraint.intersects_exclusion_zone(outside_transform, 0.02);
 
-  // Both should have similar collision behavior (symmetric clearance)
-  // Note: Exact equality depends on gripper shape, but both should be consistent
-  EXPECT_EQ(collision_above, collision_below);
+  // A gripper placed at the zone centre must collide
+  EXPECT_TRUE(collision_inside);
+  // A gripper placed 1 m away must not collide
+  EXPECT_FALSE(collision_outside);
 }
 
 TEST_F(ExclusionZoneConstraintTest, SampleAreasEmptyBeforeAnalysis)

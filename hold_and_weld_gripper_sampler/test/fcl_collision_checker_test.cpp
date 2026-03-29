@@ -174,38 +174,36 @@ TEST_F(FCLCollisionCheckerTest, DistanceToPrimaryIsSmallWhenClose)
   EXPECT_LT(distance, 0.05);  // Less than 50mm
 }
 
-TEST_F(FCLCollisionCheckerTest, GripDistanceAffectsCollision)
+TEST_F(FCLCollisionCheckerTest, ClosedGripperClearsNarrowWall)
 {
-  // Create a narrow slot that gripper can fit through when closed
-  // but collides when opened
-  TopoDS_Shape narrow_slot = BRepPrimAPI_MakeBox(
-    gp_Pnt(-0.1, -0.02, -0.1),  // Narrow in Y (40mm gap)
-    0.2, 0.04, 0.2
+  // Verifies that a gripper with small grip_distance does not collide with a
+  // wall placed beyond the closed-finger travel range.
+  //
+  // The test gripper opens along ±X. Each finger moves half the grip_distance.
+  // finger_1 rest geometry: X: -5mm → +5mm.
+  // finger_1 outer X edge after opening = +0.005 + half_opening.
+  // Gripper base spans X: -25mm → +25mm regardless of grip_distance.
+  //
+  // Wall at X: +30mm → +40mm (beyond base and beyond finger at small opening).
+  //   grip_distance = 0.02 → half_opening = 0.010 m, finger outer edge at +0.015 m → clears wall
+  //
+  // Note: asserting that wide opening hits the wall is omitted because the
+  // precise FCL overlap depends on BVH mesh resolution and finger geometry that
+  // is not purpose-built for this test. The collision path is covered by
+  // CollidesWithPrimaryWhenInsideShape and CollisionDetectedWithTolerance.
+  TopoDS_Shape wall = BRepPrimAPI_MakeBox(
+    gp_Pnt(0.030, -0.010, 0.000),  // X: +30mm, covers finger Y/Z cross-section
+    0.010, 0.020, 0.060             // 10mm thick slab
   ).Shape();
 
-  // Create walls on either side
-  TopoDS_Shape wall1 = BRepPrimAPI_MakeBox(
-    gp_Pnt(-0.1, 0.02, -0.1),
-    0.2, 0.05, 0.2
-  ).Shape();
-
-  TopoDS_Shape wall2 = BRepPrimAPI_MakeBox(
-    gp_Pnt(-0.1, -0.07, -0.1),
-    0.2, 0.05, 0.2
-  ).Shape();
-
-  FCLCollisionChecker checker(gripper_, wall1);
+  FCLCollisionChecker checker(gripper_, wall);
   ASSERT_TRUE(checker.is_valid());
 
-  // Place gripper in the slot area
   gp_Trsf transform;
   transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
 
-  // With small grip distance, should not collide
-  EXPECT_FALSE(checker.collides_with_primary(transform, 0.01, 0.001));
-
-  // With large grip distance (fingers extend into walls), may collide
-  // depending on exact geometry
+  // Closed gripper: finger outer edge at +15mm, clears wall that starts at +30mm
+  EXPECT_FALSE(checker.collides_with_primary(transform, 0.02, 0.001));
 }
 
 TEST_F(FCLCollisionCheckerTest, ExclusionVolumeCollisionDetected)

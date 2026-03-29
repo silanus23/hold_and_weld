@@ -649,6 +649,7 @@ bool ContactPointSampler::find_opposing_contact(
   const TopoDS_Face & face_2,
   gp_Pnt & opposing_contact) const
 {
+  (void)face_1;
   try {
     Handle(Geom_Surface) surf_2 = BRep_Tool::Surface(face_2);
 

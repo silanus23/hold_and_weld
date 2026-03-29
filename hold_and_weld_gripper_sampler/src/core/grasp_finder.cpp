@@ -168,7 +168,7 @@ std::string GraspFinder::initialize()
     );
     RCLCPP_INFO(logger_, "KissingSurfaceConstraint created");
 
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "STEP 2: Analyzing constraints...");
 
     RCLCPP_INFO(logger_, "Analyzing exclusion zones...");
@@ -187,7 +187,7 @@ std::string GraspFinder::initialize()
     RCLCPP_INFO(logger_, "      Partial exclusions: %zu",
         kissing_constraint_->get_sample_areas().size());
 
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "STEP 3: Building collision checker...");
 
     if (config_.use_fcl) {
@@ -237,7 +237,7 @@ std::string GraspFinder::initialize()
     } else {
       RCLCPP_INFO(logger_, "FCL disabled - using OCCT for collision detection (slower)");
     }
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "STEP 4: Wiring components...");
 
     if (fcl_checker_) {
@@ -276,7 +276,7 @@ GraspFinderResult GraspFinder::find()
   }
 
   try {
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "PHASE 1: Computing valid surfaces...");
 
     auto banned_ids = kissing_constraint_->get_banned_surface_ids();
@@ -321,7 +321,7 @@ GraspFinderResult GraspFinder::find()
       return result;
     }
 
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "PHASE 2: Sampling contact points...");
     RCLCPP_INFO(logger_, "Sampling config:");
     RCLCPP_INFO(logger_, "  Sample density: %.4f m", config_.sampling.sample_density);
@@ -338,7 +338,7 @@ GraspFinderResult GraspFinder::find()
     );
 
     result.num_contact_pairs = contact_pairs.size();
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "Contact pair generation result: %zu pairs", result.num_contact_pairs);
 
     if (contact_pairs.empty()) {
@@ -376,11 +376,11 @@ GraspFinderResult GraspFinder::find()
       RCLCPP_INFO(logger_, "FCL checker wired to orientation finder");
     }
 
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     auto candidates = finder.find_valid_grasps(contact_pairs, primary_topology_);
 
     result.num_candidates = candidates.size();
-    RCLCPP_INFO(logger_, "");
+    RCLCPP_INFO(logger_, " ");
     RCLCPP_INFO(logger_, "Orientation finding result: %zu valid candidates", result.num_candidates);
 
     if (candidates.empty()) {
@@ -423,7 +423,7 @@ GraspFinderResult GraspFinder::find()
     // Log collision rejection statistics
     if (kissing_constraint_) {
       auto collision_stats = kissing_constraint_->get_collision_stats();
-      RCLCPP_INFO(logger_, "");
+      RCLCPP_INFO(logger_, " ");
       RCLCPP_INFO(logger_, "Collision Check Statistics:");
       RCLCPP_INFO(logger_, "  Total collision checks: %zu", collision_stats.total_checks);
       if (collision_stats.total_checks > 0) {

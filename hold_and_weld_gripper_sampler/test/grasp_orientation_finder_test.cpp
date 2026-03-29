@@ -314,31 +314,32 @@ TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
 
 TEST_F(GraspOrientationFinderTest, ClusteringReducesEdgeCandidates)
 {
-  // Create a box where contact point is equidistant from multiple edges
-  // Angular clustering should group edges in similar directions
+  // max_edge_candidates caps the number of edge seeds used per contact point.
+  // With 0 (no limit) every local minimum edge becomes a seed; with 1 only the
+  // closest edge is kept.  The capped run must therefore produce <= orientations.
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
   Topology topology = mapper_->load_from_shape(box, "test_box");
 
-  OrientationConfig config_no_cluster;
+  OrientationConfig config_no_limit;
+  config_no_limit.max_edge_candidates = 0;  // keep all edge seeds
+  config_no_limit.finger_length = 0.2;      // large search radius → many edges
+  config_no_limit.angle_offsets = {0.0};
+  config_no_limit.collision_tolerance = 0.0001;
 
-  config_no_cluster.max_edge_candidates = 0;  // Use all edges
-  config_no_cluster.finger_length = 0.2;      // Large radius to find many edges
-  config_no_cluster.angle_offsets = {0.0};
-
-  OrientationConfig config_cluster;
-
-  config_cluster.max_edge_candidates = 0;  // Use all after clustering
-  config_cluster.finger_length = 0.2;
-  config_cluster.angle_offsets = {0.0};
+  OrientationConfig config_capped;
+  config_capped.max_edge_candidates = 1;    // keep only the single closest edge seed
+  config_capped.finger_length = 0.2;
+  config_capped.angle_offsets = {0.0};
+  config_capped.collision_tolerance = 0.0001;
 
   ParsedGripper small_gripper = create_small_gripper();
 
-  GraspOrientationFinder finder_no_cluster(
-    box, small_gripper, nullptr, nullptr, config_no_cluster);
-  GraspOrientationFinder finder_cluster(
-    box, small_gripper, nullptr, nullptr, config_cluster);
+  GraspOrientationFinder finder_no_limit(
+    box, small_gripper, nullptr, nullptr, config_no_limit);
+  GraspOrientationFinder finder_capped(
+    box, small_gripper, nullptr, nullptr, config_capped);
 
-  // Contact pair in center of box
+  // Contact pair across the X faces of the box
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
   pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
@@ -348,34 +349,37 @@ TEST_F(GraspOrientationFinderTest, ClusteringReducesEdgeCandidates)
 
   std::vector<ContactPair> pairs = {pair};
 
-  auto grasps_no_cluster = finder_no_cluster.find_valid_grasps(pairs, topology);
-  auto grasps_cluster = finder_cluster.find_valid_grasps(pairs, topology);
+  auto grasps_no_limit = finder_no_limit.find_valid_grasps(pairs, topology);
+  auto grasps_capped = finder_capped.find_valid_grasps(pairs, topology);
 
-  // With clustering, we should have fewer or equal candidates
-  // (clustering groups similar directions)
-  EXPECT_LE(grasps_cluster.size(), grasps_no_cluster.size());
+  // Capping edge candidates must yield fewer or equal orientations
+  EXPECT_LE(grasps_capped.size(), grasps_no_limit.size());
 }
 
-TEST_F(GraspOrientationFinderTest, LargerToleranceFewerClusters)
+TEST_F(GraspOrientationFinderTest, LargerDualSeedDedupToleranceFewerOrientations)
 {
+  // dual_seed_dedup_tolerance_deg merges edge seeds from contact_1 and contact_2
+  // that point in nearly the same bearing direction.  A tiny tolerance keeps
+  // almost every seed; a large tolerance aggressively merges them.
+  // The aggressively-merged run must produce <= orientations.
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
   Topology topology = mapper_->load_from_shape(box, "test_box");
 
   ParsedGripper small_gripper = create_small_gripper();
 
   OrientationConfig config_narrow;
-
   config_narrow.max_edge_candidates = 0;
   config_narrow.finger_length = 0.15;
   config_narrow.angle_offsets = {0.0};
   config_narrow.collision_tolerance = 0.0001;
+  config_narrow.dual_seed_dedup_tolerance_deg = 0.1;   // near-zero: keep all seeds
 
   OrientationConfig config_wide;
-
   config_wide.max_edge_candidates = 0;
   config_wide.finger_length = 0.15;
   config_wide.angle_offsets = {0.0};
   config_wide.collision_tolerance = 0.0001;
+  config_wide.dual_seed_dedup_tolerance_deg = 90.0;    // aggressive: merge seeds within 90°
 
   GraspOrientationFinder finder_narrow(box, small_gripper, nullptr, nullptr, config_narrow);
   GraspOrientationFinder finder_wide(box, small_gripper, nullptr, nullptr, config_wide);
@@ -392,7 +396,7 @@ TEST_F(GraspOrientationFinderTest, LargerToleranceFewerClusters)
   auto grasps_narrow = finder_narrow.find_valid_grasps(pairs, topology);
   auto grasps_wide = finder_wide.find_valid_grasps(pairs, topology);
 
-  // Wider tolerance should produce fewer or equal clusters
+  // Wider dedup tolerance must produce fewer or equal orientations
   EXPECT_LE(grasps_wide.size(), grasps_narrow.size());
 }
 

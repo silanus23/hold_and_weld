@@ -133,6 +133,17 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
   const auto & all_surfaces = topology.get_all_surfaces();
   RCLCPP_INFO(logger_, "Total surfaces to check: %zu", all_surfaces.size());
 
+  // Mesh all primary faces before contact ratio sampling.
+  // The topology holds faces from a shape that has never been passed to
+  // BRepMesh_IncrementalMesh, so BRep_Tool::Triangulation returns null
+  // for every face and measure_contact_ratio silently returns 0 for all.
+  Standard_Real mesh_lin = 0.001;
+  Standard_Real mesh_ang = 0.5;
+  for (const auto & surface : all_surfaces) {
+    BRepMesh_IncrementalMesh mesher(surface.face, mesh_lin, Standard_False, mesh_ang);
+    (void)mesher;
+  }
+
   size_t surfaces_with_contact = 0;
   size_t surfaces_no_contact = 0;
 
