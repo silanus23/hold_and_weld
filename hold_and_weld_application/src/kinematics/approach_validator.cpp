@@ -38,7 +38,7 @@ ApproachValidator::ApproachValidator(
 {
 }
 
-bool ApproachValidator::isApproachValid(const Vector6d & q_approach)
+bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
 {
   auto logger = rclcpp::get_logger("approach_validator");
 
@@ -78,7 +78,7 @@ bool ApproachValidator::isApproachValid(const Vector6d & q_approach)
     RCLCPP_WARN(logger, "Phase 1 FAILED: Cannot reach first seam point from approach");
     return false;
   }
-  double m_index_first = computeManipulatibility(q_first_point);
+  double m_index_first = compute_manipulatibility(q_first_point);
   RCLCPP_DEBUG(logger, "First point manipulability: %.6f", m_index_first);
 
   if (m_index_first < manipulatibility_threshold_) {
@@ -124,7 +124,7 @@ bool ApproachValidator::isApproachValid(const Vector6d & q_approach)
       return false;
     }
 
-    double m_index = computeManipulatibility(next_q);
+    double m_index = compute_manipulatibility(next_q);
 
     RCLCPP_DEBUG(logger, "Waypoint %zu/%zu: Manipulability = %.6f",
                  waypoint_idx + 1, seam_->poses.size(), m_index);
@@ -143,7 +143,7 @@ bool ApproachValidator::isApproachValid(const Vector6d & q_approach)
   return true;
 }
 
-double ApproachValidator::computeManipulatibility(const Vector6d & q)
+double ApproachValidator::compute_manipulatibility(const Vector6d & q)
 {
   auto logger = rclcpp::get_logger("approach_validator");
 
@@ -169,12 +169,14 @@ double ApproachValidator::computeManipulatibility(const Vector6d & q)
 
   // Also compute condition number as secondary check
   Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
-  double cond_number = svd.singularValues()(0) / svd.singularValues()(svd.singularValues().size()-1);
+  double cond_number = svd.singularValues()(0) /
+    svd.singularValues()(svd.singularValues().size() - 1);
 
   RCLCPP_DEBUG(logger, "Manipulability metrics - Yoshikawa: %.6f, Condition: %.2f",
                yoshikawa_index, cond_number);
   if (cond_number > 100.0) {
-    RCLCPP_DEBUG(logger, "High condition number (%.2f) - configuration near singularity", cond_number);
+    RCLCPP_DEBUG(logger, "High condition number (%.2f) - configuration near singularity",
+          cond_number);
   }
 
   return yoshikawa_index;

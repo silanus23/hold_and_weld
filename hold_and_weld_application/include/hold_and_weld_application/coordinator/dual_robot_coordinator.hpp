@@ -209,6 +209,9 @@ private:
   // MoveIt interface for safety positioning
   std::shared_ptr<rclcpp::Node> moveit_node_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> welder_move_group_;
+
+  // Logger
+  rclcpp::Logger logger_;
 };
 
 }  // namespace hold_and_weld

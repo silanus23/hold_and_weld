@@ -322,6 +322,9 @@ private:
 
   // Configuration
   WelderConfig config_;
+
+  // Logger
+  rclcpp::Logger logger_;
 };
 
 }  // namespace hold_and_weld

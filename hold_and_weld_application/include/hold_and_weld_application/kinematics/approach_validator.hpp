@@ -70,10 +70,10 @@ public:
   ~ApproachValidator() = default;
 
   /**
-   * @brief Set the weld seam to validate against
-   * @param seam Weld seam containing target poses
+   * @brief Set the weld seam to validate against.
+   * @param seam Weld seam containing the target poses for the static-walk validation.
    */
-  void seamSetter(const hold_and_weld::WeldSeam & seam) {seam_ = &seam;}
+  void set_weld_seam(const hold_and_weld::WeldSeam & seam) {seam_ = &seam;}
 
   /**
    * @brief Validate approach configuration through entire seam
@@ -89,7 +89,7 @@ public:
    * @param q_approach Joint configuration to validate (OMPL result)
    * @return true if approach is valid for entire seam
    */
-  bool isApproachValid(const Vector6d & q_approach);
+  bool is_approach_valid(const Vector6d & q_approach);
 
 private:
   /**
@@ -97,7 +97,7 @@ private:
    * @param q Joint configuration
    * @return Manipulability index (sqrt(det(J*J^T)))
    */
-  double computeManipulatibility(const Vector6d & q);
+  double compute_manipulatibility(const Vector6d & q);
 
   std::shared_ptr<KinematicsSolver> kinematics_solver_;
   std::shared_ptr<CeresIKSolver> ceres_ik_solver_;

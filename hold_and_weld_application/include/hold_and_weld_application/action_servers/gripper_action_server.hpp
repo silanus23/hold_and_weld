@@ -16,6 +16,7 @@
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_
 
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -174,10 +175,18 @@ private:
   void execute_job(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
-   * @brief Execute the core gripper job sequence (no action server dependencies).
-   * @return true if job completed successfully, false otherwise.
+   * @brief Execute the core gripper job sequence with optional feedback reporting.
+   *
+   * This method is the single implementation entry-point for gripper execution.
+   * It is called both from the action-server path (where @p feedback_callback
+   * publishes ROS 2 feedback) and from the auto-trigger path (where a no-op
+   * callback is supplied).
+   *
+   * @param feedback_callback Callable invoked at each step with
+   *        (step_name, completion_percentage).  Must be non-null.
+   * @return true if the entire job completed successfully, false otherwise.
    */
-  bool execute_gripper_job_internal();
+  bool run_job(std::function<void(const std::string &, float)> feedback_callback);
 
   // Configuration loading
   /**
@@ -195,7 +204,7 @@ private:
    * @param position Target position for the gripper (0.0 = closed, 0.15 = open).
    * @return true if position was successfully set, false otherwise.
    */
-  bool set_gripper_position(double position);
+  bool set_finger_aperture(double position);
 
   // Motion
   /**
@@ -289,6 +298,9 @@ private:
 
   // Initialization
   rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
+
+  // Logger
+  rclcpp::Logger logger_;
 };
 
 }  // namespace hold_and_weld
