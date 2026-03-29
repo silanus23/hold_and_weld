@@ -56,7 +56,7 @@ namespace constraints
 {
 KissingSurfaceConstraint::KissingSurfaceConstraint(
   std::shared_ptr<const geometry::GeometryMapper> mapper,
-  const io::ParsedGripper & gripper,
+  const ParsedGripper & gripper,
   const std::vector<TopoDS_Shape> & secondary_shapes,
   double contact_threshold,
   double collision_tolerance)
@@ -464,7 +464,7 @@ bool KissingSurfaceConstraint::intersects_secondary(
     // Fallback to OCCT (slow path)
     RCLCPP_DEBUG(logger_, "Using OCCT fallback for collision checking (FCL unavailable)");
 
-    TopoDS_Shape configured_gripper = io::configure_gripper(gripper_, grip_distance);
+    TopoDS_Shape configured_gripper = configure_gripper(gripper_, grip_distance);
 
     BRepBuilderAPI_Transform transformer(configured_gripper, grasp_transform, Standard_True);
     TopoDS_Shape placed_gripper = transformer.Shape();

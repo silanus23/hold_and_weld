@@ -39,7 +39,7 @@ namespace geometry
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 FCLCollisionChecker::FCLCollisionChecker(
-  const io::ParsedGripper & gripper,
+  const ParsedGripper & gripper,
   const TopoDS_Shape & primary_shape,
   double linear_deflection)
 : finger_1_axis_(gripper.finger_1_axis),

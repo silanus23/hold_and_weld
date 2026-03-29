@@ -40,7 +40,7 @@
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
@@ -65,7 +65,7 @@ namespace angle_finding
 {
 GraspOrientationFinder::GraspOrientationFinder(
   const TopoDS_Shape & primary_shape,
-  const io::ParsedGripper & gripper,
+  const ParsedGripper & gripper,
   std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint,
   std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint,
   const OrientationConfig & config)
@@ -735,7 +735,7 @@ bool GraspOrientationFinder::collides_with_primary(
   // TODO(@silanus23): These slow paths shall be elliminated in
   // time after making sure of the usage of FCL
   // Fallback to OCCT (slow path)
-  TopoDS_Shape configured_gripper = io::configure_gripper(gripper_, grip_distance);
+  TopoDS_Shape configured_gripper = configure_gripper(gripper_, grip_distance);
 
   TopoDS_Shape transformed_gripper =
     BRepBuilderAPI_Transform(configured_gripper, gripper_transform, Standard_True).Shape();

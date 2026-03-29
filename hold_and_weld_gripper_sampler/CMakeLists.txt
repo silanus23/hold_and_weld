@@ -33,6 +33,7 @@ if(OpenCASCADE_FOUND)
 endif()
 
 add_library(${PROJECT_NAME}_core SHARED
+  src/core/gripper_kinematics.cpp
   src/geometry/geometry_mapper.cpp
   src/geometry/topology.cpp
   src/geometry/occt_utils.cpp

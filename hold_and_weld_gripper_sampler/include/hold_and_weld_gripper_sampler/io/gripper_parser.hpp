@@ -15,9 +15,6 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__IO__GRIPPER_PARSER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__IO__GRIPPER_PARSER_HPP_
 
-#include <Eigen/Dense>
-
-#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,52 +23,12 @@
 #include <gp_Trsf.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
+
 namespace hold_and_weld_gripper_sampler
 {
 namespace io
 {
-
-/**
- * @brief Parsed gripper kinematic information
- *
- * Contains all geometric and kinematic data needed for grasp planning
- * and collision checking with exclusion zones.
- */
-struct ParsedGripper
-{
-  TopoDS_Shape finger_1;
-  TopoDS_Shape finger_2;
-  TopoDS_Shape base;
-
-  Eigen::Vector3d finger_1_axis;
-  Eigen::Vector3d finger_2_axis;
-
-  double min_opening;
-  double max_opening;
-
-  std::string gripper_type;
-  Eigen::Vector3d tcp_offset;
-  Eigen::Vector3d tcp_rpy;
-
-  std::string base_link_name;
-  std::string finger_1_link_name;
-  std::string finger_2_link_name;
-  std::string finger_1_joint_name;
-  std::string finger_2_joint_name;
-};
-
-/**
- * @brief Configure gripper to a specified grip distance
- *
- * Translates each finger along its opening axis by the amount needed to
- * achieve the requested grip distance. Clamps to [min_opening, max_opening].
- * Both fingers move symmetrically from their closed (reference) positions.
- *
- * @param gripper Parsed gripper data
- * @param grip_distance Target distance between finger contact points (meters)
- * @return Compound shape: finger_1 + finger_2 + base at configured state
- */
-TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distance);
 
 /**
  * @brief Parser for gripper URDFs following the hold_and_weld convention

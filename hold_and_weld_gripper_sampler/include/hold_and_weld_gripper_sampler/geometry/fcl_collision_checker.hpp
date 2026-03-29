@@ -24,7 +24,7 @@
 #include <gp_Trsf.hxx>
 #include <TopoDS_Shape.hxx>
 
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -64,7 +64,7 @@ public:
    * @param linear_deflection Triangulation precision (default 0.1mm)
    */
   FCLCollisionChecker(
-    const io::ParsedGripper & gripper,
+    const ParsedGripper & gripper,
     const TopoDS_Shape & primary_shape,
     double linear_deflection = 0.0001);
 

@@ -36,6 +36,7 @@
 #include "hold_and_weld_gripper_sampler/io/config_parser.hpp"
 #include "hold_and_weld_gripper_sampler/io/result_writer.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 
@@ -167,7 +168,7 @@ int main(int argc, char ** argv)
   // Load gripper
   RCLCPP_INFO(logger, "LOADING GRIPPER");
   io::GripperParser gripper_parser;
-  io::ParsedGripper gripper;
+  ParsedGripper gripper;
 
   try {
     gripper = gripper_parser.parse_from_urdf_file(config.gripper_urdf_path);

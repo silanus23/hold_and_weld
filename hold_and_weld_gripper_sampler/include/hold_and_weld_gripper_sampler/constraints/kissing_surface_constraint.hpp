@@ -27,7 +27,7 @@
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 
 namespace hold_and_weld_gripper_sampler
@@ -35,8 +35,7 @@ namespace hold_and_weld_gripper_sampler
 namespace constraints
 {
 
-// Use ParsedGripper from geometry namespace
-using io::ParsedGripper;
+
 
 /**
  * @brief Statistics for collision rejection tracking
@@ -85,7 +84,7 @@ public:
    */
   KissingSurfaceConstraint(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
-    const io::ParsedGripper & gripper,
+    const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     double contact_threshold = 0.8,
     double collision_tolerance = 1e-6
@@ -170,7 +169,7 @@ public:
 
 private:
   std::shared_ptr<const geometry::GeometryMapper> mapper_;
-  io::ParsedGripper gripper_;
+  ParsedGripper gripper_;
   std::vector<TopoDS_Shape> secondary_shapes_;
   double contact_threshold_;
   double collision_tolerance_;

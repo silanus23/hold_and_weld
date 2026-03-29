@@ -30,11 +30,13 @@
 #include <gp_Vec.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
+using namespace hold_and_weld_gripper_sampler;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::constraints;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::core;  // NOLINT

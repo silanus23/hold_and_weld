@@ -32,7 +32,7 @@
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
@@ -131,7 +131,7 @@ public:
   GraspFinder(
     const TopoDS_Shape & primary_shape,
     const geometry::Topology & primary_topology,
-    const io::ParsedGripper & gripper,
+    const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
     std::nullopt,
@@ -161,7 +161,7 @@ public:
     std::shared_ptr<const geometry::GeometryMapper> mapper,
     const TopoDS_Shape & primary_shape,
     const geometry::Topology & primary_topology,
-    const io::ParsedGripper & gripper,
+    const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
     std::nullopt,
@@ -209,7 +209,7 @@ private:
   std::shared_ptr<const geometry::GeometryMapper> mapper_;
   TopoDS_Shape primary_shape_;
   geometry::Topology primary_topology_;
-  io::ParsedGripper gripper_;
+  ParsedGripper gripper_;
   std::vector<TopoDS_Shape> secondary_shapes_;
 
   // Exclusion zone definitions

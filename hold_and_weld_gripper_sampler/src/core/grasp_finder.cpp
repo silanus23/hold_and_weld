@@ -41,7 +41,7 @@ static std::string vec_to_string(const Eigen::Vector3d & v)
 GraspFinder::GraspFinder(
   const TopoDS_Shape & primary_shape,
   const geometry::Topology & primary_topology,
-  const io::ParsedGripper & gripper,
+  const ParsedGripper & gripper,
   const std::vector<TopoDS_Shape> & secondary_shapes,
   const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles,
   const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons,
@@ -87,7 +87,7 @@ GraspFinder::GraspFinder(
   std::shared_ptr<const geometry::GeometryMapper> mapper,
   const TopoDS_Shape & primary_shape,
   const geometry::Topology & primary_topology,
-  const io::ParsedGripper & gripper,
+  const ParsedGripper & gripper,
   const std::vector<TopoDS_Shape> & secondary_shapes,
   const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles,
   const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons,

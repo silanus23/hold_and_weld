@@ -29,7 +29,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 namespace hold_and_weld_gripper_sampler
@@ -101,7 +101,7 @@ class GraspOrientationFinder
 public:
   GraspOrientationFinder(
     const TopoDS_Shape & primary_shape,
-    const io::ParsedGripper & gripper,
+    const ParsedGripper & gripper,
     std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint,
     std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint,
     const OrientationConfig & config = OrientationConfig{}
@@ -131,7 +131,7 @@ public:
 
 private:
   TopoDS_Shape primary_shape_;
-  io::ParsedGripper gripper_;
+  ParsedGripper gripper_;
   std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint_;
   OrientationConfig config_;

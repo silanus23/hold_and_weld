@@ -26,6 +26,7 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
 
@@ -35,9 +36,9 @@ namespace geometry
 {
 namespace test
 {
-io::ParsedGripper create_test_gripper()
+ParsedGripper create_test_gripper()
 {
-  io::ParsedGripper gripper;
+  ParsedGripper gripper;
 
   // Create finger 1 (centered at origin, will move in +X)
   gripper.finger_1 = BRepPrimAPI_MakeBox(
@@ -87,7 +88,7 @@ protected:
     ).Shape();
   }
 
-  io::ParsedGripper gripper_;
+  ParsedGripper gripper_;
   TopoDS_Shape primary_shape_;
 };
 

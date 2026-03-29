@@ -28,9 +28,11 @@
 #include <gp_Ax2.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 
+using namespace hold_and_weld_gripper_sampler;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::constraints;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 

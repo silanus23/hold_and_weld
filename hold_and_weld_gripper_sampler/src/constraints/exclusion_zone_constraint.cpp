@@ -557,7 +557,7 @@ bool ExclusionZoneConstraint::intersects_exclusion_zone(
 
   RCLCPP_DEBUG(logger_, "intersects_exclusion_zone: Using OCCT fallback (FCL not available)");
 
-  TopoDS_Shape configured_gripper = io::configure_gripper(gripper_, grip_distance);
+  TopoDS_Shape configured_gripper = configure_gripper(gripper_, grip_distance);
 
   BRepBuilderAPI_Transform transformer(configured_gripper, gripper_transform, Standard_True);
   TopoDS_Shape placed_gripper = transformer.Shape();

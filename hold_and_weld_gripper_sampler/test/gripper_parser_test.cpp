@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
 
 #include <gtest/gtest.h>
@@ -22,9 +23,9 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 
-using hold_and_weld_gripper_sampler::io::ParsedGripper;
+using hold_and_weld_gripper_sampler::ParsedGripper;
+using hold_and_weld_gripper_sampler::configure_gripper;
 using hold_and_weld_gripper_sampler::io::GripperParser;
-using hold_and_weld_gripper_sampler::io::configure_gripper;
 
 namespace test_constants
 {

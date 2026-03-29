@@ -54,13 +54,13 @@
 #include <TopExp_Explorer.hxx>
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 
 using namespace hold_and_weld_gripper_sampler::angle_finding;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
-using namespace hold_and_weld_gripper_sampler::io;  // NOLINT
+using namespace hold_and_weld_gripper_sampler;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::sampling;  // NOLINT
 
 namespace

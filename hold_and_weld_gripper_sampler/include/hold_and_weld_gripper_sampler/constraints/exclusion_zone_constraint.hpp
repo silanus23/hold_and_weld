@@ -28,7 +28,7 @@
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
-#include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 
 namespace hold_and_weld_gripper_sampler
@@ -69,8 +69,7 @@ struct exclusion_polygon
   double clearance = 0.01;
 };
 
-// Use ParsedGripper from gripper_parser.hpp
-using io::ParsedGripper;
+
 
 /**
  * @brief Constraint for user-defined exclusion zones (welds, screws, forbidden areas)
@@ -85,7 +84,7 @@ class ExclusionZoneConstraint
 public:
   ExclusionZoneConstraint(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
-    const io::ParsedGripper & gripper,
+    const ParsedGripper & gripper,
     const std::optional<std::vector<exclusion_circle>> & circles = std::nullopt,
     const std::optional<std::vector<exclusion_polygon>> & polygons = std::nullopt,
     const std::optional<std::vector<exclusion_line>> & lines = std::nullopt,
