@@ -18,6 +18,9 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
+#include <algorithm>
+#include <vector>
+
 namespace hold_and_weld_gripper_sampler
 {
 
@@ -170,6 +173,20 @@ struct GraspCandidate;
  * @return Grasp with Eigen types ready for downstream use
  */
 Grasp to_grasp(const angle_finding::GraspCandidate & candidate);
+
+/**
+ * @brief Sort grasps by quality score descending (best first)
+ *
+ * @param grasps Vector of grasps to sort in place
+ */
+inline void sort_by_quality(std::vector<Grasp> & grasps)
+{
+  std::sort(
+    grasps.begin(), grasps.end(),
+    [](const Grasp & a, const Grasp & b) {
+      return a.quality_score > b.quality_score;
+    });
+}
 
 }  // namespace hold_and_weld_gripper_sampler
 

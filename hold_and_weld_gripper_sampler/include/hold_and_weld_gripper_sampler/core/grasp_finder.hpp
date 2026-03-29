@@ -250,11 +250,6 @@ private:
    */
   std::vector<core::SampleArea> merge_sample_areas() const;
 
-  /**
-   * @brief Sort grasps by quality (descending) in place
-   */
-  static void sort_by_quality(std::vector<Grasp> & grasps);
-
   rclcpp::Logger logger_;
 };
 

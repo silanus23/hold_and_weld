@@ -517,13 +517,5 @@ std::vector<core::SampleArea> GraspFinder::merge_sample_areas() const
   return merged;
 }
 
-void GraspFinder::sort_by_quality(std::vector<Grasp> & grasps)
-{
-  std::sort(grasps.begin(), grasps.end(),
-    [](const Grasp & a, const Grasp & b) {
-      return a.quality_score > b.quality_score;
-    });
-}
-
 }  // namespace core
 }  // namespace hold_and_weld_gripper_sampler
