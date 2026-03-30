@@ -19,6 +19,8 @@
 #include <vector>
 
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
@@ -297,6 +299,61 @@ TEST_F(FCLCollisionCheckerTest, RotatedGripperCollisionCheck)
   EXPECT_FALSE(checker.collides_with_primary(transform, 0.02, 0.001));
 }
 
+
+TEST_F(FCLCollisionCheckerTest, FCLvsOCCTConsistencyOnKnownPrimitive)
+{
+  // Scene: the test_gripper (fingers along ±X, base above) against a 100mm
+  // cube centred at the origin.  We sweep the gripper in Z from clearly
+  // inside the cube out to clearly outside and verify that FCL's boolean
+  // agrees with the OCCT BRepExtrema distance at every step.
+  //
+  // Gripper geometry (closed, grip_distance = 0):
+  //   finger_1 / finger_2: 10×10×50 mm box, corner at (−5,−5, 0)
+  //   base: 50×30×20 mm box, corner at (−25,−15, 50)
+  // Primary cube: 100mm cube, corners at (−50,−50,−50) and (+50,+50,+50).
+  //
+  // The two tolerances below deliberately bracket each tested gap so one
+  // path says "collide" and the other says "clear" only at the boundary.
+  // Away from the boundary both paths must agree.
+
+  FCLCollisionChecker checker(gripper_, primary_shape_);
+  ASSERT_TRUE(checker.is_valid());
+
+  const double grip_distance = 0.0;   // closed gripper
+  const double tolerance    = 0.002;  // 2 mm — used by both paths
+
+  // Z offsets to test (metres).  Negative = inside cube, positive = outside.
+  const std::vector<double> z_offsets = {
+    -0.10,   // deep inside  → both must report collision
+    -0.05,   // inside       → both must report collision
+     0.00,   // touching     → both must report collision (zero distance)
+     0.06,   // 10 mm gap    → both must report NO collision (gap > tolerance)
+     0.20,   // well outside → both must report NO collision
+  };
+
+  for (double z : z_offsets) {
+    gp_Trsf transform;
+    transform.SetTranslation(gp_Vec(0.0, 0.0, z));
+
+    // --- FCL path ---
+    bool fcl_collision = checker.collides_with_primary(transform, grip_distance, tolerance);
+
+    // --- OCCT path ---
+    TopoDS_Shape configured = configure_gripper(gripper_, grip_distance);
+    BRepBuilderAPI_Transform xform(configured, transform, Standard_True);
+    TopoDS_Shape placed = xform.Shape();
+    BRepExtrema_DistShapeShape dist(placed, primary_shape_);
+    ASSERT_TRUE(dist.IsDone()) << "BRepExtrema failed at z=" << z;
+    bool occt_collision = dist.Value() < tolerance;
+
+    EXPECT_EQ(fcl_collision, occt_collision)
+      << "FCL and OCCT disagree at z=" << z
+      << "  FCL=" << fcl_collision
+      << "  OCCT=" << occt_collision
+      << "  dist=" << dist.Value()
+      << "  tolerance=" << tolerance;
+  }
+}
 
 }  // namespace test
 }  // namespace geometry

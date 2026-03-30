@@ -313,19 +313,18 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
 
   std::vector<exclusion_line> lines = {line};
 
-  // Should not crash - may throw or handle gracefully
-  // Note: OCCT may throw Standard_Failure which is not derived from std::exception
+  // Should not crash — degenerate geometry may throw std::exception or OCCT
+  // Standard_Failure, but must never trigger a GTest fatal failure (ASSERT/abort).
+  // The inner catch is intentionally absent: if an unhandled exception escapes,
+  // EXPECT_NO_FATAL_FAILURE will catch the resulting fatal signal; if it throws a
+  // handled C++ exception the test runner reports it as an error, not a silent pass.
   EXPECT_NO_FATAL_FAILURE({
-    try {
-      ExclusionZoneConstraint constraint(
-        mapper_, gripper_, std::nullopt, std::nullopt, lines);
+    ExclusionZoneConstraint constraint(
+      mapper_, gripper_, std::nullopt, std::nullopt, lines);
 
-      TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
-      Topology topology = mapper_->load_from_shape(test_box);
-      constraint.analyze_constraints(test_box, topology);
-    } catch (...) {
-      // Expected - degenerate geometry may throw OCCT Standard_Failure or std::exception
-    }
+    TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
+    Topology topology = mapper_->load_from_shape(test_box);
+    constraint.analyze_constraints(test_box, topology);
   });
 }
 

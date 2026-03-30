@@ -276,11 +276,14 @@ TEST_F(GraspOrientationFinderTest, FindGraspsOnSimpleBox)
 
 TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
 {
+  // 80x80x80 mm cube.  Contacts are placed 8 mm from a face edge so that
+  // a finger_length of 0.06 m comfortably reaches that edge, avoiding the
+  // "no edges within finger_length" rejection path.
   TopoDS_Shape box = create_box(0.08, 0.08, 0.08);
   Topology topology = mapper_->load_from_shape(box, "test_box");
 
   OrientationConfig config;
-  config.finger_length = 0.03;
+  config.finger_length = 0.06;   // 60 mm — reaches the 8 mm-away edge with margin
   config.collision_tolerance = 0.0001;
   config.max_edge_candidates = 1;
   config.angle_offsets = {0.0};  // Single angle for predictable output
@@ -288,10 +291,11 @@ TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
   ParsedGripper small_gripper = create_small_gripper();
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
 
-  // Contact pair on opposing X faces
+  // Contact pair on opposing X faces.  Y=0.008 places each contact 8 mm
+  // from the nearest Y-edge of its face, well within finger_length=0.06 m.
   ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.04, 0.04);
-  pair.contact_2 = gp_Pnt(0.08, 0.04, 0.04);
+  pair.contact_1 = gp_Pnt(0.0,  0.008, 0.04);
+  pair.contact_2 = gp_Pnt(0.08, 0.008, 0.04);
   pair.grip_distance = 0.08;
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 1;
@@ -299,16 +303,22 @@ TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
   std::vector<ContactPair> pairs = {pair};
   auto grasps = finder.find_valid_grasps(pairs, topology);
 
-  for (const auto & grasp : grasps) {
-    // Transform should be valid (determinant of rotation part = 1)
-    gp_Trsf t = grasp.gripper_transform;
+  ASSERT_FALSE(grasps.empty())
+    << "find_valid_grasps returned no results for a clean opposing-face contact pair; "
+       "check finger_length / collision_tolerance config or contact pair coordinates";
 
-    // Check it's a valid rigid transformation
-    // The rotation matrix should have determinant 1
-    double det = t.Value(1, 1) * (t.Value(2, 2) * t.Value(3, 3) - t.Value(2, 3) * t.Value(3, 2)) -
-      t.Value(1, 2) * (t.Value(2, 1) * t.Value(3, 3) - t.Value(2, 3) * t.Value(3, 1)) +
-      t.Value(1, 3) * (t.Value(2, 1) * t.Value(3, 2) - t.Value(2, 2) * t.Value(3, 1));
-    EXPECT_NEAR(std::abs(det), 1.0, 1e-6);
+  for (const auto & grasp : grasps) {
+    // Transform should be valid — extract the vectorial (rotation) part directly
+    // instead of reading Value() which folds in the scale factor.
+    gp_Trsf t = grasp.gripper_transform;
+    gp_Mat rot = t.VectorialPart();  // always the pure rotation matrix, scale-free
+
+    double det =
+      rot.Value(1, 1) * (rot.Value(2, 2) * rot.Value(3, 3) - rot.Value(2, 3) * rot.Value(3, 2)) -
+      rot.Value(1, 2) * (rot.Value(2, 1) * rot.Value(3, 3) - rot.Value(2, 3) * rot.Value(3, 1)) +
+      rot.Value(1, 3) * (rot.Value(2, 1) * rot.Value(3, 2) - rot.Value(2, 2) * rot.Value(3, 1));
+    EXPECT_NEAR(std::abs(det), 1.0, 1e-6)
+      << "Rotation part of gripper_transform must have determinant 1";
   }
 }
 
@@ -515,6 +525,11 @@ TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceIsConfigurable)
   pair.contact_1 = gp_Pnt(0.0, 0.02, 0.0);
   pair.contact_2 = gp_Pnt(0.0, 0.02, 0.1);
   pair.grip_distance = 0.1;
+  // surface_id_1 = surface_id_2 = 0 is intentional: this shape has only one
+  // face (surface 0).  Both contacts are associated with it so that
+  // find_edges_in_circle searches the same face's edges from two different Z
+  // positions.  The grip direction (Z-axis) is what matters here — not an
+  // opposing-face grasp.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 
@@ -554,6 +569,69 @@ TEST_F(GraspOrientationFinderTest, QualityScoreInValidRange)
     EXPECT_GE(grasp.quality_score, 0.0);
     EXPECT_LE(grasp.quality_score, 1.0);
   }
+}
+
+TEST_F(GraspOrientationFinderTest, QualityScoreOrderingCenterVsEdge)
+{
+  // 100x100x100 mm cube.  Two contact pairs on the same opposing X faces:
+  //   - "center" pair: contacts at face center (Y=0.05, Z=0.05) — 50 mm
+  //     from every edge → maximum clearance → highest quality score.
+  //   - "edge" pair: contacts at Y=0.008 — only 8 mm from the nearest
+  //     Y-edge → low clearance → lower quality score.
+  // Both pairs use the same finger_length so that the same set of edges is
+  // visible; the difference is purely in how close the contact is to an edge.
+  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
+  Topology topology = mapper_->load_from_shape(box, "test_box");
+
+  ParsedGripper small_gripper = create_small_gripper();
+
+  OrientationConfig config;
+  config.finger_length   = 0.08;   // Reaches edges from both positions
+  config.collision_tolerance = 0.0001;
+  config.max_edge_candidates = 1;
+  config.angle_offsets   = {0.0};  // Single angle — one grasp per pair
+
+  GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+
+  // Center contact: 50 mm from every edge on the face
+  ContactPair center_pair;
+  center_pair.contact_1    = gp_Pnt(0.0, 0.05, 0.05);
+  center_pair.contact_2    = gp_Pnt(0.1, 0.05, 0.05);
+  center_pair.grip_distance = 0.1;
+  center_pair.surface_id_1 = 0;
+  center_pair.surface_id_2 = 1;
+
+  // Near-edge contact: 8 mm from the nearest Y-edge
+  ContactPair edge_pair;
+  edge_pair.contact_1    = gp_Pnt(0.0, 0.008, 0.05);
+  edge_pair.contact_2    = gp_Pnt(0.1, 0.008, 0.05);
+  edge_pair.grip_distance = 0.1;
+  edge_pair.surface_id_1 = 0;
+  edge_pair.surface_id_2 = 1;
+
+  std::vector<ContactPair> center_pairs = {center_pair};
+  std::vector<ContactPair> edge_pairs   = {edge_pair};
+
+  auto center_grasps = finder.find_valid_grasps(center_pairs, topology);
+  auto edge_grasps   = finder.find_valid_grasps(edge_pairs,   topology);
+
+  ASSERT_FALSE(center_grasps.empty()) << "Center contact must produce at least one grasp";
+  ASSERT_FALSE(edge_grasps.empty())   << "Near-edge contact must produce at least one grasp";
+
+  // Pick the best (highest quality) grasp from each set
+  double center_best = 0.0;
+  for (const auto & g : center_grasps) {
+    center_best = std::max(center_best, g.quality_score);
+  }
+  double edge_best = 0.0;
+  for (const auto & g : edge_grasps) {
+    edge_best = std::max(edge_best, g.quality_score);
+  }
+
+  EXPECT_GT(center_best, edge_best)
+    << "Center-of-face contact (score=" << center_best
+    << ") must score higher than near-edge contact (score=" << edge_best
+    << ") because quality_score encodes minimum clearance to the nearest edge";
 }
 
 TEST_F(GraspOrientationFinderTest, MaxEdgeCandidatesLimitsOutput)
@@ -694,6 +772,9 @@ TEST_F(GraspOrientationFinderTest, TransformFollowsURDFConvention)
   std::vector<ContactPair> pairs = {pair};
   auto grasps = finder.find_valid_grasps(pairs, topology);
 
+  ASSERT_FALSE(grasps.empty())
+    << "find_valid_grasps returned no results for a clean opposing-face contact pair";
+
   // Expected TCP at midpoint between contacts
   gp_Pnt expected_tcp(
     (pair.contact_1.X() + pair.contact_2.X()) / 2,
@@ -704,10 +785,13 @@ TEST_F(GraspOrientationFinderTest, TransformFollowsURDFConvention)
     // Verify the transform is a valid rigid transformation
     // by checking that the rotation part has determinant 1
     gp_Trsf t = grasp.gripper_transform;
-    double det = t.Value(1, 1) * (t.Value(2, 2) * t.Value(3, 3) - t.Value(2, 3) * t.Value(3, 2)) -
-      t.Value(1, 2) * (t.Value(2, 1) * t.Value(3, 3) - t.Value(2, 3) * t.Value(3, 1)) +
-      t.Value(1, 3) * (t.Value(2, 1) * t.Value(3, 2) - t.Value(2, 2) * t.Value(3, 1));
-    EXPECT_NEAR(std::abs(det), 1.0, 1e-6);
+    gp_Mat rot = t.VectorialPart();
+    double det =
+      rot.Value(1, 1) * (rot.Value(2, 2) * rot.Value(3, 3) - rot.Value(2, 3) * rot.Value(3, 2)) -
+      rot.Value(1, 2) * (rot.Value(2, 1) * rot.Value(3, 3) - rot.Value(2, 3) * rot.Value(3, 1)) +
+      rot.Value(1, 3) * (rot.Value(2, 1) * rot.Value(3, 2) - rot.Value(2, 2) * rot.Value(3, 1));
+    EXPECT_NEAR(std::abs(det), 1.0, 1e-6)
+      << "Rotation part of gripper_transform must have determinant 1";
 
     // Verify grasp contacts match input
     EXPECT_NEAR(grasp.contact_1.X(), pair.contact_1.X(), 1e-6);
@@ -905,6 +989,10 @@ TEST_F(GraspOrientationFinderTest, CurvedEdgeHasMultipleMinima)
   pair.contact_1 = gp_Pnt(0.02, 0.02, 0.0);  // Off-center for asymmetry
   pair.contact_2 = gp_Pnt(0.02, 0.02, 0.1);  // Arbitrary second point along Z
   pair.grip_distance = 0.1;
+  // surface_id_1 = surface_id_2 = 0 is intentional: the half-disk is a single
+  // face.  The test exercises find_local_minima_on_edge for curved arc edges,
+  // not an opposing-face grasp; contact_2 at z=0.1 merely defines the grip
+  // direction.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 
@@ -959,6 +1047,9 @@ TEST_F(GraspOrientationFinderTest, MaxOrientationsPerPairLimitsResults)
   pair.contact_1 = gp_Pnt(0.0, 0.02, 0.0);
   pair.contact_2 = gp_Pnt(0.0, 0.02, 0.1);
   pair.grip_distance = 0.1;
+  // surface_id_1 = surface_id_2 = 0 is intentional: the u_edge compound has
+  // only one face (surface 0).  The test exercises max_orientations_per_pair
+  // capping, not opposing-face grasp geometry.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 
@@ -1060,6 +1151,9 @@ TEST_F(GraspOrientationFinderTest, EndpointMinimaDetected)
   pair.contact_1 = gp_Pnt(0.01, 0.02, 0.0);  // Close to p1
   pair.contact_2 = gp_Pnt(0.01, 0.02, 0.1);
   pair.grip_distance = 0.1;
+  // surface_id_1 = surface_id_2 = 0 is intentional: the compound has only one
+  // face (surface 0).  The test exercises endpoint-minimum detection on a
+  // straight edge; contact_2 at z=0.1 defines the grip direction only.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 
@@ -1112,6 +1206,10 @@ TEST_F(GraspOrientationFinderTest, EdgePassingThroughCircleFindsMinimumInside)
   pair.contact_1 = gp_Pnt(0.0, 0.0, 0.0);
   pair.contact_2 = gp_Pnt(0.0, 0.0, 0.1);
   pair.grip_distance = 0.1;
+  // surface_id_1 = surface_id_2 = 0 is intentional: the compound has only one
+  // face (surface 0).  The test exercises find_local_minima_on_edge for an
+  // edge passing through the finger circle; contact_2 at z=0.1 defines the
+  // grip direction only, not an opposing face.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 
@@ -1155,6 +1253,10 @@ TEST_F(GraspOrientationFinderTest, EdgeOutsideCircleNoConstraints)
   pair.contact_1 = gp_Pnt(0.0, 0.0, 0.0);
   pair.contact_2 = gp_Pnt(0.0, 0.0, 0.1);
   pair.grip_distance = 0.1;
+  // surface_id_1 = surface_id_2 = 0 is intentional: the compound has only one
+  // face (surface 0).  The test exercises the case where the edge is entirely
+  // outside finger_length; contact_2 at z=0.1 defines the grip direction only,
+  // not an opposing face.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 

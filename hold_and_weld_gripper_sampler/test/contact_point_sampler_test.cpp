@@ -363,28 +363,53 @@ TEST_F(ContactPointSamplerTest, InclusionZoneRestrictsSampling)
 
   ContactPointSampler sampler(config);
 
+  // Baseline: sample with no restrictions
+  std::vector<SampleArea> no_restrictions;
+  auto pairs_full = sampler.generate_contact_pairs(topology, all_ids, no_restrictions);
+
   std::vector<int> z_surfaces = get_surfaces_by_normal(topology, gp_Vec(0, 0, 1));
 
-  if (!z_surfaces.empty()) {
-    gp_Pnt p1(0.03, 0.03, 0);
-    gp_Pnt p2(0.07, 0.03, 0);
-    gp_Pnt p3(0.07, 0.07, 0);
-    gp_Pnt p4(0.03, 0.07, 0);
+  // The box must have faces with a Z normal — fail fast if topology is broken
+  ASSERT_FALSE(z_surfaces.empty()) << "Box must have at least one Z-normal face";
 
-    BRepBuilderAPI_MakeWire wire_builder;
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p2, p3).Edge());
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
+  // Inclusion zone: only a 40x40 mm sub-region of the 100x100 mm top face
+  gp_Pnt p1(0.03, 0.03, 0);
+  gp_Pnt p2(0.07, 0.03, 0);
+  gp_Pnt p3(0.07, 0.07, 0);
+  gp_Pnt p4(0.03, 0.07, 0);
 
-    SampleArea inclusion;
-    inclusion.surface_id = z_surfaces[0];
-    inclusion.wire = wire_builder.Wire();
+  BRepBuilderAPI_MakeWire wire_builder;
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p2, p3).Edge());
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
 
-    std::vector<SampleArea> inclusions = {inclusion};
-    auto pairs = sampler.generate_contact_pairs(topology, all_ids, inclusions);
+  SampleArea inclusion;
+  inclusion.surface_id = z_surfaces[0];
+  inclusion.wire = wire_builder.Wire();
 
-    SUCCEED();
+  std::vector<SampleArea> inclusions = {inclusion};
+  auto pairs_restricted = sampler.generate_contact_pairs(topology, all_ids, inclusions);
+
+  // The inclusion zone covers only (40/100)^2 = 16% of the face area, so the
+  // restricted run must yield strictly fewer contact pairs than the full run.
+  EXPECT_LT(pairs_restricted.size(), pairs_full.size())
+    << "Inclusion zone covering 16% of the top face must reduce contact pair count";
+
+  // Every contact_1 from the Z-surface must land inside the inclusion wire bounds
+  for (const auto & pair : pairs_restricted) {
+    if (pair.surface_id_1 == z_surfaces[0]) {
+      EXPECT_GE(pair.contact_1.X(), 0.03 - 1e-6);
+      EXPECT_LE(pair.contact_1.X(), 0.07 + 1e-6);
+      EXPECT_GE(pair.contact_1.Y(), 0.03 - 1e-6);
+      EXPECT_LE(pair.contact_1.Y(), 0.07 + 1e-6);
+    }
+    if (pair.surface_id_2 == z_surfaces[0]) {
+      EXPECT_GE(pair.contact_2.X(), 0.03 - 1e-6);
+      EXPECT_LE(pair.contact_2.X(), 0.07 + 1e-6);
+      EXPECT_GE(pair.contact_2.Y(), 0.03 - 1e-6);
+      EXPECT_LE(pair.contact_2.Y(), 0.07 + 1e-6);
+    }
   }
 }
 
@@ -646,7 +671,22 @@ TEST_F(ContactPointSamplerTest, WedgeAngledSurfaces)
   std::vector<SampleArea> no_exclusions;
   auto pairs = sampler.generate_contact_pairs(topology, all_ids, no_exclusions);
 
-  SUCCEED();
+  // The sampler must produce at least one contact pair on this wedge — the two
+  // large planar faces are nearly parallel and separated by ~0.05 m which is
+  // within [min_gripper_opening, max_gripper_opening].
+  EXPECT_GT(pairs.size(), 0u) << "Expected at least one contact pair on the wedge";
+
+  // Every returned pair must satisfy the antiparallelism constraint:
+  // dot(n1, n2) <= cos(min_angle_deg) — for 160° that is cos(160°) ≈ -0.940.
+  const double cos_min_angle = std::cos(config.min_angle_deg * M_PI / 180.0);
+  for (const auto & pair : pairs) {
+    gp_Vec n1 = pair.normal_1.Normalized();
+    gp_Vec n2 = pair.normal_2.Normalized();
+    double dot = n1.Dot(n2);
+    EXPECT_LE(dot, cos_min_angle + 1e-6)
+      << "Pair normals dot=" << dot
+      << " violates min_angle_deg=" << config.min_angle_deg;
+  }
 }
 
 TEST_F(ContactPointSamplerTest, SamplingDensityVariation)

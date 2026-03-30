@@ -295,7 +295,7 @@ TEST_F(KissingSurfaceConstraintTest, GripperOpensCorrectly)
 
 TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
 {
-  // Secondary: ground plane occupying z=-0.01 to z=0, top face at z=0
+  // Secondary: ground plane occupying z=-0.01 to z=0, top face exactly at z=0.
   gp_Trsf secondary_pos;
   secondary_pos.SetTranslation(gp_Vec(-0.5, -0.5, -0.01));
   TopoDS_Shape secondary = BRepPrimAPI_MakeBox(1.0, 1.0, 0.01).Shape();
@@ -303,26 +303,52 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
 
   std::vector<TopoDS_Shape> secondaries = {secondary};
 
-  // Gripper bottom (finger tips) at z=0.005 → 5mm gap to secondary top face
+  // Build a dedicated gripper whose lowest point is exactly z=0 in its local
+  // frame.  BRepPrimAPI_MakeBox(dx, dy, dz) places the box with one corner at
+  // the origin, so the bottom face sits at z=0 and the top face at z=dz.
+  // Using a single flat block as both base and "fingers" removes any ambiguity
+  // about which part of the gripper is closest to the secondary.
+  ParsedGripper flat_gripper;
+  // 60x60x10 mm block — bottom face at z=0, top face at z=0.01
+  flat_gripper.base  = BRepPrimAPI_MakeBox(
+    gp_Pnt(-0.03, -0.03, 0.0), 0.06, 0.06, 0.01).Shape();
+  flat_gripper.finger_1 = flat_gripper.base;
+  flat_gripper.finger_2 = flat_gripper.base;
+  flat_gripper.finger_1_axis = Eigen::Vector3d(0.0, 1.0, 0.0);
+  flat_gripper.finger_2_axis = Eigen::Vector3d(0.0, -1.0, 0.0);
+  flat_gripper.max_opening   = 0.06;
+  flat_gripper.gripper_type  = "parallel";
+  flat_gripper.tcp_offset    = Eigen::Vector3d::Zero();
+  flat_gripper.tcp_rpy       = Eigen::Vector3d::Zero();
+  flat_gripper.base_link_name      = "flat_base";
+  flat_gripper.finger_1_link_name  = "flat_f1";
+  flat_gripper.finger_2_link_name  = "flat_f2";
+  flat_gripper.finger_1_joint_name = "flat_j1";
+  flat_gripper.finger_2_joint_name = "flat_j2";
+
+  // Known gap: translate the gripper 5 mm above the secondary top face (z=0).
+  // The gripper's lowest point is at local z=0, so after the transform its
+  // closest point to the secondary is exactly 5 mm.
+  constexpr double kGap = 0.005;
   Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-  pose.translation() = Eigen::Vector3d(0.0, 0.0, 0.005);
+  pose.translation() = Eigen::Vector3d(0.0, 0.0, kGap);
 
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(primary);
 
-  // Loose tolerance: 10mm > 5mm gap → collision reported
+  // Loose tolerance (10 mm) > gap (5 mm) → collision must be reported.
   KissingSurfaceConstraint constraint_loose(
-    mapper_, gripper_, secondaries, 0.8, 0.010);
+    mapper_, flat_gripper, secondaries, 0.8, 0.010);
   constraint_loose.analyze_constraints(topology);
   EXPECT_TRUE(constraint_loose.intersects_secondary(0.03, pose))
-    << "10mm tolerance must detect gripper 5mm above secondary";
+    << "10 mm tolerance must detect gripper whose bottom face is 5 mm above secondary";
 
-  // Tight tolerance: 1mm < 5mm gap → no collision reported
+  // Tight tolerance (1 mm) < gap (5 mm) → no collision must be reported.
   KissingSurfaceConstraint constraint_tight(
-    mapper_, gripper_, secondaries, 0.8, 0.001);
+    mapper_, flat_gripper, secondaries, 0.8, 0.001);
   constraint_tight.analyze_constraints(topology);
   EXPECT_FALSE(constraint_tight.intersects_secondary(0.03, pose))
-    << "1mm tolerance must not fire for gripper 5mm above secondary";
+    << "1 mm tolerance must not fire when gripper bottom face is 5 mm above secondary";
 }
 
 TEST_F(KissingSurfaceConstraintTest, CollisionWithAnySecondary)
@@ -403,6 +429,29 @@ TEST_F(KissingSurfaceConstraintTest, SampleAreasEmptyBeforeAnalysis)
   EXPECT_TRUE(constraint.get_banned_surface_ids().empty());
 }
 
+TEST_F(KissingSurfaceConstraintTest, EmptySecondaryShapesVectorProducesNoResults)
+{
+  // Construct with an explicitly empty secondaries vector — no secondary shapes
+  // are present so no surface can be in contact with anything.
+  std::vector<TopoDS_Shape> no_secondaries;
+  KissingSurfaceConstraint constraint(mapper_, gripper_, no_secondaries, 0.5);
+
+  TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
+  Topology topology = mapper_->load_from_shape(primary);
+  constraint.analyze_constraints(topology);
+
+  // No secondaries → nothing can be banned or partially excluded
+  EXPECT_TRUE(constraint.get_banned_surface_ids().empty())
+    << "No secondary shapes must produce no banned surface IDs after analysis";
+  EXPECT_TRUE(constraint.get_sample_areas().empty())
+    << "No secondary shapes must produce no partial-exclusion sample areas after analysis";
+
+  // intersects_secondary must always return false when there are no secondaries
+  Eigen::Isometry3d identity = Eigen::Isometry3d::Identity();
+  EXPECT_FALSE(constraint.intersects_secondary(0.03, identity))
+    << "intersects_secondary must return false when secondary list is empty";
+}
+
 TEST_F(KissingSurfaceConstraintTest, BannedSurfaceIdsNotInSampleAreas)
 {
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
@@ -461,7 +510,7 @@ TEST_F(KissingSurfaceConstraintTest, HighThresholdBansFewerSurfaces)
 
 TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
 {
-  // Secondary: ground plane at z=0
+  // Secondary: ground plane at z=0 (occupies z=-0.01 to z=0, top face at z=0).
   gp_Trsf secondary_pos;
   secondary_pos.SetTranslation(gp_Vec(-0.5, -0.5, -0.01));
   TopoDS_Shape secondary = BRepPrimAPI_MakeBox(1.0, 1.0, 0.01).Shape();
@@ -469,9 +518,15 @@ TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
 
   std::vector<TopoDS_Shape> secondaries = {secondary};
 
+  // 50% contact threshold — a fully touching face is reliably banned.
   KissingSurfaceConstraint constraint(mapper_, gripper_, secondaries, 0.5);
 
-  // First analysis: box sitting on secondary — bottom face must be banned
+  // First analysis: box whose bottom face sits exactly on the secondary top
+  // face (z=0).  The bottom face has 100% contact → must be banned.
+  // Note: load_from_shape builds a new Topology whose face handles are owned
+  // by the returned object.  analyze_constraints consumes the topology by
+  // value within its call — it does not hold a dangling reference after
+  // returning, so re-running with a fresh topology is safe.
   TopoDS_Shape touching_box = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
   Topology touching_topology = mapper_->load_from_shape(touching_box);
   constraint.analyze_constraints(touching_topology);
@@ -479,7 +534,10 @@ TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
   size_t first_banned_count = constraint.get_banned_surface_ids().size();
   EXPECT_GE(first_banned_count, 1u) << "First analysis must ban the touching face";
 
-  // Second analysis: box elevated 1m above secondary — no face is in contact
+  // Second analysis: identical box lifted 1 m above the secondary — no face
+  // is within contact distance.  analyze_constraints clears banned_surface_ids_
+  // at the top of every call, so the result must be exactly 0, not the union
+  // of both runs.
   gp_Trsf elevated_pos;
   elevated_pos.SetTranslation(gp_Vec(0.0, 0.0, 1.0));
   TopoDS_Shape elevated_box = BRepBuilderAPI_Transform(
@@ -487,9 +545,13 @@ TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
   Topology elevated_topology = mapper_->load_from_shape(elevated_box);
   constraint.analyze_constraints(elevated_topology);
 
-  // Results must be replaced, not accumulated
+  // Must be exactly 0: replacement semantics, not accumulation.
+  // If this were to equal first_banned_count it would mean the old results
+  // were never cleared; any value > 0 is a bug.
   EXPECT_EQ(constraint.get_banned_surface_ids().size(), 0u)
-    << "Re-analysis must clear previous banned surfaces, not accumulate them";
+    << "Re-analysis on an elevated box must produce zero banned surfaces "
+       "(previous results must be replaced, not accumulated); "
+       "first run banned " << first_banned_count << " surface(s)";
 }
 
 int main(int argc, char ** argv)
