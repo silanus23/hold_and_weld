@@ -94,7 +94,6 @@ struct ParsedConfig
 
   // Gripper
   std::string gripper_urdf_path;
-  std::optional<double> gripper_min_opening;
   std::optional<double> gripper_max_opening;
 
   // Secondary shapes

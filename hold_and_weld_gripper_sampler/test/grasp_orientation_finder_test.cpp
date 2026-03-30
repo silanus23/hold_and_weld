@@ -94,7 +94,7 @@ ParsedGripper create_mock_gripper()
   gripper.finger_1_axis = Eigen::Vector3d(0, -1, 0);  // Moves in -Y
   gripper.finger_2_axis = Eigen::Vector3d(0, 1, 0);   // Moves in +Y
 
-  gripper.min_opening = 0.02;
+
   gripper.max_opening = 0.32;
 
   gripper.gripper_type = "parallel";
@@ -122,7 +122,7 @@ ParsedGripper create_small_gripper()
   gripper.finger_1_axis = Eigen::Vector3d(0, -1, 0);
   gripper.finger_2_axis = Eigen::Vector3d(0, 1, 0);
 
-  gripper.min_opening = 0.01;
+
   gripper.max_opening = 0.10;
 
   gripper.gripper_type = "parallel";

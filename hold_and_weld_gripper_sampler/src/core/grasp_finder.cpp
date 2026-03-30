@@ -138,30 +138,6 @@ std::string GraspFinder::initialize()
   }
 
   try {
-    RCLCPP_INFO(logger_, "STEP 0: Refining primary shape...");
-    if (config_.shape_refiner.enabled) {
-      geometry::ShapeRefiner refiner(
-        config_.shape_refiner.max_cylinder_radius,
-        config_.shape_refiner.max_arc_length,
-        config_.shape_refiner.enclave_area_ratio,
-        config_.shape_refiner.enclave_angle_threshold);
-      TopoDS_Shape refined = refiner.refine(primary_shape_);
-      if (!refined.IsNull()) {
-        primary_shape_ = refined;
-        // Build a fresh mapper from the refined shape — do not mutate the
-        // (possibly shared) mapper that was passed in by the caller.
-        auto refined_mapper = std::make_shared<geometry::GeometryMapper>();
-        primary_topology_ = refined_mapper->load_from_shape(primary_shape_, "workpiece");
-        mapper_ = std::move(refined_mapper);
-        RCLCPP_INFO(logger_, "Shape refinement complete: %zu surfaces",
-          primary_topology_.num_surfaces());
-      } else {
-        RCLCPP_WARN(logger_, "ShapeRefiner returned null shape - using original");
-      }
-    } else {
-      RCLCPP_INFO(logger_, "Shape refinement disabled - using raw primary shape");
-    }
-
     RCLCPP_INFO(logger_, "STEP 1: Creating constraint objects...");
 
     // Convert vectors to optionals for ExclusionZoneConstraint constructor
@@ -191,7 +167,6 @@ std::string GraspFinder::initialize()
     RCLCPP_INFO(logger_, "ExclusionZoneConstraint created");
 
     RCLCPP_INFO(logger_, "Creating KissingSurfaceConstraint");
-    RCLCPP_INFO(logger_, "  Gripper min_opening: %.4f m", gripper_.min_opening);
     RCLCPP_INFO(logger_, "  Gripper max_opening: %.4f m", gripper_.max_opening);
 
     kissing_constraint_ = std::make_shared<constraints::KissingSurfaceConstraint>(

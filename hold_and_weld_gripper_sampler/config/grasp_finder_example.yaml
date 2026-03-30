@@ -40,8 +40,7 @@
       # Path to gripper URDF with <gripper_metadata> section
       urdf_path: 'urdf/grippers/parallel_gripper.urdf.xacro'
 
-      # Override URDF values if needed (optional)
-      # min_opening: 0.02   # meters
+      # Override max opening if needed (optional)
       # max_opening: 0.15   # meters
 
     # =========================================================================

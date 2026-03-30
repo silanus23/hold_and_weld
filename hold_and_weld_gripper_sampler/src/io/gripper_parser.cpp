@@ -535,14 +535,10 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
   auto [f1_lower, f1_upper] = extract_joint_limits(urdf_string, gripper.finger_1_joint_name);
   auto [f2_lower, f2_upper] = extract_joint_limits(urdf_string, gripper.finger_2_joint_name);
 
-  // For parallel grippers, opening = sum of both finger movements
-  // Assuming symmetric gripper: min_opening = 2 * min_single, max_opening = 2 * max_single
-  // Joint limits represent single finger travel from closed position
-  double min_single_travel = std::min(f1_lower, f2_lower);
+  // max_opening = total finger spread = 2 × single-finger upper limit
+  // min_opening is always 0: the finger geometry already represents the
+  // closed (reference) position via the joint origin transforms applied above.
   double max_single_travel = std::max(f1_upper, f2_upper);
-
-  // Total opening is twice the single finger travel (both fingers move)
-  gripper.min_opening = 2.0 * min_single_travel;
   gripper.max_opening = 2.0 * max_single_travel;
 
   return gripper;

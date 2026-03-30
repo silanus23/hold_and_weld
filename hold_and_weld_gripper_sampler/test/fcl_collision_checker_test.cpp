@@ -63,7 +63,6 @@ ParsedGripper create_test_gripper()
   gripper.finger_2_axis = Eigen::Vector3d(-1.0, 0.0, 0.0);  // -X
 
   // Limits
-  gripper.min_opening = 0.01;
   gripper.max_opening = 0.10;
 
   // Metadata

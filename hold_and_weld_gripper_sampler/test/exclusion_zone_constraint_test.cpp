@@ -60,7 +60,6 @@ ParsedGripper create_mock_gripper()
   gripper.finger_1_axis = Eigen::Vector3d(0.0, 1.0, 0.0);   // +Y
   gripper.finger_2_axis = Eigen::Vector3d(0.0, -1.0, 0.0);  // -Y
 
-  gripper.min_opening = 0.0;
   gripper.max_opening = 0.1;
 
   // Metadata fields

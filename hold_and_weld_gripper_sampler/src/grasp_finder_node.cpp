@@ -34,6 +34,7 @@
 #include <BRepMesh_IncrementalMesh.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
 #include "hold_and_weld_gripper_sampler/io/config_parser.hpp"
 #include "hold_and_weld_gripper_sampler/io/result_writer.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
@@ -120,10 +121,6 @@ int main(int argc, char ** argv)
     io::ShapeLoader loader;
 
     if (!config.primary.step_path.empty()) {
-      topology = mapper->load_from_step(
-        config.primary.step_path,
-        config.primary.translation,
-        config.primary.rotation);
       primary_shape = loader.load_from_step(
         config.primary.step_path,
         config.primary.translation,
@@ -140,13 +137,31 @@ int main(int argc, char ** argv)
           config.primary.translation,
           config.primary.rotation);
       }
-
-      // Extract topology from the (possibly transformed) shape
-      topology = mapper->load_from_shape(primary_shape, "workpiece");
     } else {
       RCLCPP_ERROR(logger, "No primary shape path specified");
       return 1;
     }
+
+    // Refine shape before mapping — ShapeRefiner must run on the raw shape
+    // before the mapper builds its face index, so topology reflects refined geometry.
+    if (config.finder_config.shape_refiner.enabled) {
+      RCLCPP_INFO(logger, "Running ShapeRefiner on primary shape...");
+      geometry::ShapeRefiner refiner(
+        config.finder_config.shape_refiner.max_cylinder_radius,
+        config.finder_config.shape_refiner.max_arc_length,
+        config.finder_config.shape_refiner.enclave_area_ratio,
+        config.finder_config.shape_refiner.enclave_angle_threshold);
+      TopoDS_Shape refined = refiner.refine(primary_shape);
+      if (!refined.IsNull()) {
+        primary_shape = refined;
+        RCLCPP_INFO(logger, "Shape refinement complete");
+      } else {
+        RCLCPP_WARN(logger, "ShapeRefiner returned null shape - using original");
+      }
+    }
+
+    // Now build topology from the (possibly refined) shape
+    topology = mapper->load_from_shape(primary_shape, "workpiece");
 
     // Triangulate primary shape for kissing surface detection
     RCLCPP_DEBUG(logger, "Triangulating primary shape for contact detection...");
@@ -177,9 +192,6 @@ int main(int argc, char ** argv)
   try {
     gripper = gripper_parser.parse_from_urdf_file(config.gripper_urdf_path);
 
-    if (config.gripper_min_opening.has_value()) {
-      gripper.min_opening = config.gripper_min_opening.value();
-    }
     if (config.gripper_max_opening.has_value()) {
       gripper.max_opening = config.gripper_max_opening.value();
     }
@@ -193,7 +205,7 @@ int main(int argc, char ** argv)
 
   RCLCPP_INFO(logger, "Gripper loaded successfully:");
   RCLCPP_INFO(logger, "  Type: %s", gripper.gripper_type.c_str());
-  RCLCPP_INFO(logger, "  Opening range: [%.4f, %.4f] m", gripper.min_opening, gripper.max_opening);
+  RCLCPP_INFO(logger, "  Opening range: [0.0000, %.4f] m", gripper.max_opening);
   RCLCPP_INFO(logger, "  TCP offset: (%.4f, %.4f, %.4f)",
     gripper.tcp_offset.x(), gripper.tcp_offset.y(), gripper.tcp_offset.z());
   RCLCPP_INFO(logger, "  Finger 1 axis: (%.2f, %.2f, %.2f)",

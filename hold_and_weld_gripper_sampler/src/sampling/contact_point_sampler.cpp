@@ -32,7 +32,6 @@
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom2d_Curve.hxx>
-#include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomLProp_SLProps.hxx>
 #include <Geom_Surface.hxx>
 #include <gp_Dir.hxx>
@@ -653,15 +652,19 @@ bool ContactPointSampler::find_opposing_contact(
 {
   (void)face_1;
   try {
-    Handle(Geom_Surface) surf_2 = BRep_Tool::Surface(face_2);
-
-    GeomAPI_ProjectPointOnSurf projector(contact_1, surf_2);
-
-    if (projector.NbPoints() == 0) {
+    // Build a vertex from contact_1 and find the nearest point on the
+    // *trimmed* face_2 (not the infinite underlying surface).
+    BRepBuilderAPI_MakeVertex vertex_maker(contact_1);
+    if (!vertex_maker.IsDone()) {
       return false;
     }
 
-    opposing_contact = projector.Point(1);
+    BRepExtrema_DistShapeShape dist(vertex_maker.Vertex(), face_2);
+    if (!dist.IsDone() || dist.NbSolution() == 0) {
+      return false;
+    }
+
+    opposing_contact = dist.PointOnShape2(1);
     return true;
   } catch (const std::exception & e) {
     RCLCPP_DEBUG(logger_, "Exception in find_opposing_contact: %s", e.what());

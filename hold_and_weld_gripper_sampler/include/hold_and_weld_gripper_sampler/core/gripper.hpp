@@ -42,7 +42,6 @@ struct ParsedGripper
   Eigen::Vector3d finger_1_axis;
   Eigen::Vector3d finger_2_axis;
 
-  double min_opening;
   double max_opening;
 
   std::string gripper_type;
@@ -60,8 +59,9 @@ struct ParsedGripper
  * @brief Configure gripper to a specified grip distance
  *
  * Translates each finger along its opening axis by the amount needed to
- * achieve the requested grip distance. Clamps to [min_opening, max_opening].
- * Both fingers move symmetrically from their closed (reference) positions.
+ * achieve the requested grip distance. Clamps to [0, max_opening].
+ * Both fingers move symmetrically from their closed (reference) positions,
+ * which are defined by the joint origin transforms baked into finger_1/finger_2.
  *
  * @param gripper Parsed gripper data
  * @param grip_distance Target distance between finger contact points (meters)

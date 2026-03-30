@@ -29,8 +29,8 @@ TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distan
   const double finger_travel = std::max(
     0.0,
     std::min(
-      (grip_distance - gripper.min_opening) / 2.0,
-      (gripper.max_opening - gripper.min_opening) / 2.0));
+      grip_distance / 2.0,
+      gripper.max_opening / 2.0));
 
   gp_Trsf f1_trsf;
   f1_trsf.SetTranslation(

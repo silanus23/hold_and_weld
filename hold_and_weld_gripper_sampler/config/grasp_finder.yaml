@@ -47,9 +47,8 @@
     gripper:
       urdf_path: 'config/test_gripper.urdf'
       
-      # Override opening limits for this test
+      # Override max opening limit for this test
       # Cube is 250mm on all sides - well within gripper range
-      min_opening: 0.06    # 60mm - closed position
       max_opening: 0.36    # 360mm - fully open
 
     # =========================================================================

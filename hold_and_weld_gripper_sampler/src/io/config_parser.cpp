@@ -239,9 +239,6 @@ bool ConfigParser::parse_gripper(const YAML::Node & node, ParsedConfig & config)
 
   config.gripper_urdf_path = resolve_path(node["urdf_path"].as<std::string>());
 
-  if (node["min_opening"]) {
-    config.gripper_min_opening = node["min_opening"].as<double>();
-  }
   if (node["max_opening"]) {
     config.gripper_max_opening = node["max_opening"].as<double>();
   }

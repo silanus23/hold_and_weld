@@ -153,8 +153,13 @@ public:
   /**
    * @brief Construct GraspFinder with all required inputs
    *
-   * @param primary_shape Primary workpiece shape (must be triangulated)
-   * @param primary_topology Topology extracted from primary shape
+   * NOTE: If shape refinement is desired, run ShapeRefiner on primary_shape
+   * BEFORE calling this constructor, then extract primary_topology from the
+   * refined shape. Refinement must happen before mapping — topology must
+   * reflect the refined geometry, not the raw imported shape.
+   *
+   * @param primary_shape Primary workpiece shape (must be pre-refined and triangulated)
+   * @param primary_topology Topology extracted from the (refined) primary shape
    * @param gripper Parsed gripper from URDF
    * @param secondary_shapes Fixture/ground shapes for collision (already triangulated)
    * @param exclusion_circles Optional exclusion circles (weld points, etc.)
@@ -181,9 +186,17 @@ public:
    * Use this constructor when you want to share the GeometryMapper with other components
    * or when you need access to face mapping for surface ID lookups.
    *
-   * @param mapper Shared geometry mapper (must have loaded the primary shape)
-   * @param primary_shape Primary workpiece shape
-   * @param primary_topology Topology from mapper
+   * NOTE: The correct call order in the caller is:
+   *   1. Load raw shape
+   *   2. Run ShapeRefiner::refine() on the raw shape
+   *   3. Call mapper->load_from_shape() on the REFINED shape
+   *   4. Pass refined shape, topology, and mapper to this constructor
+   * Passing a mapper built from the unrefined shape will cause face ID mismatches
+   * when exclusion zone constraints call find_topology_surface_id().
+   *
+   * @param mapper Shared geometry mapper (must have been loaded from the refined primary shape)
+   * @param primary_shape Primary workpiece shape (must be pre-refined and triangulated)
+   * @param primary_topology Topology from mapper (must match the refined shape)
    * @param gripper Parsed gripper
    * @param secondary_shapes Secondary collision shapes
    * @param exclusion_circles Optional exclusion circles

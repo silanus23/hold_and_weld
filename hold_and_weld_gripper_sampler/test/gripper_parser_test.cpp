@@ -32,7 +32,6 @@ namespace test_constants
 constexpr double kPositionTolerance = 1e-6;
 constexpr double kUnitMagnitude = 1.0;
 
-constexpr double kValidGripperMinOpening = 0.0;
 constexpr double kValidGripperMaxOpening = 0.30;
 constexpr double kValidGripperTcpOffsetZ = -0.12;
 
@@ -305,9 +304,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_ExtractsAllFields
   EXPECT_NEAR(gripper.finger_2_axis.y(), -1.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_2_axis.z(), 0.0, test_constants::kPositionTolerance);
 
-  // Check opening limits - min should be 0, max should be 2 * 0.15 = 0.30
-  EXPECT_NEAR(gripper.min_opening, test_constants::kValidGripperMinOpening,
-    test_constants::kPositionTolerance);
+  // Check opening limits - max should be 2 * 0.15 = 0.30 (min is always 0, not stored)
   EXPECT_NEAR(gripper.max_opening, test_constants::kValidGripperMaxOpening,
     test_constants::kPositionTolerance);
 
@@ -368,12 +365,12 @@ TEST_F(GripperParserTest, ConfigureGripper_WithValidGripper_CreatesCompoundShape
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
 
-  // Configure gripper at min opening (closed)
-  TopoDS_Shape closed_gripper = configure_gripper(gripper, gripper.min_opening);
+  // Configure gripper at min opening (closed) — min is always 0
+  TopoDS_Shape closed_gripper = configure_gripper(gripper, 0.0);
   EXPECT_FALSE(closed_gripper.IsNull());
 
   // Configure gripper at mid opening
-  double mid_opening = (gripper.min_opening + gripper.max_opening) / 2.0;
+  double mid_opening = gripper.max_opening / 2.0;
   TopoDS_Shape mid_gripper = configure_gripper(gripper, mid_opening);
   EXPECT_FALSE(mid_gripper.IsNull());
 
