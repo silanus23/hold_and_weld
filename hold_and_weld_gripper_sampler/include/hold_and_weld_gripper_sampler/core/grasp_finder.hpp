@@ -26,6 +26,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
@@ -73,16 +74,49 @@ struct GraspFinderResult
 };
 
 /**
+ * @brief Shape refiner configuration embedded in GraspFinderConfig
+ */
+struct ShapeRefinerConfig
+{
+  /// Run ShapeRefiner on primary_shape before topology extraction.
+  /// Disable only if the shape is already pre-processed or refinement causes issues.
+  bool enabled = true;
+
+  /// Maximum cylinder radius (m) before radial splitting
+  double max_cylinder_radius = 0.100;
+
+  /// Maximum edge arc length (m) before surface splitting
+  double max_arc_length = 0.200;
+
+  /// Enclave area threshold as a fraction of total area (e.g. 0.005 = 0.5%)
+  double enclave_area_ratio = 0.005;
+
+  /// Wall angle threshold (degrees) below which an enclave is suppressed
+  double enclave_angle_threshold = 45.0;
+};
+
+/**
  * @brief Configuration for GraspFinder
  */
 struct GraspFinderConfig
 {
   sampling::SamplingConfig sampling;
   angle_finding::OrientationConfig orientation;
+  ShapeRefinerConfig shape_refiner;
 
   double kissing_contact_threshold = 0.8;
   double ground_normal_z_threshold = -0.9;
+
+  /// Collision tolerance for secondary shape (fixture/ground) distance checks in
+  /// KissingSurfaceConstraint. Very tight (1e-6 m) because these are pre-computed
+  /// OCCT/FCL distance queries against known obstacle geometry.
+  /// NOTE: orientation.collision_tolerance is a separate field that controls primary
+  /// shape and exclusion zone checks in GraspOrientationFinder — it is intentionally
+  /// looser (default 1mm) to account for numerical instability during pose sampling.
+  /// Do NOT conflate the two: secondary checks need tight tolerance to avoid missing
+  /// contact; orientation checks need looser tolerance to avoid false rejections.
   double collision_tolerance = 0.000001;
+
   double ground_safety_margin = 0.005;
   double ground_z = 0.0;
 

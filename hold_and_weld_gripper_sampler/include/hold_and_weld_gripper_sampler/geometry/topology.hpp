@@ -163,20 +163,8 @@ struct Surface
    */
   bool has_inner_holes;
 
-  // TODO(@silanus23): Think about deleting this
-  /**
-   * @brief Flag indicating if this surface is graspable
-   *
-   * Modified by pre-filters (e.g., normal filter, forbidden zone filter).
-   * Generator only considers surfaces where is_graspable == true.
-   *
-   * Default: true (all surfaces start as graspable)
-   */
-  bool is_graspable;
-
   Surface()
-  : has_inner_holes(false),
-    is_graspable(true)
+  : has_inner_holes(false)
   {}
 };
 
@@ -224,15 +212,6 @@ public:
   const Surface & get_surface(int id) const;
 
   /**
-   * @brief Get mutable reference to surface (for pre-filters)
-   *
-   * @param id Surface ID (0-indexed)
-   * @return Mutable reference to Surface struct
-   * @throws std::out_of_range if ID is invalid
-   */
-  Surface & get_surface_mutable(int id);
-
-  /**
    * @brief Get all surface IDs
    *
    * @deprecated Use num_surfaces() + index loop or get_all_surfaces() instead.
@@ -242,13 +221,6 @@ public:
    */
   [[deprecated("Use num_surfaces() + index loop or get_all_surfaces() instead")]]
   std::vector<int> get_all_surface_ids() const;
-
-  /**
-   * @brief Get IDs of surfaces marked as graspable
-   *
-   * @return Vector of graspable surface IDs (0-indexed)
-   */
-  std::vector<int> get_graspable_surface_ids() const;
 
   /**
    * @brief Get direct access to all corners

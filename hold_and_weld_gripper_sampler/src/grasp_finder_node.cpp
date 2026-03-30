@@ -22,7 +22,8 @@
  */
 
 #include <chrono>
-#include <cstdlib>
+
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -69,13 +70,16 @@ int main(int argc, char ** argv)
     return 1;
   }
 
-  // Get config path from argument or use default
+  // Get config path and optional output path from arguments
   std::string config_path;
+  std::string output_path_arg;
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
       config_path = argv[++i];
+    } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
+      output_path_arg = argv[++i];
     }
   }
 
@@ -353,18 +357,37 @@ int main(int argc, char ** argv)
   RCLCPP_INFO(logger, "  Final grasps: %zu", result.grasps.size());
   RCLCPP_INFO(logger, " ");
 
-  // Write JSON output to hold_and_weld_application/grasps folder
-  // Use source directory for development, not install
-  std::string workspace_root = std::getenv("HOME") ?
-    std::string(std::getenv("HOME")) + "/ros2_yaskawa" : ".";
-  std::string output_dir = workspace_root +
-    "/src/hold_and_weld/hold_and_weld_application/grasps";
+  // Resolve output path: --output arg takes priority, then ament_index share dir, then CWD.
+  std::string output_path;
+  if (!output_path_arg.empty()) {
+    output_path = output_path_arg;
+    RCLCPP_INFO(logger, "Output path from --output arg: %s", output_path.c_str());
+  } else {
+    std::string output_dir = app_pkg_share + "/grasps";
+    try {
+      std::filesystem::create_directories(output_dir);
+    } catch (const std::filesystem::filesystem_error & e) {
+      RCLCPP_ERROR(logger, "Failed to create output directory '%s': %s",
+        output_dir.c_str(), e.what());
+      return 1;
+    }
+    output_path = output_dir + "/grasps.json";
+    RCLCPP_INFO(logger, "Output path (ament_index): %s", output_path.c_str());
+  }
 
-  // Create directory if needed
-  std::system(("mkdir -p " + output_dir).c_str());
-
-  // Generate filename with timestamp
-  std::string output_path = output_dir + "/grasps.json";
+  // Ensure parent directory of an explicit --output path also exists
+  if (!output_path_arg.empty()) {
+    std::filesystem::path parent = std::filesystem::path(output_path).parent_path();
+    if (!parent.empty()) {
+      try {
+        std::filesystem::create_directories(parent);
+      } catch (const std::filesystem::filesystem_error & e) {
+        RCLCPP_ERROR(logger, "Failed to create output directory '%s': %s",
+          parent.c_str(), e.what());
+        return 1;
+      }
+    }
+  }
 
   io::ResultMetadata metadata;
   metadata.coordinate_frame = config.frame_id;

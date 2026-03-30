@@ -461,8 +461,9 @@ bool KissingSurfaceConstraint::intersects_secondary(
       return collision;
     }
 
-    // Fallback to OCCT (slow path)
-    RCLCPP_DEBUG(logger_, "Using OCCT fallback for collision checking (FCL unavailable)");
+    RCLCPP_WARN(logger_,
+      "intersects_secondary: FCL checker unavailable, falling back to OCCT (slower). "
+      "Set use_fcl=true and wire FCLCollisionChecker for production use.");
 
     TopoDS_Shape configured_gripper = configure_gripper(gripper_, grip_distance);
 
@@ -473,11 +474,10 @@ bool KissingSurfaceConstraint::intersects_secondary(
     Standard_Real ang_deflection = 0.5;
     BRepMesh_IncrementalMesh mesher(placed_gripper, lin_deflection, Standard_False, ang_deflection);
 
-    // Validate meshing succeeded
     if (!mesher.IsDone()) {
       RCLCPP_WARN(logger_, "Failed to mesh placed gripper for collision check - rejecting grasp");
       collision_stats_.mesh_failures++;
-      return true;  // Conservative: reject if we can't verify
+      return true;
     }
 
     for (size_t i = 0; i < secondary_shapes_.size(); ++i) {
@@ -486,25 +486,24 @@ bool KissingSurfaceConstraint::intersects_secondary(
       try {
         BRepExtrema_DistShapeShape dist(placed_gripper, secondary);
 
-        // Validate distance computation succeeded
         if (!dist.IsDone()) {
           RCLCPP_WARN(logger_, "Distance computation failed for secondary %zu - rejecting grasp",
-                i);
+            i);
           collision_stats_.occt_failures++;
-          return true;  // Conservative: reject if we can't verify
+          return true;
         }
 
         if (dist.Value() < collision_tolerance_) {
           RCLCPP_DEBUG(logger_,
-                       "Grasp rejected: OCCT detected collision with secondary"
-                       "%zu (distance=%.6f m < tolerance=%.6f m)",
-                       i, dist.Value(), collision_tolerance_);
+            "Grasp rejected: OCCT detected collision with secondary "
+            "%zu (distance=%.6f m < tolerance=%.6f m)",
+            i, dist.Value(), collision_tolerance_);
           collision_stats_.occt_secondary_rejections++;
           return true;
         }
       } catch (const Standard_Failure & e) {
         RCLCPP_WARN(logger_, "OCCT exception checking secondary %zu: %s - rejecting grasp",
-                    i, e.GetMessageString());
+          i, e.GetMessageString());
         collision_stats_.occt_failures++;
         return true;
       }

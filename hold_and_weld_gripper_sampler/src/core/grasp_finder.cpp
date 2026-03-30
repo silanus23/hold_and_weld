@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -47,14 +48,22 @@ GraspFinder::GraspFinder(
   const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons,
   const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines,
   const GraspFinderConfig & config)
-: mapper_(std::make_shared<geometry::GeometryMapper>()),
-  primary_shape_(primary_shape),
+: primary_shape_(primary_shape),
   primary_topology_(primary_topology),
   gripper_(gripper),
   secondary_shapes_(secondary_shapes),
   config_(config),
   logger_(rclcpp::get_logger("gripper_sampler"))
 {
+  // Build and populate the mapper before anything else uses it.
+  // load_from_shape() requires a non-const receiver, so we construct, populate,
+  // then move into mapper_ (shared_ptr<GM> implicitly converts to shared_ptr<const GM>).
+  auto mapper = std::make_shared<geometry::GeometryMapper>();
+  if (!primary_shape_.IsNull()) {
+    mapper->load_from_shape(primary_shape_, "workpiece");
+  }
+  mapper_ = std::move(mapper);
+
   if (exclusion_circles.has_value()) {
     exclusion_circles_ = exclusion_circles.value();
   }
@@ -102,6 +111,8 @@ GraspFinder::GraspFinder(
   logger_(rclcpp::get_logger("gripper_sampler"))
 {
   if (!mapper_) {
+    // Caller passed nullptr — create an empty mapper. It will be populated in initialize()
+    // if shape_refiner is enabled, or left empty if the caller already extracted topology.
     mapper_ = std::make_shared<geometry::GeometryMapper>();
   }
 
@@ -127,6 +138,30 @@ std::string GraspFinder::initialize()
   }
 
   try {
+    RCLCPP_INFO(logger_, "STEP 0: Refining primary shape...");
+    if (config_.shape_refiner.enabled) {
+      geometry::ShapeRefiner refiner(
+        config_.shape_refiner.max_cylinder_radius,
+        config_.shape_refiner.max_arc_length,
+        config_.shape_refiner.enclave_area_ratio,
+        config_.shape_refiner.enclave_angle_threshold);
+      TopoDS_Shape refined = refiner.refine(primary_shape_);
+      if (!refined.IsNull()) {
+        primary_shape_ = refined;
+        // Build a fresh mapper from the refined shape — do not mutate the
+        // (possibly shared) mapper that was passed in by the caller.
+        auto refined_mapper = std::make_shared<geometry::GeometryMapper>();
+        primary_topology_ = refined_mapper->load_from_shape(primary_shape_, "workpiece");
+        mapper_ = std::move(refined_mapper);
+        RCLCPP_INFO(logger_, "Shape refinement complete: %zu surfaces",
+          primary_topology_.num_surfaces());
+      } else {
+        RCLCPP_WARN(logger_, "ShapeRefiner returned null shape - using original");
+      }
+    } else {
+      RCLCPP_INFO(logger_, "Shape refinement disabled - using raw primary shape");
+    }
+
     RCLCPP_INFO(logger_, "STEP 1: Creating constraint objects...");
 
     // Convert vectors to optionals for ExclusionZoneConstraint constructor
@@ -215,8 +250,10 @@ std::string GraspFinder::initialize()
       RCLCPP_INFO(logger_, "FCL checker created and fully wired");
 
       if (!fcl_checker_->is_valid()) {
-        RCLCPP_WARN(logger_, "   FCL checker initialization failed, falling back to OCCT");
-        fcl_checker_.reset();
+        RCLCPP_FATAL(logger_,
+          "FCL checker initialization failed. "
+          "Set use_fcl=false to use OCCT fallback, or fix FCL setup.");
+        return "FCL checker initialization failed - set use_fcl=false to use OCCT fallback";
       } else {
         RCLCPP_INFO(logger_, "FCL checker validated and ready");
       }
@@ -387,6 +424,10 @@ GraspFinderResult GraspFinder::find()
       result.grasps.push_back(angle_finding::to_grasp(candidate));
     }
 
+    // WARNING: if config_.orientation.stop_on_first_valid == true, only one candidate
+    // per contact pair was ever generated, so this sort is ranking a sparse set and
+    // the "best" grasp may not be globally optimal. Set stop_on_first_valid=false
+    // (exhaustive search) when grasp quality matters.
     sort_by_quality(result.grasps);
 
     result.success = true;
@@ -413,9 +454,6 @@ GraspFinderResult GraspFinder::find()
       RCLCPP_INFO(logger_, "Collision Check Statistics:");
       RCLCPP_INFO(logger_, "  Total collision checks: %zu", collision_stats.total_checks);
       if (collision_stats.total_checks > 0) {
-        RCLCPP_INFO(logger_, "  Ground plane (simple check): %zu (%.1f%%)",
-          collision_stats.ground_plane_simple_rejections,
-          100.0 * collision_stats.ground_plane_simple_rejections / collision_stats.total_checks);
         RCLCPP_INFO(logger_, "  FCL secondary/ground: %zu (%.1f%%)",
           collision_stats.fcl_secondary_rejections,
           100.0 * collision_stats.fcl_secondary_rejections / collision_stats.total_checks);

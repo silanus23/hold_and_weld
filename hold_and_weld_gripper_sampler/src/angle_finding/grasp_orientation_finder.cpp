@@ -151,7 +151,6 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     RCLCPP_DEBUG(logger_, "  Edges found: %zu (contact_1), %zu (contact_2)",
       edges_1.size(), edges_2.size());
 
-    // Log individual edge details
     for (size_t i = 0; i < edges_1.size() && i < 5; ++i) {
       RCLCPP_DEBUG(logger_, "    Edge_1[%zu]: dist=%.4f m, bearing=%.1f°",
         i, edges_1[i].distance, edges_1[i].bearing_angle * 180.0 / M_PI);
@@ -201,6 +200,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     }
     std::vector<EdgeConstraint> master_seeds = minima_1;
 
+    //  TODO(@silanus23): Is it correct?
     for (auto m2 : minima_2) {  // Intentional copy - we modify m2.bearing_angle before inserting
       // Shift by 180 to express in finger 1's coordinate system
       m2.bearing_angle += M_PI;
@@ -244,7 +244,6 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       }
     }
 
-    // Limit orientations per pair for performance control
     if (config_.max_orientations_per_pair > 0 &&
       approaches_to_test.size() > config_.max_orientations_per_pair)
     {
@@ -265,7 +264,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     size_t pair_rejected_secondary = 0;
     size_t pair_valid = 0;
 
-    // Look if approach rejected by any constraint
+    // Implement constraints
     // TODO(@silanus23): Make constraints pluginized for here except primary shape
     for (const auto & [approach, angle_for_log] : approaches_to_test) {
       total_orientations_tested++;
@@ -276,7 +275,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       RCLCPP_DEBUG(logger_, "  Testing angle %.1f°: approach=(%.3f, %.3f, %.3f)",
         angle_for_log, approach.X(), approach.Y(), approach.Z());
 
-      // Check collision with shape itself
+      // Check for primary collision
       if (collides_with_primary(transform, pair.grip_distance)) {
         rejected_by_primary++;
         pair_rejected_primary++;
@@ -294,7 +293,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
         continue;
       }
 
-      // Check collision with secondary shapes (fixtures, ground)
+      // Check collision with secondary shapes (fixtures, ground, other part of weld)
       if (kissing_constraint_) {
         Eigen::Isometry3d grasp_pose = Eigen::Isometry3d::Identity();
         grasp_pose.translation() = geometry::extract_translation(transform);
@@ -331,7 +330,6 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       }
     }
 
-    // Per-pair summary (throttled to avoid flooding logs)
     RCLCPP_DEBUG(logger_,
           "  Pair result: %zu valid, rejected: %zu primary, %zu exclusion, %zu secondary",
       pair_valid, pair_rejected_primary, pair_rejected_exclusion, pair_rejected_secondary);
@@ -363,11 +361,6 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
 
   if (valid_grasps.empty()) {
     RCLCPP_WARN(logger_, "NO VALID GRASPS FOUND!");
-    RCLCPP_WARN(logger_, "Troubleshooting tips:");
-    RCLCPP_WARN(logger_, "  1. Check gripper dimensions vs workpiece size");
-    RCLCPP_WARN(logger_, "  2. Verify exclusion zones are not too large");
-    RCLCPP_WARN(logger_, "  3. Check secondary shapes (table/fixture) placement");
-    RCLCPP_WARN(logger_, "  4. Try increasing finger_length or collision_tolerance");
   }
 
   return valid_grasps;
@@ -421,11 +414,8 @@ std::vector<EdgeConstraint> GraspOrientationFinder::find_local_minima_on_edge(
 
   std::vector<EdgeConstraint> minima;
 
-  // Use BRepExtrema_ExtPC to find all extrema (points where distance derivative = 0)
-  // Extrema = critical points where distance function has local min/max (not just endpoints)
   // Then filter to keep only local minima within finger reach
   // NOTE: For straight line edges, ExtPC finds endpoints (not the perpendicular projection).
-  // The fallback (lines 471-483) handles this case using BRepExtrema_DistShapeShape.
   BRepBuilderAPI_MakeVertex vertex_maker(contact);
   TopoDS_Vertex contact_vertex = vertex_maker.Vertex();
 
@@ -450,14 +440,12 @@ std::vector<EdgeConstraint> GraspOrientationFinder::find_local_minima_on_edge(
     const Standard_Integer nb_extrema = extrema.NbExt();
 
     for (Standard_Integer i = 1; i <= nb_extrema; ++i) {
-      // Only keep local minima
       if (!extrema.IsMin(i)) {
         continue;
       }
 
       double distance = std::sqrt(extrema.SquareDistance(i));
 
-      // Filter by finger reach
       if (distance > config_.finger_length || distance <= 1e-6) {
         continue;
       }
@@ -469,10 +457,9 @@ std::vector<EdgeConstraint> GraspOrientationFinder::find_local_minima_on_edge(
       minima.push_back(constraint);
     }
 
+    // TODO(@silanu23): Be sure about curve finding here
     // If no interior minima found (straight edge or monotonic curve),
     // fall back to global closest point.
-    // For straight lines: this finds the perpendicular projection (the actual minimum).
-    // For curves: this finds the global minimum when no local minima exist.
     if (minima.empty()) {
       gp_Pnt closest_point;
       double distance = compute_closest_point_on_edge(contact, edge, closest_point);
@@ -574,7 +561,6 @@ gp_Vec GraspOrientationFinder::compute_approach_direction(
   double angle_offset,
   const gp_Vec & grip_axis) const
 {
-  // Compute TCP (Tool Center Point) as midpoint between contacts
   gp_Pnt tcp(
     (contact_1.X() + contact_2.X()) / 2.0,
     (contact_1.Y() + contact_2.Y()) / 2.0,
@@ -788,7 +774,6 @@ double GraspOrientationFinder::compute_closest_point_on_edge(
   const TopoDS_Edge & edge,
   gp_Pnt & closest_point) const
 {
-  // Check for degenerate edges (poles/seams on surfaces of revolution)
   if (BRep_Tool::Degenerated(edge)) {
     RCLCPP_DEBUG(logger_, "compute_closest_point_on_edge: edge is degenerate");
     closest_point = point;

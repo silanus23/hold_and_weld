@@ -46,14 +46,6 @@ const Surface & Topology::get_surface(int id) const
   return surfaces_[id];
 }
 
-Surface & Topology::get_surface_mutable(int id)
-{
-  if (id < 0 || id >= static_cast<int>(surfaces_.size())) {
-    throw std::out_of_range("Surface ID " + std::to_string(id) + " not found");
-  }
-  return surfaces_[id];
-}
-
 std::vector<int> Topology::get_all_surface_ids() const
 {
   std::vector<int> ids;
@@ -61,19 +53,6 @@ std::vector<int> Topology::get_all_surface_ids() const
 
   for (size_t i = 0; i < surfaces_.size(); i++) {
     ids.push_back(static_cast<int>(i));
-  }
-
-  return ids;
-}
-
-std::vector<int> Topology::get_graspable_surface_ids() const
-{
-  std::vector<int> ids;
-
-  for (size_t i = 0; i < surfaces_.size(); i++) {
-    if (surfaces_[i].is_graspable) {
-      ids.push_back(static_cast<int>(i));
-    }
   }
 
   return ids;

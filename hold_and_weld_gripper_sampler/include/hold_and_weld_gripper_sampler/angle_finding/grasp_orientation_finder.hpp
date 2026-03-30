@@ -57,8 +57,16 @@ struct OrientationConfig
   double dual_seed_dedup_tolerance_deg = 3.0;
   size_t max_edges_per_contact = 0;
   std::vector<double> angle_offsets = {-15.0, 0.0, 15.0};
+  /// When true, orientation search stops after the first valid grasp per contact pair.
+  /// WARNING: This makes the quality sort in GraspFinder::find() largely meaningless —
+  /// only one candidate per pair is ever generated, so the sort has little to rank.
+  /// Use false (exhaustive) when grasp quality matters; true only for speed-critical paths.
   bool stop_on_first_valid = false;
 
+  /// Collision tolerance for primary shape and exclusion zone checks (meters).
+  /// Intentionally looser than GraspFinderConfig::collision_tolerance (which controls
+  /// secondary/fixture checks) to avoid false rejections during pose sampling.
+  /// Default 1mm is appropriate for orientation finding numerical stability.
   double collision_tolerance = 0.001;
 };
 

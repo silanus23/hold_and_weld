@@ -293,11 +293,12 @@ TEST_F(ExclusionZoneConstraintTest, GripperOpensCorrectly)
   gp_Trsf near_transform;
   near_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
 
-  // With small opening, fingers stay compact and don't reach exclusion zone
+  // With small opening (0.02m), finger_travel=0.01m → fingers still within 3cm radius → collides
   bool collision_small = constraint.intersects_exclusion_zone(near_transform, 0.02, 0.001);
   EXPECT_TRUE(collision_small);
 
-  // With large opening, fingers extend outward and collide with exclusion zone
+  // With large opening (0.08m), finger_travel=0.04m → fingers splay to y≈±0.055m, outside 3cm
+  // radius + 5mm clearance. Base is at z=0.05 above the exclusion cylinder → no collision
   bool collision_large = constraint.intersects_exclusion_zone(near_transform, 0.08, 0.001);
   EXPECT_FALSE(collision_large);
 }

@@ -555,18 +555,18 @@ bool ExclusionZoneConstraint::intersects_exclusion_zone(
     return result;
   }
 
-  RCLCPP_DEBUG(logger_, "intersects_exclusion_zone: Using OCCT fallback (FCL not available)");
+  RCLCPP_WARN(logger_,
+    "intersects_exclusion_zone: FCL checker unavailable, falling back to OCCT (slower). "
+    "Set use_fcl=true and wire FCLCollisionChecker for production use.");
 
   TopoDS_Shape configured_gripper = configure_gripper(gripper_, grip_distance);
 
   BRepBuilderAPI_Transform transformer(configured_gripper, gripper_transform, Standard_True);
   TopoDS_Shape placed_gripper = transformer.Shape();
 
-  // Mesh gripper for distance computation (coarser mesh OK for collision checks)
   BRepMesh_IncrementalMesh mesher(placed_gripper, mesh_linear_deflection_, Standard_False,
     mesh_angular_deflection_);
 
-  // Check distance to each exclusion volume
   for (size_t i = 0; i < collision_volumes_.size(); ++i) {
     const auto & volume = collision_volumes_[i];
     BRepExtrema_DistShapeShape dist(placed_gripper, volume);

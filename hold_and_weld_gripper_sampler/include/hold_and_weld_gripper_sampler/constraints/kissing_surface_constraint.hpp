@@ -43,8 +43,6 @@ namespace constraints
 struct CollisionStats
 {
   size_t total_checks = 0;
-  size_t ground_plane_simple_rejections = 0;
-  size_t fcl_ground_rejections = 0;
   size_t fcl_secondary_rejections = 0;
   size_t occt_secondary_rejections = 0;
   size_t occt_failures = 0;
@@ -53,8 +51,6 @@ struct CollisionStats
   void reset()
   {
     total_checks = 0;
-    ground_plane_simple_rejections = 0;
-    fcl_ground_rejections = 0;
     fcl_secondary_rejections = 0;
     occt_secondary_rejections = 0;
     occt_failures = 0;

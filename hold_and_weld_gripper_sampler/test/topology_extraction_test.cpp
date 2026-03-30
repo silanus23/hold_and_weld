@@ -71,8 +71,7 @@ TEST_F(TopologyExtractionTest, LoadFromUrdfString_WithBoxGeometry_ExtractsCorrec
     double magnitude = surface.normal.Magnitude();
     EXPECT_NEAR(magnitude, test_constants::kUnitMagnitude, test_constants::kTolerance);
 
-    // Surface should be graspable by default
-    EXPECT_TRUE(surface.is_graspable);
+    // is_graspable field removed — surface filtering is handled by GraspFinder
   }
 }
 
