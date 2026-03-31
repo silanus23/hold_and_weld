@@ -399,8 +399,10 @@ Topology GeometryMapper::create_topology_from_shape(
       BRepGProp::SurfaceProperties(face, props);
       surface.center = props.CentreOfMass();
 
-      try {
-        Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+      Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+      if (surf.IsNull()) {
+        surface.normal = make_fallback_normal(surface.center);
+      } else {
         Standard_Real u_min, u_max, v_min, v_max;
         BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
@@ -416,13 +418,6 @@ Topology GeometryMapper::create_topology_from_shape(
         } else {
           surface.normal = make_fallback_normal(surface.center);
         }
-      } catch (Standard_Failure & e) {
-        RCLCPP_DEBUG(logger_, "Normal computation failed for face %d: %s - using fallback",
-          i - 1, e.GetMessageString());
-        surface.normal = make_fallback_normal(surface.center);
-      } catch (...) {
-        RCLCPP_DEBUG(logger_, "Normal computation failed for face %d - using fallback", i - 1);
-        surface.normal = make_fallback_normal(surface.center);
       }
     }
 

@@ -450,7 +450,7 @@ gp_Vec GraspOrientationFinder::compute_approach_direction(
   // Project to plane perpendicular to grip axis
   gp_Vec projected = away_from_edge - (away_from_edge.Dot(grip_axis)) * grip_axis;
 
-  if (projected.Magnitude() < 1e-6) {
+  if (projected.Magnitude() < 1e-9) {
     if (std::abs(grip_axis.Z()) < 0.9) {
       projected = grip_axis.Crossed(gp_Vec(0, 0, 1));
     } else {

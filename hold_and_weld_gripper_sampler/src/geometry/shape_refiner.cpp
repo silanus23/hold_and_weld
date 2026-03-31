@@ -62,14 +62,12 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
     healer.Perform();
     TopoDS_Shape current_shape = healer.Shape();
 
-    GProp_GProps global_props;
-    try {
-      BRepGProp::SurfaceProperties(current_shape, global_props);
-    } catch (Standard_Failure & e) {
-      RCLCPP_WARN(logger_, "Failed to compute global surface area: %s - "
-        "enclave and area ratio checks will be skipped", e.GetMessageString());
-      return current_shape;
+    if (current_shape.IsNull()) {
+      return raw_shape;
     }
+
+    GProp_GProps global_props;
+    BRepGProp::SurfaceProperties(current_shape, global_props);
     double global_total_area = global_props.Mass();
 
     // TODO(@silanus23): Add enable_enclave_removal bool config parameter
@@ -506,7 +504,7 @@ gp_Dir ShapeRefiner::calculate_safe_normal(const TopoDS_Face & face) const
     double u_mid = (surface.FirstUParameter() + surface.LastUParameter()) / 2.0;
     double v_mid = (surface.FirstVParameter() + surface.LastVParameter()) / 2.0;
 
-    GeomLProp_SLProps props(surface.Surface().Surface(), u_mid, v_mid, 1, 1e-7);
+    GeomLProp_SLProps props(surface.Surface().Surface(), u_mid, v_mid, 1, 1e-6);
 
     if (!props.IsNormalDefined()) {
       u_mid = surface.FirstUParameter() +

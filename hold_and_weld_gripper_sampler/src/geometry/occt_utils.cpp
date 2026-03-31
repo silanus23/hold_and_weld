@@ -119,7 +119,7 @@ gp_Vec extract_surface_normal(const TopoDS_Face & face)
       normal.Reverse();
     }
 
-    if (normal.Magnitude() < 1e-10) {
+    if (normal.Magnitude() < 1e-9) {
       throw std::runtime_error("Surface normal has near-zero magnitude");
     }
     normal.Normalize();
@@ -213,60 +213,52 @@ Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform)
 
 double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2)
 {
-  try {
-    BRepExtrema_DistShapeShape dist(face_1, face_2);
-    dist.Perform();
-
-    if (dist.IsDone() && dist.NbSolution() > 0) {
-      return dist.Value();
-    }
-
-    return std::numeric_limits<double>::max();
-  } catch (Standard_Failure & e) {
-    RCLCPP_DEBUG(logger_, "face_min_distance: %s", e.GetMessageString());
-    return std::numeric_limits<double>::max();
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "face_min_distance: unknown exception");
+  if (face_1.IsNull() || face_2.IsNull()) {
     return std::numeric_limits<double>::max();
   }
+
+  BRepExtrema_DistShapeShape dist(face_1, face_2);
+  dist.Perform();
+
+  if (dist.IsDone() && dist.NbSolution() > 0) {
+    return dist.Value();
+  }
+
+  return std::numeric_limits<double>::max();
 }
 
 std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS_Face & face)
 {
-  try {
-    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-
-    GeomAPI_ProjectPointOnSurf projector(point, surf);
-
-    double u, v;
-    if (projector.NbPoints() == 0) {
-      Standard_Real u_min, u_max, v_min, v_max;
-      BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-      u = (u_min + u_max) / 2.0;
-      v = (v_min + v_max) / 2.0;
-    } else {
-      projector.Parameters(1, u, v);
-    }
-
-    GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
-
-    if (!props.IsNormalDefined()) {
-      return std::nullopt;
-    }
-
-    gp_Vec normal = props.Normal();
-    if (face.Orientation() == TopAbs_REVERSED) {
-      normal.Reverse();
-    }
-
-    return normal;
-  } catch (Standard_Failure & e) {
-    RCLCPP_DEBUG(logger_, "surface_normal_at_point: %s", e.GetMessageString());
-    return std::nullopt;
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "surface_normal_at_point: unknown exception");
+  if (face.IsNull()) {
     return std::nullopt;
   }
+
+  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+
+  GeomAPI_ProjectPointOnSurf projector(point, surf);
+
+  double u, v;
+  if (projector.NbPoints() == 0) {
+    Standard_Real u_min, u_max, v_min, v_max;
+    BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
+    u = (u_min + u_max) / 2.0;
+    v = (v_min + v_max) / 2.0;
+  } else {
+    projector.Parameters(1, u, v);
+  }
+
+  GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
+
+  if (!props.IsNormalDefined()) {
+    return std::nullopt;
+  }
+
+  gp_Vec normal = props.Normal();
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+
+  return normal;
 }
 
 }  // namespace geometry
