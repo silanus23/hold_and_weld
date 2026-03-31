@@ -60,13 +60,10 @@ namespace hold_and_weld_gripper_sampler
 namespace geometry
 {
 
-// Logger for this module
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 GeometryMapper::GeometryMapper() {}
-
 GeometryMapper::~GeometryMapper() {}
-
 
 TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & urdf_string)
 {
@@ -105,16 +102,13 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
       throw std::runtime_error("Link has <collision> but no <geometry> element");
     }
 
-    // Get link name for error messages
     const char * link_name = link->Attribute("name");
     std::string link_name_str = link_name ? link_name : "unknown";
     RCLCPP_DEBUG(logger_, "Processing link: %s", link_name_str.c_str());
 
-    // Parse origin transformation (optional)
     gp_Trsf transform;
     tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
     if (origin) {
-      // Parse xyz translation
       const char * xyz_str = origin->Attribute("xyz");
       if (xyz_str) {
         double x, y, z;
@@ -122,16 +116,15 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
           transform.SetTranslation(gp_Vec(x, y, z));
         } else {
           RCLCPP_WARN(logger_, "Failed to parse xyz attribute for link '%s'",
-                link_name_str.c_str());
+            link_name_str.c_str());
         }
       }
 
-      // Parse rpy rotation (roll, pitch, yaw)
       const char * rpy_str = origin->Attribute("rpy");
       if (rpy_str) {
         double roll, pitch, yaw;
         if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
-          // Convert RPY (roll-pitch-yaw) to quaternion using ZYX aerospace sequence
+          // RPY to quaternion using ZYX aerospace sequence
           double cy = std::cos(yaw * 0.5);
           double sy = std::sin(yaw * 0.5);
           double cp = std::cos(pitch * 0.5);
@@ -139,23 +132,22 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
           double cr = std::cos(roll * 0.5);
           double sr = std::sin(roll * 0.5);
 
-          double qw = cr * cp * cy + sr * sp * sy;
-          double qx = sr * cp * cy - cr * sp * sy;
-          double qy = cr * sp * cy + sr * cp * sy;
-          double qz = cr * cp * sy - sr * sp * cy;
+          gp_Quaternion quat(
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy);
 
-          gp_Quaternion quat(qx, qy, qz, qw);
           gp_Trsf rot_transform;
           rot_transform.SetRotation(quat);
           transform = transform * rot_transform;
         } else {
           RCLCPP_WARN(logger_, "Failed to parse rpy attribute for link '%s'",
-                link_name_str.c_str());
+            link_name_str.c_str());
         }
       }
     }
 
-    // Check which geometry type
     TopoDS_Shape shape;
 
     try {
@@ -170,10 +162,8 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
           throw std::runtime_error("Failed to parse box size");
         }
 
-        // URDF convention: box is centered at origin
-        // Create box from corner at (-x/2, -y/2, -z/2) with dimensions (x, y, z)
-        gp_Pnt corner(-x / 2.0, -y / 2.0, -z / 2.0);
-        shape = BRepPrimAPI_MakeBox(corner, x, y, z).Shape();
+        // URDF convention: box centered at origin
+        shape = BRepPrimAPI_MakeBox(gp_Pnt(-x / 2.0, -y / 2.0, -z / 2.0), x, y, z).Shape();
 
       } else if (tinyxml2::XMLElement * cylinder = geometry->FirstChildElement("cylinder")) {
         const char * radius_str = cylinder->Attribute("radius");
@@ -190,10 +180,9 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
           throw std::runtime_error("Failed to parse cylinder parameters");
         }
 
-        // URDF convention: cylinder is centered at origin, axis along Z
-        // Create cylinder with base at (0, 0, -length/2) extending to (0, 0, +length/2)
-        gp_Ax2 axis(gp_Pnt(0, 0, -length / 2.0), gp_Dir(0, 0, 1));
-        shape = BRepPrimAPI_MakeCylinder(axis, radius, length).Shape();
+        // URDF convention: cylinder centered at origin, axis along Z
+        shape = BRepPrimAPI_MakeCylinder(
+          gp_Ax2(gp_Pnt(0, 0, -length / 2.0), gp_Dir(0, 0, 1)), radius, length).Shape();
 
       } else if (tinyxml2::XMLElement * sphere = geometry->FirstChildElement("sphere")) {
         const char * radius_str = sphere->Attribute("radius");
@@ -222,12 +211,13 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
         BRepBuilderAPI_Transform transformer(shape, transform, true);
         shape = transformer.Shape();
       }
+    } catch (Standard_Failure & e) {
+      throw std::runtime_error(
+        "OCCT error creating geometry for link '" + link_name_str +
+        "': " + e.GetMessageString());
     } catch (const std::exception & e) {
       throw std::runtime_error(
-        "Error creating geometry for link '" + link_name_str + "': " + std::string(e.what()));
-    } catch (...) {
-      throw std::runtime_error(
-        "Unknown error creating geometry for link '" + link_name_str + "'");
+        "Error creating geometry for link '" + link_name_str + "': " + e.what());
     }
 
     builder.Add(compound, shape);
@@ -245,8 +235,8 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_file(const std::string & urd
   tinyxml2::XMLDocument doc;
 
   if (doc.LoadFile(urdf_path.c_str()) != tinyxml2::XML_SUCCESS) {
-    throw std::runtime_error("Failed to load URDF file: " + urdf_path +
-                           " - " + std::string(doc.ErrorStr()));
+    throw std::runtime_error(
+      "Failed to load URDF file: " + urdf_path + " - " + std::string(doc.ErrorStr()));
   }
 
   tinyxml2::XMLPrinter printer;
@@ -264,50 +254,40 @@ TopoDS_Shape GeometryMapper::create_shape_from_step(
   try {
     STEPControl_Reader reader;
 
-    // Read the STEP file
     IFSelect_ReturnStatus status = reader.ReadFile(step_path.c_str());
     if (status != IFSelect_RetDone) {
       throw std::runtime_error("Failed to read STEP file: " + step_path);
     }
 
-    // Transfer all shapes from STEP to OCCT
     Standard_Integer num_roots = reader.TransferRoots();
     RCLCPP_DEBUG(logger_, "Transferred %d root(s) from STEP file", num_roots);
 
     TopoDS_Shape shape = reader.OneShape();
-
     if (shape.IsNull()) {
       throw std::runtime_error("STEP file contains no valid shapes: " + step_path);
     }
 
-    // Create transformation from translation and rotation
-    gp_Trsf transform;
-
-    // Set translation
-    transform.SetTranslation(gp_Vec(translation.x(), translation.y(), translation.z()));
-
-    // Set rotation from quaternion
-    gp_Quaternion quat(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+    // Combine rotation then translation
     gp_Trsf rot_transform;
-    rot_transform.SetRotation(quat);
+    rot_transform.SetRotation(
+      gp_Quaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w()));
 
-    // Combine transformations: first rotate, then translate
-    gp_Trsf combined_transform = transform * rot_transform;
+    gp_Trsf trans_transform;
+    trans_transform.SetTranslation(gp_Vec(translation.x(), translation.y(), translation.z()));
 
-    // Apply transformation to the shape
-    BRepBuilderAPI_Transform transformer(shape, combined_transform, true);
+    BRepBuilderAPI_Transform transformer(shape, trans_transform * rot_transform, true);
     TopoDS_Shape transformed_shape = transformer.Shape();
 
     RCLCPP_INFO(logger_, "STEP file loaded successfully");
     return transformed_shape;
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Error loading STEP file '%s': %s",
-      step_path.c_str(), e.what());
+  } catch (Standard_Failure & e) {
+    RCLCPP_ERROR(logger_, "OCCT error loading STEP file '%s': %s",
+      step_path.c_str(), e.GetMessageString());
     throw std::runtime_error(
-      "Error loading STEP file '" + step_path + "': " + std::string(e.what()));
-  } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown error loading STEP file '%s'", step_path.c_str());
-    throw std::runtime_error("Unknown error loading STEP file '" + step_path + "'");
+      "OCCT error loading STEP file '" + step_path + "': " + e.GetMessageString());
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Error loading STEP file '%s': %s", step_path.c_str(), e.what());
+    throw std::runtime_error("Error loading STEP file '" + step_path + "': " + e.what());
   }
 }
 
@@ -319,8 +299,18 @@ Topology GeometryMapper::create_topology_from_shape(
 
   RCLCPP_DEBUG(logger_, "Extracting topology from shape");
 
+  // Fallback normal when surface normal cannot be computed
+  const auto make_fallback_normal = [](const gp_Pnt & center) -> gp_Vec {
+    gp_Vec fallback(center.X(), center.Y(), center.Z());
+    if (fallback.Magnitude() > 1e-9) {
+      fallback.Normalize();
+    } else {
+      fallback = gp_Vec(0, 0, 1);
+    }
+    return fallback;
+  };
+
   try {
-    // Build ID maps for all topological elements
     TopTools_IndexedMapOfShape vertex_map;
     TopTools_IndexedMapOfShape edge_map;
     face_map_.Clear();
@@ -330,9 +320,8 @@ Topology GeometryMapper::create_topology_from_shape(
     TopExp::MapShapes(shape, TopAbs_FACE, face_map_);
 
     RCLCPP_DEBUG(logger_, "Found %d vertices, %d edges, %d faces",
-    vertex_map.Extent(), edge_map.Extent(), face_map_.Extent());
+      vertex_map.Extent(), edge_map.Extent(), face_map_.Extent());
 
-  // Build ancestor maps for connectivity
     TopTools_IndexedDataMapOfShapeListOfShape vertex_to_edges;
     TopTools_IndexedDataMapOfShapeListOfShape vertex_to_faces;
     TopTools_IndexedDataMapOfShapeListOfShape edge_to_faces;
@@ -341,171 +330,118 @@ Topology GeometryMapper::create_topology_from_shape(
     TopExp::MapShapesAndAncestors(shape, TopAbs_VERTEX, TopAbs_FACE, vertex_to_faces);
     TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_to_faces);
 
-  // Initialize storage vectors
     std::vector<Corner> corners(vertex_map.Extent());
     std::vector<Edge> edges(edge_map.Extent());
     std::vector<Surface> surfaces(face_map_.Extent());
 
     for (int i = 1; i <= vertex_map.Extent(); i++) {
       TopoDS_Vertex vertex = TopoDS::Vertex(vertex_map(i));
-      int corner_id = i - 1;  // Convert to 0-based indexing
-
-      Corner & corner = corners[corner_id];
+      Corner & corner = corners[i - 1];
       corner.position = BRep_Tool::Pnt(vertex);
 
-    // Find connected edges
       if (vertex_to_edges.Contains(vertex)) {
-        const TopTools_ListOfShape & edge_list = vertex_to_edges.FindFromKey(vertex);
-        for (TopTools_ListIteratorOfListOfShape it(edge_list); it.More(); it.Next()) {
-          int edge_id = edge_map.FindIndex(it.Value()) - 1;
-          corner.connected_edges.push_back(edge_id);
+        for (TopTools_ListIteratorOfListOfShape it(vertex_to_edges.FindFromKey(vertex));
+          it.More(); it.Next())
+        {
+          corner.connected_edges.push_back(edge_map.FindIndex(it.Value()) - 1);
         }
       }
 
-    // Find connected surfaces
       if (vertex_to_faces.Contains(vertex)) {
-        const TopTools_ListOfShape & face_list = vertex_to_faces.FindFromKey(vertex);
-        for (TopTools_ListIteratorOfListOfShape it(face_list); it.More(); it.Next()) {
-          int face_id = face_map_.FindIndex(it.Value()) - 1;
-          corner.connected_surfaces.push_back(face_id);
+        for (TopTools_ListIteratorOfListOfShape it(vertex_to_faces.FindFromKey(vertex));
+          it.More(); it.Next())
+        {
+          corner.connected_surfaces.push_back(face_map_.FindIndex(it.Value()) - 1);
         }
       }
     }
 
     for (int i = 1; i <= edge_map.Extent(); i++) {
       TopoDS_Edge edge = TopoDS::Edge(edge_map(i));
-      int edge_id = i - 1;  // Convert to 0-based indexing
-
-      Edge & edge_data = edges[edge_id];
-
+      Edge & edge_data = edges[i - 1];
       edge_data.edge = edge;
 
       TopoDS_Vertex v1, v2;
       TopExp::Vertices(edge, v1, v2);
-      int v1_id = vertex_map.FindIndex(v1) - 1;
-      int v2_id = vertex_map.FindIndex(v2) - 1;
-      edge_data.corner_ids = std::make_pair(v1_id, v2_id);
+      edge_data.corner_ids = std::make_pair(
+        vertex_map.FindIndex(v1) - 1,
+        vertex_map.FindIndex(v2) - 1);
 
-    // Classify edge type (LINE, CIRCLE, or SPLINE)
       edge_data.type = classify_edge(edge);
 
-    // Find connected surfaces
       if (edge_to_faces.Contains(edge)) {
-        const TopTools_ListOfShape & face_list = edge_to_faces.FindFromKey(edge);
-        for (TopTools_ListIteratorOfListOfShape it(face_list); it.More(); it.Next()) {
-          int face_id = face_map_.FindIndex(it.Value()) - 1;
-          edge_data.connected_surfaces.push_back(face_id);
+        for (TopTools_ListIteratorOfListOfShape it(edge_to_faces.FindFromKey(edge));
+          it.More(); it.Next())
+        {
+          edge_data.connected_surfaces.push_back(face_map_.FindIndex(it.Value()) - 1);
         }
       }
     }
 
     for (int i = 1; i <= face_map_.Extent(); i++) {
       TopoDS_Face face = TopoDS::Face(face_map_(i));
-      int face_id = i - 1;  // Convert to 0-based indexing
-
-      Surface & surface = surfaces[face_id];
+      Surface & surface = surfaces[i - 1];
       surface.face = face;
 
-    // Extract edges of this face
-      TopExp_Explorer edge_explorer(face, TopAbs_EDGE);
-      for (; edge_explorer.More(); edge_explorer.Next()) {
-        TopoDS_Edge edge = TopoDS::Edge(edge_explorer.Current());
-        int edge_id = edge_map.FindIndex(edge) - 1;
-        surface.edge_ids.push_back(edge_id);
+      for (TopExp_Explorer exp(face, TopAbs_EDGE); exp.More(); exp.Next()) {
+        surface.edge_ids.push_back(edge_map.FindIndex(TopoDS::Edge(exp.Current())) - 1);
       }
 
-    // Extract vertices of this face (use set to avoid duplicates)
       std::set<int> vertex_set;
-      TopExp_Explorer vertex_explorer(face, TopAbs_VERTEX);
-      for (; vertex_explorer.More(); vertex_explorer.Next()) {
-        TopoDS_Vertex vertex = TopoDS::Vertex(vertex_explorer.Current());
-        int vertex_id = vertex_map.FindIndex(vertex) - 1;
-        vertex_set.insert(vertex_id);
+      for (TopExp_Explorer exp(face, TopAbs_VERTEX); exp.More(); exp.Next()) {
+        vertex_set.insert(vertex_map.FindIndex(TopoDS::Vertex(exp.Current())) - 1);
       }
       surface.corner_ids = std::vector<int>(vertex_set.begin(), vertex_set.end());
 
-    // Check if surface has inner holes
       surface.has_inner_holes = has_inner_holes(face);
 
-      // Compute surface center (centroid)
       GProp_GProps props;
       BRepGProp::SurfaceProperties(face, props);
       surface.center = props.CentreOfMass();
 
-      // Compute surface normal
       try {
         Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
         Standard_Real u_min, u_max, v_min, v_max;
         BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-        Standard_Real u_mid = (u_min + u_max) / 2.0;
-        Standard_Real v_mid = (v_min + v_max) / 2.0;
 
-        GeomLProp_SLProps props_normal(surf, u_mid, v_mid, 1, 1e-6);
+        GeomLProp_SLProps props_normal(
+          surf, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1, 1e-6);
+
         if (props_normal.IsNormalDefined()) {
           gp_Vec normal = props_normal.Normal();
-
-          // Reversed faces have inverted normals - correct orientation
           if (face.Orientation() == TopAbs_REVERSED) {
             normal.Reverse();
           }
           surface.normal = normal;
         } else {
-          gp_Vec fallback(surface.center.X(), surface.center.Y(), surface.center.Z());
-          if (fallback.Magnitude() > 1e-9) {
-            fallback.Normalize();
-          } else {
-            fallback = gp_Vec(0, 0, 1);
-          }
-          surface.normal = fallback;
+          surface.normal = make_fallback_normal(surface.center);
         }
-      } catch (const std::exception & e) {
+      } catch (Standard_Failure & e) {
         RCLCPP_DEBUG(logger_, "Normal computation failed for face %d: %s - using fallback",
-          face_id, e.what());
-        gp_Vec fallback(surface.center.X(), surface.center.Y(), surface.center.Z());
-        if (fallback.Magnitude() > 1e-9) {
-          fallback.Normalize();
-        } else {
-          fallback = gp_Vec(0, 0, 1);
-        }
-        surface.normal = fallback;
+          i - 1, e.GetMessageString());
+        surface.normal = make_fallback_normal(surface.center);
       } catch (...) {
-        RCLCPP_DEBUG(logger_,
-              "Normal computation failed for face %d (unknown error) - using fallback",
-          face_id);
-        gp_Vec fallback(surface.center.X(), surface.center.Y(), surface.center.Z());
-        if (fallback.Magnitude() > 1e-9) {
-          fallback.Normalize();
-        } else {
-          fallback = gp_Vec(0, 0, 1);
-        }
-        surface.normal = fallback;
+        RCLCPP_DEBUG(logger_, "Normal computation failed for face %d - using fallback", i - 1);
+        surface.normal = make_fallback_normal(surface.center);
       }
     }
 
     Topology topology;
-
-    for (size_t i = 0; i < corners.size(); i++) {
-      topology.add_corner(i, corners[i]);
-    }
-
-    for (size_t i = 0; i < edges.size(); i++) {
-      topology.add_edge(i, edges[i]);
-    }
-
-    for (size_t i = 0; i < surfaces.size(); i++) {
-      topology.add_surface(i, surfaces[i]);
-    }
+    for (size_t i = 0; i < corners.size(); i++) {topology.add_corner(i, corners[i]);}
+    for (size_t i = 0; i < edges.size(); i++) {topology.add_edge(i, edges[i]);}
+    for (size_t i = 0; i < surfaces.size(); i++) {topology.add_surface(i, surfaces[i]);}
 
     RCLCPP_DEBUG(logger_, "Topology extraction complete: %zu corners, %zu edges, %zu surfaces",
-        corners.size(), edges.size(), surfaces.size());
+      corners.size(), edges.size(), surfaces.size());
 
     return topology;
+  } catch (Standard_Failure & e) {
+    RCLCPP_ERROR(logger_, "OCCT exception during topology extraction: %s", e.GetMessageString());
+    throw std::runtime_error(
+      std::string("Topology extraction failed: ") + e.GetMessageString());
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Exception during topology extraction: %s", e.what());
-    throw std::runtime_error("Topology extraction failed: " + std::string(e.what()));
-  } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown exception during topology extraction");
-    throw std::runtime_error("Topology extraction failed: unknown error");
+    throw std::runtime_error(std::string("Topology extraction failed: ") + e.what());
   }
 }
 
@@ -540,31 +476,26 @@ Topology GeometryMapper::load_from_shape(
 int GeometryMapper::find_topology_surface_id(const TopoDS_Face & occt_face) const
 {
   int occt_index = face_map_.FindIndex(occt_face);
-
   if (occt_index == 0) {
     throw std::runtime_error("Face not found in topology");
   }
-
   return occt_index - 1;
-}
-
-const TopTools_IndexedMapOfShape & GeometryMapper::get_face_map() const
-{
-  return face_map_;
 }
 
 TopoDS_Face GeometryMapper::get_occt_face(int surface_id) const
 {
   int occt_index = surface_id + 1;
-
   if (occt_index < 1 || occt_index > face_map_.Extent()) {
     throw std::out_of_range(
       "Surface ID " + std::to_string(surface_id) +
-      " out of range [0, " + std::to_string(face_map_.Extent() - 1) + "]"
-    );
+      " out of range [0, " + std::to_string(face_map_.Extent() - 1) + "]");
   }
-
   return TopoDS::Face(face_map_(occt_index));
+}
+
+const TopTools_IndexedMapOfShape & GeometryMapper::get_face_map() const
+{
+  return face_map_;
 }
 
 }  // namespace geometry

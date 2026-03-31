@@ -47,7 +47,23 @@ public:
    */
   explicit SurfaceDimensionFilter(double min_dimension);
 
+  /**
+   * @brief Evaluate which surfaces pass the minimum dimension threshold
+   *
+   * For each surface in the topology, computes the oriented bounding box in
+   * the surface's local coordinate frame and checks whether its smallest
+   * dimension (width, height, or depth) is at least min_dimension.
+   *
+   * @param topology Topology containing all surfaces to evaluate
+   * @return Vector of surface IDs that satisfy the minimum dimension requirement
+   */
   std::vector<int> evaluate(const geometry::Topology & topology) const override;
+
+  /**
+   * @brief Get the human-readable name of this filter
+   *
+   * @return Filter name string
+   */
   std::string get_name() const override;
 
 private:

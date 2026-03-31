@@ -60,7 +60,6 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       z_axis.Normalize();
 
       // Build orthogonal coordinate frame aligned to surface normal
-      // Avoid degenerate cross product by choosing reference vector non-parallel to normal
       gp_Vec reference_vec(0, 0, 1);
       if (std::abs(z_axis.Dot(reference_vec)) > 0.9) {
         reference_vec = gp_Vec(1, 0, 0);
@@ -106,19 +105,16 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       double xmin, ymin, zmin, xmax, ymax, zmax;
       bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
 
-      double width = xmax - xmin;
-      double height = ymax - ymin;
-      double min_dim = std::min(width, height);
+      double min_dim = std::min(xmax - xmin, ymax - ymin);
 
       if (min_dim >= min_dimension_) {
         valid_surface_ids.push_back(static_cast<int>(i));
       }
-    } catch (const std::exception & e) {
-      RCLCPP_DEBUG(logger_, "Error processing surface %zu: %s - skipping", i, e.what());
-      continue;
+    } catch (Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "OCCT exception for surface %zu: %s - skipping",
+        i, e.GetMessageString());
     } catch (...) {
-      RCLCPP_DEBUG(logger_, "Unknown error processing surface %zu - skipping", i);
-      continue;
+      RCLCPP_WARN(logger_, "Error processing surface %zu - skipping", i);
     }
   }
 

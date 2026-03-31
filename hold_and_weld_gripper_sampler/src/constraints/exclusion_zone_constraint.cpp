@@ -28,7 +28,6 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -55,6 +54,7 @@ namespace hold_and_weld_gripper_sampler
 {
 namespace constraints
 {
+
 ExclusionZoneConstraint::ExclusionZoneConstraint(
   std::shared_ptr<const geometry::GeometryMapper> mapper,
   const ParsedGripper & gripper,
@@ -65,31 +65,24 @@ ExclusionZoneConstraint::ExclusionZoneConstraint(
   double mesh_angular_deflection)
 : mapper_(mapper),
   gripper_(gripper),
-  circles_(circles.value_or(std::vector<exclusion_circle> {})),
-  polygons_(polygons.value_or(std::vector<exclusion_polygon> {})),
-  lines_(lines.value_or(std::vector<exclusion_line> {})),
+  circles_(circles.value_or(std::vector<exclusion_circle>{})),
+  polygons_(polygons.value_or(std::vector<exclusion_polygon>{})),
+  lines_(lines.value_or(std::vector<exclusion_line>{})),
   fcl_checker_(nullptr),
   mesh_linear_deflection_(mesh_linear_deflection),
   mesh_angular_deflection_(mesh_angular_deflection),
   logger_(rclcpp::get_logger("gripper_sampler"))
 {
-  RCLCPP_DEBUG(logger_, "Initializing ExclusionZoneConstraint");
-  RCLCPP_DEBUG(logger_, "  Line exclusions: %zu", lines_.size());
-  RCLCPP_DEBUG(logger_, "  Circle exclusions: %zu", circles_.size());
-  RCLCPP_DEBUG(logger_, "  Polygon exclusions: %zu", polygons_.size());
+  RCLCPP_DEBUG(logger_, "ExclusionZoneConstraint: %zu lines, %zu circles, %zu polygons",
+    lines_.size(), circles_.size(), polygons_.size());
 
-  // Triangulate gripper components for OCCT fallback collision detection
-  // (FCL will re-use OCCT's cached triangulation)
-  BRepMesh_IncrementalMesh mesher_f1(gripper_.finger_1, mesh_linear_deflection_, Standard_False,
+  BRepMesh_IncrementalMesh(gripper_.finger_1, mesh_linear_deflection_, Standard_False,
     mesh_angular_deflection_);
-  BRepMesh_IncrementalMesh mesher_f2(gripper_.finger_2, mesh_linear_deflection_, Standard_False,
+  BRepMesh_IncrementalMesh(gripper_.finger_2, mesh_linear_deflection_, Standard_False,
     mesh_angular_deflection_);
-  BRepMesh_IncrementalMesh mesher_base(gripper_.base, mesh_linear_deflection_, Standard_False,
+  BRepMesh_IncrementalMesh(gripper_.base, mesh_linear_deflection_, Standard_False,
     mesh_angular_deflection_);
-
-  RCLCPP_DEBUG(logger_, "Gripper triangulation complete");
 }
-
 
 TopoDS_Shape ExclusionZoneConstraint::create_tube_from_line(
   const exclusion_line & line,
@@ -102,93 +95,61 @@ TopoDS_Shape ExclusionZoneConstraint::create_tube_from_line(
   double length = direction.Magnitude();
 
   if (length < 1e-6) {
-    RCLCPP_ERROR(logger_, "Line exclusion has zero length - skipping");
+    RCLCPP_WARN(logger_, "Line exclusion has zero length - skipping");
     return TopoDS_Shape();
   }
 
   gp_Dir axis_dir(direction);
+  double radius = line.exclusion_radius + (include_clearance ? line.clearance : 0.0);
+  double actual_length = length + (include_clearance ? 2.0 * line.clearance : 0.0);
 
-  double radius = line.exclusion_radius;
-  if (include_clearance) {
-    radius += line.clearance;
-  }
-
-  double actual_length = length;
   gp_Pnt actual_start = start;
-
   if (include_clearance) {
-    // Extend tube beyond line endpoints to ensure complete coverage
-    actual_length += 2.0 * line.clearance;
-
-    // Shift start point backward so tube is centered on original line
+    // Extend tube symmetrically beyond endpoints for complete coverage
     gp_Vec back_shift(axis_dir);
     back_shift.Scale(-line.clearance);
     actual_start.Translate(back_shift);
   }
 
-  // Create axis at (possibly shifted) start point
-  gp_Ax2 axis(actual_start, axis_dir);
-
-  TopoDS_Shape tube;
   try {
-    tube = BRepPrimAPI_MakeCylinder(axis, radius, actual_length).Shape();
-    // Pre-mesh for fast distance queries (required by BRepExtrema_DistShapeShape)
-    BRepMesh_IncrementalMesh mesher(tube, mesh_linear_deflection_, Standard_False,
+    TopoDS_Shape tube = BRepPrimAPI_MakeCylinder(
+      gp_Ax2(actual_start, axis_dir), radius, actual_length).Shape();
+    BRepMesh_IncrementalMesh(tube, mesh_linear_deflection_, Standard_False,
       mesh_angular_deflection_);
+    return tube;
   } catch (Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT exception in tube creation: %s", e.GetMessageString());
+    RCLCPP_ERROR(logger_, "Tube creation failed: %s", e.GetMessageString());
     return TopoDS_Shape();
   }
-
-  return tube;
 }
 
 TopoDS_Shape ExclusionZoneConstraint::create_volume_from_circle(
   const exclusion_circle & circle,
   bool include_clearance) const
 {
-  gp_Pnt center(circle.center.x(), circle.center.y(), circle.center.z());
-
-  Eigen::Vector3d normal_vec = circle.normal;
-  if (normal_vec.norm() < 1e-6) {
-    RCLCPP_ERROR(logger_, "Circle exclusion has zero-length normal - skipping");
+  if (circle.normal.norm() < 1e-6) {
+    RCLCPP_WARN(logger_, "Circle exclusion has zero-length normal - skipping");
     return TopoDS_Shape();
   }
 
+  gp_Pnt center(circle.center.x(), circle.center.y(), circle.center.z());
   gp_Dir normal(circle.normal.x(), circle.normal.y(), circle.normal.z());
   gp_Ax2 axis(center, normal);
 
-  double radius = circle.radius;
-  if (include_clearance) {
-    radius += circle.clearance;
-  }
+  double radius = circle.radius + (include_clearance ? circle.clearance : 0.0);
+  double extrusion_depth = circle.projection_depth +
+    (include_clearance ? 2.0 * circle.clearance : 0.0);
 
-  TopoDS_Face disk;
   try {
-    gp_Circ circ(axis, radius);
-    TopoDS_Edge circle_edge = BRepBuilderAPI_MakeEdge(circ);
+    TopoDS_Edge circle_edge = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius));
     TopoDS_Wire circle_wire = BRepBuilderAPI_MakeWire(circle_edge);
-    disk = BRepBuilderAPI_MakeFace(circle_wire);
-  } catch (Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT exception in circle disk creation: %s", e.GetMessageString());
-    return TopoDS_Shape();
-  }
+    TopoDS_Face disk = BRepBuilderAPI_MakeFace(circle_wire);
 
-  double extrusion_depth = circle.projection_depth;
-  if (include_clearance) {
-    extrusion_depth += 2.0 * circle.clearance;
-  }
+    TopoDS_Shape thick_disk = BRepPrimAPI_MakePrism(
+      disk, gp_Vec(normal.XYZ() * extrusion_depth)).Shape();
 
-  // Extrude disk into the part (backward along normal)
-  // This creates a volume projecting into the workpiece surface
-  gp_Vec extrusion(normal.XYZ() * extrusion_depth);
-  TopoDS_Shape thick_disk;
-
-  try {
-    thick_disk = BRepPrimAPI_MakePrism(disk, extrusion).Shape();
-
-    // Shift back so volume is centered on original surface plane
     if (include_clearance) {
+      // Shift back so volume straddles the original surface plane
       gp_Trsf shift_back;
       shift_back.SetTranslation(gp_Vec(
         -normal.X() * circle.clearance,
@@ -197,14 +158,13 @@ TopoDS_Shape ExclusionZoneConstraint::create_volume_from_circle(
       thick_disk = BRepBuilderAPI_Transform(thick_disk, shift_back, Standard_True).Shape();
     }
 
-    BRepMesh_IncrementalMesh mesher(thick_disk, mesh_linear_deflection_, Standard_False,
+    BRepMesh_IncrementalMesh(thick_disk, mesh_linear_deflection_, Standard_False,
       mesh_angular_deflection_);
+    return thick_disk;
   } catch (Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT exception in circle extrusion: %s", e.GetMessageString());
+    RCLCPP_ERROR(logger_, "Circle volume creation failed: %s", e.GetMessageString());
     return TopoDS_Shape();
   }
-
-  return thick_disk;
 }
 
 TopoDS_Shape ExclusionZoneConstraint::create_prism_from_polygon(
@@ -212,98 +172,77 @@ TopoDS_Shape ExclusionZoneConstraint::create_prism_from_polygon(
   bool include_clearance) const
 {
   if (polygon.exclusion_corners.size() < 3) {
-    RCLCPP_ERROR(logger_, "Polygon exclusion has fewer than 3 corners (%zu) - skipping",
+    RCLCPP_WARN(logger_, "Polygon exclusion has fewer than 3 corners (%zu) - skipping",
       polygon.exclusion_corners.size());
     return TopoDS_Shape();
   }
 
-  BRepBuilderAPI_MakePolygon poly_builder;
-  for (const auto & corner : polygon.exclusion_corners) {
-    gp_Pnt point(corner.x(), corner.y(), corner.z());
-    poly_builder.Add(point);
-  }
-  poly_builder.Close();
-
-  if (!poly_builder.IsDone()) {
-    RCLCPP_ERROR(logger_, "Failed to create polygon wire");
-    return TopoDS_Shape();
-  }
-
-  TopoDS_Wire poly_wire = poly_builder.Wire();
-
-  // Calculate polygon plane normal using cross product of first two edges
+  // Compute face normal from first two edges (right-hand rule)
   Eigen::Vector3d v1 = polygon.exclusion_corners[1] - polygon.exclusion_corners[0];
   Eigen::Vector3d v2 = polygon.exclusion_corners[2] - polygon.exclusion_corners[0];
-  Eigen::Vector3d normal = v1.cross(v2);  // Right-hand rule determines direction
+  Eigen::Vector3d normal = v1.cross(v2);
 
-  // Check for collinear points (degenerate polygon)
   if (normal.norm() < 1e-6) {
-    RCLCPP_ERROR(logger_, "Polygon has collinear points - cannot compute normal");
+    RCLCPP_WARN(logger_, "Polygon has collinear points - cannot compute normal");
     return TopoDS_Shape();
   }
-
   normal.normalize();
 
-  TopoDS_Face poly_face;
-
-  try {
-    if (include_clearance) {
-      // Create temporary face for offset reference plane
-      TopoDS_Face temp_face = BRepBuilderAPI_MakeFace(poly_wire);
-
-      // Offset polygon outward by clearance to create safety margin
-      // GeomAbs_Arc produces rounded corners
-      BRepOffsetAPI_MakeOffset offset_maker(temp_face, GeomAbs_Arc);
-      offset_maker.Perform(polygon.clearance);
-
-      if (offset_maker.IsDone()) {
-        TopoDS_Wire offset_wire = TopoDS::Wire(offset_maker.Shape());
-        poly_face = BRepBuilderAPI_MakeFace(offset_wire);
-      } else {
-        RCLCPP_WARN(logger_, "Polygon offset failed - using original polygon");
-        poly_face = temp_face;
-      }
-    } else {
-      poly_face = BRepBuilderAPI_MakeFace(poly_wire);
-    }
-  } catch (Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT exception in polygon face creation: %s",
-      e.GetMessageString());
-    return TopoDS_Shape();
-  }
-
-  double extrusion_depth = polygon.projection_depth;
-  if (include_clearance) {
-    extrusion_depth += 2.0 * polygon.clearance;
-  }
+  double extrusion_depth = polygon.projection_depth +
+    (include_clearance ? 2.0 * polygon.clearance : 0.0);
 
   gp_Vec extrusion(
     normal.x() * extrusion_depth,
     normal.y() * extrusion_depth,
     normal.z() * extrusion_depth);
 
-  TopoDS_Shape prism;
   try {
-    prism = BRepPrimAPI_MakePrism(poly_face, extrusion).Shape();
+    BRepBuilderAPI_MakePolygon poly_builder;
+    for (const auto & corner : polygon.exclusion_corners) {
+      poly_builder.Add(gp_Pnt(corner.x(), corner.y(), corner.z()));
+    }
+    poly_builder.Close();
+
+    if (!poly_builder.IsDone()) {
+      RCLCPP_ERROR(logger_, "Failed to create polygon wire");
+      return TopoDS_Shape();
+    }
+
+    TopoDS_Face poly_face;
+
+    if (include_clearance) {
+      TopoDS_Face temp_face = BRepBuilderAPI_MakeFace(poly_builder.Wire());
+      BRepOffsetAPI_MakeOffset offset_maker(temp_face, GeomAbs_Arc);
+      offset_maker.Perform(polygon.clearance);
+
+      if (offset_maker.IsDone()) {
+        poly_face = BRepBuilderAPI_MakeFace(TopoDS::Wire(offset_maker.Shape()));
+      } else {
+        RCLCPP_WARN(logger_, "Polygon offset failed - using original polygon");
+        poly_face = temp_face;
+      }
+    } else {
+      poly_face = BRepBuilderAPI_MakeFace(poly_builder.Wire());
+    }
+
+    TopoDS_Shape prism = BRepPrimAPI_MakePrism(poly_face, extrusion).Shape();
+
+    if (include_clearance) {
+      gp_Trsf shift_back;
+      shift_back.SetTranslation(gp_Vec(
+        -normal.x() * polygon.clearance,
+        -normal.y() * polygon.clearance,
+        -normal.z() * polygon.clearance));
+      prism = BRepBuilderAPI_Transform(prism, shift_back, Standard_True).Shape();
+    }
+
+    BRepMesh_IncrementalMesh(prism, mesh_linear_deflection_, Standard_False,
+      mesh_angular_deflection_);
+    return prism;
   } catch (Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT exception in prism creation: %s", e.GetMessageString());
+    RCLCPP_ERROR(logger_, "Prism creation failed: %s", e.GetMessageString());
     return TopoDS_Shape();
   }
-
-  // Shift prism back so it's centered on the original polygon plane
-  if (include_clearance) {
-    gp_Trsf shift_back;
-    shift_back.SetTranslation(gp_Vec(
-      -normal.x() * polygon.clearance,
-      -normal.y() * polygon.clearance,
-      -normal.z() * polygon.clearance));
-    prism = BRepBuilderAPI_Transform(prism, shift_back, Standard_True).Shape();
-  }
-
-  BRepMesh_IncrementalMesh mesher(prism, mesh_linear_deflection_, Standard_False,
-    mesh_angular_deflection_);
-
-  return prism;
 }
 
 std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume(
@@ -317,86 +256,62 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
   try {
     section.Build();
   } catch (Standard_Failure & e) {
-    RCLCPP_WARN(logger_, "OCCT exception in section operation: %s", e.GetMessageString());
+    RCLCPP_WARN(logger_, "Section operation failed: %s", e.GetMessageString());
     return sample_areas;
   }
 
-  if (!section.IsDone()) {
-    RCLCPP_DEBUG(logger_, "Section operation failed or produced no result");
+  if (!section.IsDone() || section.Shape().IsNull()) {
     return sample_areas;
   }
 
-  TopoDS_Shape section_result = section.Shape();
-
-  if (section_result.IsNull()) {
-    RCLCPP_DEBUG(logger_, "Section result is null - no intersection");
-    return sample_areas;
-  }
-
-  // Build map: edge → faces that share that edge (for finding which surface each edge belongs to)
+  // Map edges back to primary shape faces to identify which surface each
+  // intersection edge belongs to
   TopTools_IndexedDataMapOfShapeListOfShape edge_to_faces;
   TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_to_faces);
 
-  // Group intersection edges by which primary surface they belong to
   std::map<int, std::vector<TopoDS_Edge>> surface_edges;
 
-  for (TopExp_Explorer exp(section_result, TopAbs_EDGE); exp.More(); exp.Next()) {
+  for (TopExp_Explorer exp(section.Shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
     TopoDS_Edge edge = TopoDS::Edge(exp.Current());
 
-    if (edge_to_faces.Contains(edge)) {
-      const TopTools_ListOfShape & faces = edge_to_faces.FindFromKey(edge);
+    if (!edge_to_faces.Contains(edge)) {
+      continue;
+    }
 
-      for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next()) {
-        TopoDS_Face face = TopoDS::Face(it.Value());
-
-        try {
-          // Look up which surface ID this face corresponds to in the topology
-          int surface_id = mapper_->find_topology_surface_id(face);
-
-          if (surface_id < 0) {
-            RCLCPP_DEBUG(logger_,
-              "Face from section not found in topology (ID=%d) - skipping", surface_id);
-            continue;
-          }
-
-          surface_edges[surface_id].push_back(edge);
-        } catch (const std::runtime_error & e) {
-          RCLCPP_DEBUG(logger_, "Exception finding surface ID: %s", e.what());
-          continue;
-        }
+    for (TopTools_ListIteratorOfListOfShape it(edge_to_faces.FindFromKey(edge));
+      it.More(); it.Next())
+    {
+      try {
+        int surface_id = mapper_->find_topology_surface_id(TopoDS::Face(it.Value()));
+        surface_edges[surface_id].push_back(edge);
+      } catch (const std::runtime_error &) {
+        continue;
       }
     }
   }
 
   for (const auto & [surface_id, edges] : surface_edges) {
-    if (edges.empty()) {
-      continue;
-    }
-
     BRepBuilderAPI_MakeWire wire_builder;
-
     for (const auto & edge : edges) {
       wire_builder.Add(edge);
     }
 
-    if (wire_builder.IsDone()) {
-      TopoDS_Wire wire = wire_builder.Wire();
-
-      // Reverse wire orientation so interior of wire = exclusion zone
-      wire.Reverse();
-
-      core::SampleArea area;
-      area.surface_id = surface_id;
-      area.wire = wire;
-      sample_areas.push_back(area);
-
-      RCLCPP_DEBUG(logger_, "Created exclusion wire for surface %d with %zu edges",
-        surface_id, edges.size());
-    } else {
-      RCLCPP_WARN(logger_,
-        "Failed to build wire for surface %d from %zu edges - edges may be disconnected",
-        surface_id, edges.size());
+    if (!wire_builder.IsDone()) {
+      RCLCPP_WARN(logger_, "Failed to build exclusion wire for surface %d (%zu edges) "
+        "- edges may be disconnected", surface_id, edges.size());
+      continue;
     }
+
+    TopoDS_Wire wire = wire_builder.Wire();
+    wire.Reverse();  // Reversed orientation marks interior as exclusion zone
+
+    core::SampleArea area;
+    area.surface_id = surface_id;
+    area.wire = wire;
+    sample_areas.push_back(area);
+
+    RCLCPP_DEBUG(logger_, "Exclusion wire created for surface %d (%zu edges)",
+      surface_id, edges.size());
   }
 
   return sample_areas;
@@ -412,114 +327,73 @@ void ExclusionZoneConstraint::analyze_constraints(
   projection_volumes_.clear();
   collision_volumes_.clear();
 
-  size_t total_constraints = lines_.size() + circles_.size() + polygons_.size();
-  RCLCPP_INFO(logger_, "Total exclusion constraints defined: %zu", total_constraints);
-  RCLCPP_INFO(logger_, "  Line exclusions: %zu", lines_.size());
-  RCLCPP_INFO(logger_, "  Circle exclusions: %zu", circles_.size());
-  RCLCPP_INFO(logger_, "  Polygon exclusions: %zu", polygons_.size());
+  const size_t total = lines_.size() + circles_.size() + polygons_.size();
 
-  if (total_constraints == 0) {
-    RCLCPP_INFO(logger_, "No exclusion zones defined - skipping analysis");
+  if (total == 0) {
+    RCLCPP_DEBUG(logger_, "No exclusion zones defined - skipping analysis");
     return;
   }
 
+  RCLCPP_INFO(logger_, "Analyzing %zu exclusion constraint(s): %zu line(s), "
+    "%zu circle(s), %zu polygon(s)",
+    total, lines_.size(), circles_.size(), polygons_.size());
+
   for (size_t i = 0; i < lines_.size(); ++i) {
     const auto & line = lines_[i];
-    RCLCPP_INFO(logger_, "Processing LINE exclusion %zu:", i);
-    RCLCPP_INFO(logger_, "  Start: (%.4f, %.4f, %.4f)", line.start.x(), line.start.y(),
-          line.start.z());
-    RCLCPP_INFO(logger_, "  End: (%.4f, %.4f, %.4f)", line.end.x(), line.end.y(), line.end.z());
+    RCLCPP_DEBUG(logger_, "Line exclusion %zu: start=(%.4f,%.4f,%.4f) end=(%.4f,%.4f,%.4f)",
+      i, line.start.x(), line.start.y(), line.start.z(),
+      line.end.x(), line.end.y(), line.end.z());
 
-    TopoDS_Shape proj_tube = create_tube_from_line(line, false);
-    TopoDS_Shape coll_tube = create_tube_from_line(line, true);
+    TopoDS_Shape proj = create_tube_from_line(line, false);
+    TopoDS_Shape coll = create_tube_from_line(line, true);
+    projection_volumes_.push_back(proj);
+    collision_volumes_.push_back(coll);
 
-    RCLCPP_INFO(logger_, "  Projection tube null: %s, Collision tube null: %s",
-      proj_tube.IsNull() ? "YES" : "NO", coll_tube.IsNull() ? "YES" : "NO");
-
-    projection_volumes_.push_back(proj_tube);
-    collision_volumes_.push_back(coll_tube);
-
-    // Extract sample areas using projection volume
-    auto areas = process_constraint_volume(proj_tube, shape);
-    RCLCPP_INFO(logger_, "  Extracted %zu sample areas (exclusion wires)", areas.size());
-    for (const auto & area : areas) {
-      RCLCPP_INFO(logger_, "    -> Surface %d affected", area.surface_id);
-    }
+    auto areas = process_constraint_volume(proj, shape);
     sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
+    RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
   }
 
   for (size_t i = 0; i < circles_.size(); ++i) {
     const auto & circle = circles_[i];
-    RCLCPP_INFO(logger_, "Processing CIRCLE exclusion %zu:", i);
-    RCLCPP_INFO(logger_, "  Center: (%.4f, %.4f, %.4f)", circle.center.x(), circle.center.y(),
-          circle.center.z());
-    RCLCPP_INFO(logger_, "  Normal: (%.4f, %.4f, %.4f)", circle.normal.x(), circle.normal.y(),
-          circle.normal.z());
-    RCLCPP_INFO(logger_, "  Radius: %.4f m, Depth: %.4f m, Clearance: %.4f m",
-      circle.radius, circle.projection_depth, circle.clearance);
+    RCLCPP_DEBUG(logger_, "Circle exclusion %zu: center=(%.4f,%.4f,%.4f) r=%.4f m",
+      i, circle.center.x(), circle.center.y(), circle.center.z(), circle.radius);
 
-    TopoDS_Shape proj_disk = create_volume_from_circle(circle, false);
-    TopoDS_Shape coll_disk = create_volume_from_circle(circle, true);
+    TopoDS_Shape proj = create_volume_from_circle(circle, false);
+    TopoDS_Shape coll = create_volume_from_circle(circle, true);
+    projection_volumes_.push_back(proj);
+    collision_volumes_.push_back(coll);
 
-    RCLCPP_INFO(logger_, "  Projection disk null: %s, Collision disk null: %s",
-      proj_disk.IsNull() ? "YES" : "NO", coll_disk.IsNull() ? "YES" : "NO");
-
-    projection_volumes_.push_back(proj_disk);
-    collision_volumes_.push_back(coll_disk);
-
-    auto areas = process_constraint_volume(proj_disk, shape);
-    RCLCPP_INFO(logger_, "  Extracted %zu sample areas (exclusion wires)", areas.size());
-    for (const auto & area : areas) {
-      RCLCPP_INFO(logger_, "    -> Surface %d affected", area.surface_id);
-    }
+    auto areas = process_constraint_volume(proj, shape);
     sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
+    RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
   }
 
-  // Process polygons
   for (size_t i = 0; i < polygons_.size(); ++i) {
     const auto & polygon = polygons_[i];
-    RCLCPP_INFO(logger_, "Processing POLYGON exclusion %zu:", i);
-    RCLCPP_INFO(logger_, "  Corners: %zu, Depth: %.4f m, Clearance: %.4f m",
-      polygon.exclusion_corners.size(), polygon.projection_depth, polygon.clearance);
-    for (size_t j = 0; j < polygon.exclusion_corners.size(); ++j) {
-      const auto & corner = polygon.exclusion_corners[j];
-      RCLCPP_INFO(logger_, "    Corner %zu: (%.4f, %.4f, %.4f)", j, corner.x(), corner.y(),
-            corner.z());
-    }
+    RCLCPP_DEBUG(logger_, "Polygon exclusion %zu: %zu corners, depth=%.4f m",
+      i, polygon.exclusion_corners.size(), polygon.projection_depth);
 
-    TopoDS_Shape proj_prism = create_prism_from_polygon(polygon, false);
-    TopoDS_Shape coll_prism = create_prism_from_polygon(polygon, true);
+    TopoDS_Shape proj = create_prism_from_polygon(polygon, false);
+    TopoDS_Shape coll = create_prism_from_polygon(polygon, true);
+    projection_volumes_.push_back(proj);
+    collision_volumes_.push_back(coll);
 
-    RCLCPP_INFO(logger_, "  Projection prism null: %s, Collision prism null: %s",
-      proj_prism.IsNull() ? "YES" : "NO", coll_prism.IsNull() ? "YES" : "NO");
-
-    projection_volumes_.push_back(proj_prism);
-    collision_volumes_.push_back(coll_prism);
-
-    auto areas = process_constraint_volume(proj_prism, shape);
-    RCLCPP_INFO(logger_, "  Extracted %zu sample areas (exclusion wires)", areas.size());
-    for (const auto & area : areas) {
-      RCLCPP_INFO(logger_, "    -> Surface %d affected", area.surface_id);
-    }
+    auto areas = process_constraint_volume(proj, shape);
     sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
+    RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
   }
 
-  RCLCPP_INFO(logger_, "Total exclusion volumes created: %zu", projection_volumes_.size());
-  RCLCPP_INFO(logger_, "  Total collision volumes created: %zu", collision_volumes_.size());
+  // Count unique surfaces affected by exclusion wires
+  const size_t affected_surfaces = [&]() {
+    std::map<int, int> counts;
+    for (const auto & a : sample_areas_) {counts[a.surface_id]++;}
+    return counts.size();
+  }();
 
-  if (!sample_areas_.empty()) {
-    std::map<int, int> surface_wire_count;
-    for (const auto & area : sample_areas_) {
-      surface_wire_count[area.surface_id]++;
-    }
-
-    if (!surface_wire_count.empty()) {
-      RCLCPP_INFO(logger_, "  Affected surfaces:");
-      for (const auto & [surface_id, count] : surface_wire_count) {
-        RCLCPP_INFO(logger_, "    Surface %d: %d exclusion wire(s)", surface_id, count);
-      }
-    }
-  }
+  RCLCPP_INFO(logger_, "Exclusion analysis complete: %zu volume(s), %zu wire(s) "
+    "on %zu surface(s)",
+    collision_volumes_.size(), sample_areas_.size(), affected_surfaces);
 }
 
 std::vector<core::SampleArea> ExclusionZoneConstraint::get_sample_areas() const
@@ -539,52 +413,15 @@ bool ExclusionZoneConstraint::intersects_exclusion_zone(
   double tolerance) const
 {
   if (collision_volumes_.empty()) {
-    RCLCPP_DEBUG(logger_, "intersects_exclusion_zone: No collision volumes - returning false");
     return false;
   }
 
-  RCLCPP_DEBUG(logger_,
-        "intersects_exclusion_zone: Checking %zu collision volumes, grip_distance=%.4f m",
-    collision_volumes_.size(), grip_distance);
-
-  if (fcl_checker_ && fcl_checker_->is_valid()) {
-    bool result = fcl_checker_->collides_with_exclusions(gripper_transform, grip_distance,
-          tolerance);
-    RCLCPP_DEBUG(logger_, "intersects_exclusion_zone: FCL check result = %s",
-          result ? "COLLISION" : "clear");
-    return result;
+  if (!fcl_checker_ || !fcl_checker_->is_valid()) {
+    RCLCPP_WARN(logger_, "FCL checker not available - rejecting grasp conservatively");
+    return true;
   }
 
-  RCLCPP_WARN(logger_,
-    "intersects_exclusion_zone: FCL checker unavailable, falling back to OCCT (slower). "
-    "Set use_fcl=true and wire FCLCollisionChecker for production use.");
-
-  TopoDS_Shape configured_gripper = configure_gripper(gripper_, grip_distance);
-
-  BRepBuilderAPI_Transform transformer(configured_gripper, gripper_transform, Standard_True);
-  TopoDS_Shape placed_gripper = transformer.Shape();
-
-  BRepMesh_IncrementalMesh mesher(placed_gripper, mesh_linear_deflection_, Standard_False,
-    mesh_angular_deflection_);
-
-  for (size_t i = 0; i < collision_volumes_.size(); ++i) {
-    const auto & volume = collision_volumes_[i];
-    BRepExtrema_DistShapeShape dist(placed_gripper, volume);
-
-    if (dist.IsDone()) {
-      RCLCPP_DEBUG(logger_, "Volume %zu: distance = %.6f m (tolerance = %.4f m)",
-        i, dist.Value(), tolerance);
-      if (dist.Value() <= tolerance) {
-        RCLCPP_DEBUG(logger_, "-> COLLISION detected with exclusion volume %zu", i);
-        return true;
-      }
-    } else {
-      RCLCPP_WARN(logger_, "Volume %zu: Distance computation failed!", i);
-    }
-  }
-
-  RCLCPP_DEBUG(logger_, "intersects_exclusion_zone: All volumes clear");
-  return false;
+  return fcl_checker_->collides_with_exclusions(gripper_transform, grip_distance, tolerance);
 }
 
 std::string ExclusionZoneConstraint::get_name() const

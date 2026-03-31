@@ -34,6 +34,7 @@ namespace hold_and_weld_gripper_sampler
 {
 namespace filters
 {
+
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 SurfaceGeometryFilter::SurfaceGeometryFilter(
@@ -91,12 +92,11 @@ std::vector<int> SurfaceGeometryFilter::evaluate(const geometry::Topology & topo
       }
 
       valid_surface_ids.push_back(static_cast<int>(i));
-    } catch (const std::exception & e) {
-      RCLCPP_DEBUG(logger_, "Error processing surface %zu: %s - skipping", i, e.what());
-      continue;
+    } catch (Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "OCCT exception for surface %zu: %s - skipping",
+        i, e.GetMessageString());
     } catch (...) {
-      RCLCPP_DEBUG(logger_, "Unknown error processing surface %zu - skipping", i);
-      continue;
+      RCLCPP_WARN(logger_, "Error processing surface %zu - skipping", i);
     }
   }
 

@@ -24,6 +24,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <Eigen/Dense>
+
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -39,7 +41,6 @@ namespace hold_and_weld_gripper_sampler
 {
 namespace io
 {
-
 
 namespace
 {
@@ -79,30 +80,20 @@ gp_Trsf parse_origin(tinyxml2::XMLElement * origin)
     return transform;  // Identity
   }
 
-  // Parse xyz translation
   const char * xyz_str = origin->Attribute("xyz");
   if (xyz_str) {
     double x, y, z;
     if (std::sscanf(xyz_str, "%lf %lf %lf", &x, &y, &z) == 3) {
-      try {
-        transform.SetTranslation(gp_Vec(x, y, z));
-      } catch (...) {
-        // Silently use identity if translation fails
-      }
+      transform.SetTranslation(gp_Vec(x, y, z));
     }
   }
 
-  // Parse rpy rotation
   const char * rpy_str = origin->Attribute("rpy");
   if (rpy_str) {
     double roll, pitch, yaw;
     if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
-      try {
-        gp_Trsf rot_transform = rpy_to_transform(roll, pitch, yaw);
-        transform = transform * rot_transform;
-      } catch (...) {
-        // Silently use identity if rotation fails
-      }
+      gp_Trsf rot_transform = rpy_to_transform(roll, pitch, yaw);
+      transform = transform * rot_transform;
     }
   }
 
@@ -119,7 +110,6 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
   }
 
   try {
-    // Try each geometry type
     if (tinyxml2::XMLElement * box = geometry->FirstChildElement("box")) {
       const char * size_str = box->Attribute("size");
       if (!size_str) {
@@ -131,7 +121,6 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
         throw std::runtime_error("Failed to parse box size");
       }
 
-      // URDF: box centered at origin
       gp_Pnt corner(-x / 2.0, -y / 2.0, -z / 2.0);
       return BRepPrimAPI_MakeBox(corner, x, y, z).Shape();
 
@@ -150,7 +139,6 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
         throw std::runtime_error("Failed to parse cylinder parameters");
       }
 
-      // URDF: cylinder centered at origin, axis along Z
       gp_Ax2 axis(gp_Pnt(0, 0, -length / 2.0), gp_Dir(0, 0, 1));
       return BRepPrimAPI_MakeCylinder(axis, radius, length).Shape();
 
@@ -173,8 +161,9 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
     } else {
       throw std::runtime_error("Unknown or unsupported geometry type");
     }
-  } catch (const std::exception & e) {
-    throw std::runtime_error("Error creating shape from geometry: " + std::string(e.what()));
+  } catch (const Standard_Failure & e) {
+    throw std::runtime_error(
+      "OCCT error creating shape from geometry: " + std::string(e.GetMessageString()));
   } catch (...) {
     throw std::runtime_error("Unknown error creating shape from geometry");
   }
@@ -236,10 +225,8 @@ TopoDS_Shape GripperParser::extract_link_shape(
     }
 
     try {
-      // Create base shape
       TopoDS_Shape shape = create_shape_from_geometry(geometry);
 
-      // Apply origin transform if present
       tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
       if (origin) {
         gp_Trsf transform = parse_origin(origin);
@@ -248,6 +235,10 @@ TopoDS_Shape GripperParser::extract_link_shape(
       }
 
       return shape;
+    } catch (const Standard_Failure & e) {
+      throw std::runtime_error(
+        "OCCT error extracting shape for link '" + link_name + "': " +
+        std::string(e.GetMessageString()));
     } catch (const std::exception & e) {
       throw std::runtime_error(
         "Error extracting shape for link '" + link_name + "': " + std::string(e.what()));
@@ -276,7 +267,6 @@ Eigen::Vector3d GripperParser::extract_joint_axis(
     throw std::runtime_error("No <robot> element found");
   }
 
-  // Find the joint with matching name
   for (tinyxml2::XMLElement * joint = robot->FirstChildElement("joint");
     joint != nullptr;
     joint = joint->NextSiblingElement("joint"))
@@ -286,18 +276,15 @@ Eigen::Vector3d GripperParser::extract_joint_axis(
       continue;
     }
 
-    // Verify it's a prismatic joint
     const char * type = joint->Attribute("type");
     if (!type || std::string(type) != "prismatic") {
       throw std::runtime_error(
-              "Joint '" + joint_name + "' is not prismatic (type: " +
-              (type ? type : "unknown") + ")");
+        "Joint '" + joint_name + "' is not prismatic (type: " +
+        (type ? type : "unknown") + ")");
     }
 
-    // Extract axis
     tinyxml2::XMLElement * axis_elem = joint->FirstChildElement("axis");
     if (!axis_elem) {
-      // Default axis is Z
       return Eigen::Vector3d(0.0, 0.0, 1.0);
     }
 
@@ -360,7 +347,6 @@ std::pair<double, double> GripperParser::extract_joint_limits(
     throw std::runtime_error("No <robot> element found");
   }
 
-  // Find the joint with matching name
   for (tinyxml2::XMLElement * joint = robot->FirstChildElement("joint");
     joint != nullptr;
     joint = joint->NextSiblingElement("joint"))
@@ -411,13 +397,10 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
     throw std::runtime_error("No <robot> element found");
   }
 
-  // Find gripper_metadata element (can be inside a macro or at robot level)
   tinyxml2::XMLElement * metadata = nullptr;
 
-  // First check directly under robot
   metadata = robot->FirstChildElement("gripper_metadata");
 
-  // If not found, search in xacro:macro elements
   if (!metadata) {
     for (tinyxml2::XMLElement * macro = robot->FirstChildElement("xacro:macro");
       macro != nullptr && !metadata;
@@ -427,7 +410,6 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
     }
   }
 
-  // Also try without xacro namespace
   if (!metadata) {
     for (tinyxml2::XMLElement * macro = robot->FirstChildElement("macro");
       macro != nullptr && !metadata;
@@ -439,8 +421,8 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
 
   if (!metadata) {
     throw std::runtime_error(
-            "No <gripper_metadata> element found in URDF. "
-            "Please add gripper convention metadata to your URDF.");
+      "No <gripper_metadata> element found in URDF. "
+      "Please add gripper convention metadata to your URDF.");
   }
 
   tinyxml2::XMLElement * base_link = metadata->FirstChildElement("base_link");
@@ -481,7 +463,8 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
       finger_2_link = link_attr;
       finger_2_joint = joint_attr;
     } else {
-      throw std::runtime_error("Invalid finger_id (expected 1 or 2): " + std::to_string(finger_id));
+      throw std::runtime_error(
+        "Invalid finger_id (expected 1 or 2): " + std::to_string(finger_id));
     }
   }
 
@@ -511,8 +494,6 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
 
   gripper.base = extract_link_shape(urdf_string, gripper.base_link_name);
 
-  // Extract finger shapes and apply joint origin transforms
-  // The joint origin positions the finger link relative to the base
   TopoDS_Shape finger_1_raw = extract_link_shape(urdf_string, gripper.finger_1_link_name);
   TopoDS_Shape finger_2_raw = extract_link_shape(urdf_string, gripper.finger_2_link_name);
 
@@ -521,10 +502,10 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
 
   try {
     gripper.finger_1 = BRepBuilderAPI_Transform(finger_1_raw, finger_1_joint_origin,
-          Standard_True).Shape();
+      Standard_True).Shape();
     gripper.finger_2 = BRepBuilderAPI_Transform(finger_2_raw, finger_2_joint_origin,
-          Standard_True).Shape();
-  } catch (Standard_Failure & e) {
+      Standard_True).Shape();
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       std::string("OCCT error transforming finger shapes: ") + e.GetMessageString());
   }
@@ -535,9 +516,6 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
   auto [f1_lower, f1_upper] = extract_joint_limits(urdf_string, gripper.finger_1_joint_name);
   auto [f2_lower, f2_upper] = extract_joint_limits(urdf_string, gripper.finger_2_joint_name);
 
-  // max_opening = total finger spread = 2 × single-finger upper limit
-  // min_opening is always 0: the finger geometry already represents the
-  // closed (reference) position via the joint origin transforms applied above.
   double max_single_travel = std::max(f1_upper, f2_upper);
   gripper.max_opening = 2.0 * max_single_travel;
 
@@ -560,17 +538,17 @@ ParsedGripper GripperParser::parse_from_xacro_file(
   const std::string & xacro_path,
   const std::string & xacro_args)
 {
-  // Build xacro command
+  // NOTE: xacro_path and xacro_args are concatenated directly into a shell command.
+  // No sanitization is performed — inputs must be trusted (e.g. from a ROS2 param file).
   std::string command = "xacro " + xacro_path;
   if (!xacro_args.empty()) {
     command += " " + xacro_args;
   }
 
-  // Execute xacro and capture output
   std::array<char, 4096> buffer;
   std::string result;
 
-  // Use lambda wrapper to avoid -Wignored-attributes warning with pclose
+  // Lambda wrapper to avoid -Wignored-attributes warning with pclose
   auto pipe_deleter = [](FILE * fp) {if (fp) {pclose(fp);}};
   std::unique_ptr<FILE, decltype(pipe_deleter)> pipe(popen(command.c_str(), "r"), pipe_deleter);
   if (!pipe) {

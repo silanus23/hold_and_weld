@@ -32,6 +32,7 @@
 
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
@@ -96,6 +97,20 @@ protected:
   {
     mapper_ = std::make_shared<GeometryMapper>();
     gripper_ = create_mock_gripper();
+  }
+
+  // Build and wire an FCLCollisionChecker into a constraint so that
+  // intersects_secondary() can be called.  The primary shape is only needed
+  // for the FCL primary BVH; any non-null shape works.
+  void wire_fcl(
+    KissingSurfaceConstraint & constraint,
+    const std::vector<TopoDS_Shape> & secondaries,
+    const TopoDS_Shape & primary_for_fcl)
+  {
+    auto fcl = std::make_shared<geometry::FCLCollisionChecker>(
+      gripper_, primary_for_fcl);
+    fcl->add_secondary_shapes(secondaries);
+    constraint.set_fcl_checker(fcl);
   }
 
   std::shared_ptr<GeometryMapper> mapper_;
@@ -175,10 +190,11 @@ TEST_F(KissingSurfaceConstraintTest, CollisionWhenInsideSecondary)
   std::vector<TopoDS_Shape> secondaries = {large_secondary};
 
   KissingSurfaceConstraint constraint(
-    mapper_, gripper_, secondaries);
+    mapper_, gripper_, secondaries, 0.8, 0.001);
 
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
+  wire_fcl(constraint, secondaries, primary);
 
   // Place gripper at origin (inside the secondary)
   gp_Trsf origin_transform;
@@ -214,6 +230,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionWithGroundPlane)
 
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
+  wire_fcl(constraint, secondaries, primary);
 
   // Place gripper near secondary (should collide)
   gp_Trsf near_transform;
@@ -244,6 +261,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionWithFixture)
 
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
+  wire_fcl(constraint, secondaries, primary);
 
   // Place gripper at fixture location (should collide)
   // Place gripper near fixture (should collide)
@@ -275,6 +293,7 @@ TEST_F(KissingSurfaceConstraintTest, GripperOpensCorrectly)
 
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
+  wire_fcl(constraint, secondaries, primary);
 
   // Test with different grip distances - gripper far from secondaries
   gp_Trsf far_transform;
@@ -340,6 +359,12 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
   KissingSurfaceConstraint constraint_loose(
     mapper_, flat_gripper, secondaries, 0.8, 0.010);
   constraint_loose.analyze_constraints(topology);
+  {
+    auto fcl_loose = std::make_shared<geometry::FCLCollisionChecker>(
+      flat_gripper, primary);
+    fcl_loose->add_secondary_shapes(secondaries);
+    constraint_loose.set_fcl_checker(fcl_loose);
+  }
   EXPECT_TRUE(constraint_loose.intersects_secondary(0.03, pose))
     << "10 mm tolerance must detect gripper whose bottom face is 5 mm above secondary";
 
@@ -347,6 +372,12 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
   KissingSurfaceConstraint constraint_tight(
     mapper_, flat_gripper, secondaries, 0.8, 0.001);
   constraint_tight.analyze_constraints(topology);
+  {
+    auto fcl_tight = std::make_shared<geometry::FCLCollisionChecker>(
+      flat_gripper, primary);
+    fcl_tight->add_secondary_shapes(secondaries);
+    constraint_tight.set_fcl_checker(fcl_tight);
+  }
   EXPECT_FALSE(constraint_tight.intersects_secondary(0.03, pose))
     << "1 mm tolerance must not fire when gripper bottom face is 5 mm above secondary";
 }
@@ -380,6 +411,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionWithAnySecondary)
 
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
+  wire_fcl(constraint, secondaries, primary);
 
   gp_Trsf at_bottom;
   at_bottom.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
@@ -439,6 +471,11 @@ TEST_F(KissingSurfaceConstraintTest, EmptySecondaryShapesVectorProducesNoResults
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
+
+  // Wire an FCL checker with no secondaries — intersects_secondary() returns
+  // false immediately when secondary_shapes_ is empty (checked before FCL).
+  auto fcl = std::make_shared<geometry::FCLCollisionChecker>(gripper_, primary);
+  constraint.set_fcl_checker(fcl);
 
   // No secondaries → nothing can be banned or partially excluded
   EXPECT_TRUE(constraint.get_banned_surface_ids().empty())

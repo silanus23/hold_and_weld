@@ -57,16 +57,11 @@ struct OrientationConfig
   double dual_seed_dedup_tolerance_deg = 3.0;
   size_t max_edges_per_contact = 0;
   std::vector<double> angle_offsets = {-15.0, 0.0, 15.0};
-  /// When true, orientation search stops after the first valid grasp per contact pair.
-  /// WARNING: This makes the quality sort in GraspFinder::find() largely meaningless —
-  /// only one candidate per pair is ever generated, so the sort has little to rank.
-  /// Use false (exhaustive) when grasp quality matters; true only for speed-critical paths.
+  // When true, orientation search stops after the first valid grasp per contact pair.
+  // TODO(@silanus23): Jump over grasp finder if it's true cause otherwise meaningless work
   bool stop_on_first_valid = false;
 
-  /// Collision tolerance for primary shape and exclusion zone checks (meters).
-  /// Intentionally looser than GraspFinderConfig::collision_tolerance (which controls
-  /// secondary/fixture checks) to avoid false rejections during pose sampling.
-  /// Default 1mm is appropriate for orientation finding numerical stability.
+  // Collision tolerance for primary shape and exclusion zone checks (meters).
   double collision_tolerance = 0.001;
 };
 
@@ -116,6 +111,15 @@ Grasp to_grasp(const GraspCandidate & candidate);
 class GraspOrientationFinder
 {
 public:
+  /**
+   * @brief Constructor
+   *
+   * @param primary_shape Primary workpiece shape used for collision validation
+   * @param gripper Parsed gripper containing finger geometry and kinematics
+   * @param exclusion_constraint Constraint defining forbidden zones (welds, screws, etc.)
+   * @param kissing_constraint Constraint defining secondary shape collisions (fixtures, ground)
+   * @param config Tuning parameters for orientation search (finger dimensions, angle offsets, etc.)
+   */
   GraspOrientationFinder(
     const TopoDS_Shape & primary_shape,
     const ParsedGripper & gripper,
@@ -126,9 +130,6 @@ public:
 
   /**
    * @brief Set FCL collision checker for fast collision queries
-   *
-   * When set, collides_with_primary() will use FCL instead of OCCT.
-   * This significantly improves performance for repeated collision checks.
    *
    * @param fcl_checker Shared pointer to FCL collision checker
    */
@@ -163,9 +164,6 @@ private:
    * @brief Find edges within finger circle around contact point
    *
    * Only checks edges belonging to the contact surface (not all edges in topology).
-   * For each edge, finds ALL local minima points (not just the global minimum).
-   * Uses BRepExtrema_ExtPC to find orthogonal projections, then filters
-   * to keep only local minima within finger reach.
    *
    * @param contact Contact point
    * @param surface_id ID of the surface where contact point lies
@@ -179,11 +177,8 @@ private:
   ) const;
 
   /**
-   * @brief Find all local minima points on a single edge
+   * @brief Find all local minima points on a single edge. This assumed to be most reachable point.
    *
-   * Uses BRepExtrema_ExtPC to find all extrema (points where the distance
-   * derivative equals zero), then filters to keep only local minima within
-   * finger reach.
    *
    * @param contact Contact point to measure distance from
    * @param edge Edge to analyze
@@ -195,10 +190,7 @@ private:
   ) const;
 
   /**
-   * @brief Find closest edges to contact point
-   *
-   * Sorts edges by distance and returns the top N closest edges
-   * (limited by max_edge_candidates if set).
+   * @brief Find closest edges to contact point. This assumed to be most reachable point.
    *
    * @param edges Edge constraints (distance already computed)
    * @return Filtered edge constraints sorted by distance
@@ -279,7 +271,6 @@ private:
    * @brief Compute quality score for grasp (higher = better)
    *
    * Quality is based on minimum edge clearance at BOTH contact points.
-   * Uses the smaller of the two clearances (weakest point determines quality).
    *
    * @param contact_1 First contact point
    * @param contact_2 Second contact point

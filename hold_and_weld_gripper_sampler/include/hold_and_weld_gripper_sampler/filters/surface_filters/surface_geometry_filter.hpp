@@ -47,8 +47,19 @@ public:
     double max_mean_curvature = 0.1
   );
 
+  /**
+   * @brief Evaluate which surfaces pass the area and curvature thresholds
+   *
+   * @param topology Topology containing surface geometry and attributes
+   * @return Vector of surface IDs that satisfy both min_area and max_mean_curvature
+   */
   std::vector<int> evaluate(const geometry::Topology & topology) const override;
 
+  /**
+   * @brief Get human-readable filter name for logging and diagnostics
+   *
+   * @return Filter name string
+   */
   std::string get_name() const override;
 
 private:

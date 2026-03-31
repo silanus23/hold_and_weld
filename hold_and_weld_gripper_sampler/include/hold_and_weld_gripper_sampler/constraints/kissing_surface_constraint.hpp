@@ -35,26 +35,21 @@ namespace hold_and_weld_gripper_sampler
 namespace constraints
 {
 
-
-
 /**
  * @brief Statistics for collision rejection tracking
  */
 struct CollisionStats
 {
   size_t total_checks = 0;
-  size_t fcl_secondary_rejections = 0;
-  size_t occt_secondary_rejections = 0;
-  size_t occt_failures = 0;
-  size_t mesh_failures = 0;
+  size_t fcl_rejections = 0;
 
+  /**
+   * @brief Reset all counters to zero
+   */
   void reset()
   {
     total_checks = 0;
-    fcl_secondary_rejections = 0;
-    occt_secondary_rejections = 0;
-    occt_failures = 0;
-    mesh_failures = 0;
+    fcl_rejections = 0;
   }
 };
 
@@ -89,17 +84,12 @@ public:
   /**
    * @brief Set FCL collision checker for fast collision queries
    *
-   * When set, intersects_secondary() will use FCL instead of OCCT.
-   * The FCL checker must have secondary shapes added via add_secondary_shapes().
-   *
    * @param fcl_checker Shared pointer to FCL collision checker
    */
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
 
   /**
    * @brief Analyze contact between primary and secondaries
-   *
-   * Must be called before get_banned_surface_ids() or get_sample_areas()
    *
    * @param topology Primary shape topology
    */
@@ -136,6 +126,11 @@ public:
     const Eigen::Isometry3d & grasp_pose
   ) const;
 
+  /**
+   * @brief Get human-readable name of this constraint
+   *
+   * @return Constraint name string
+   */
   std::string get_name() const;
 
   /**
@@ -170,7 +165,6 @@ private:
   double contact_threshold_;
   double collision_tolerance_;
 
-  // Optional FCL collision checker for fast queries
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
 
   // Results from analysis

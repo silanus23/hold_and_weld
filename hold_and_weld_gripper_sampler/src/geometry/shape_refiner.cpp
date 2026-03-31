@@ -47,33 +47,37 @@ ShapeRefiner::ShapeRefiner(
   double max_cylinder_radius,
   double max_arc_length,
   double enclave_area_ratio,
-  double enclave_angle_threshold)
+  double enclave_angle_threshold,
+  double max_face_area_ratio)
 : max_cylinder_radius_(max_cylinder_radius),
   max_arc_length_(max_arc_length),
   enclave_area_ratio_(enclave_area_ratio),
-  enclave_angle_threshold_(enclave_angle_threshold) {}
+  enclave_angle_threshold_(enclave_angle_threshold),
+  max_face_area_ratio_(max_face_area_ratio) {}
 
 TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
 {
-  // Surface refinement strategy for gripper sampling:
-  // 1. Heal/fix topology issues
-  // 2. Identify and remove small enclave features (shallow pockets, holes)
-  // 3. Split large curved surfaces into smaller patches for better sampling coverage
-  //    - Cylinders: split based on radius and arc length
-  //    - BSpline/Bezier: detect inflection points by sampling curvature
-  //    - Other surfaces: conservative edge-based splitting (may over-split, won't under-split)
-  // 4. Unify adjacent coplanar faces to reduce unnecessary patch count
   try {
     ShapeFix_Shape healer(raw_shape);
     healer.Perform();
     TopoDS_Shape current_shape = healer.Shape();
 
     GProp_GProps global_props;
-    BRepGProp::SurfaceProperties(current_shape, global_props);
+    try {
+      BRepGProp::SurfaceProperties(current_shape, global_props);
+    } catch (Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "Failed to compute global surface area: %s - "
+        "enclave and area ratio checks will be skipped", e.GetMessageString());
+      return current_shape;
+    }
     double global_total_area = global_props.Mass();
 
+    // TODO(@silanus23): Add enable_enclave_removal bool config parameter
     TopTools_ListOfShape faces_to_remove;
     identify_enclave_features(current_shape, global_total_area, faces_to_remove);
+
+    RCLCPP_DEBUG(logger_, "Enclave detection: %d face(s) marked for removal",
+      faces_to_remove.Size());
 
     if (!faces_to_remove.IsEmpty()) {
       try {
@@ -83,27 +87,23 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
         eraser.Build();
         if (eraser.IsDone()) {
           current_shape = eraser.Shape();
-
           ShapeUpgrade_UnifySameDomain mid_healer(current_shape, true, true);
           mid_healer.Build();
           current_shape = mid_healer.Shape();
+          RCLCPP_DEBUG(logger_, "Enclave removal complete");
         }
-      } catch (const std::exception & e) {
+      } catch (Standard_Failure & e) {
         RCLCPP_WARN(logger_, "Defeaturing failed: %s - continuing without enclave removal",
-          e.what());
+          e.GetMessageString());
       } catch (...) {
-        RCLCPP_WARN(logger_,
-              "Defeaturing failed with unknown error - continuing without enclave removal");
+        RCLCPP_WARN(logger_, "Defeaturing failed - continuing without enclave removal");
       }
     }
 
     BRepFeat_SplitShape splitter(current_shape);
     bool needs_split = false;
+    size_t total_splits = 0;
 
-    // Split large curved surfaces based on their type:
-    // - Analytical surfaces (cylinder, cone): use geometric properties (radius, angle)
-    // - Freeform surfaces (BSpline, Bezier): sample interior to detect inflection points
-    // - Generic/unknown surfaces: conservative edge-based estimation (may over-split)
     TopExp_Explorer face_exp(current_shape, TopAbs_FACE);
     for (; face_exp.More(); face_exp.Next()) {
       const TopoDS_Face & face = TopoDS::Face(face_exp.Current());
@@ -114,23 +114,108 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
       GeomAbs_SurfaceType type = adaptor.GetType();
       std::vector<double> u_splits, v_splits;
 
-      if (type == GeomAbs_Cylinder) {
-        // Cylinders: split based on radius and circumference
-        get_cylinder_splits(face, u_splits);
-      } else if (type == GeomAbs_Cone) {
-        // Cones: analytical edge-based splitting
-        get_analytical_splits(face, u_splits, v_splits);
-      } else if (type == GeomAbs_BSplineSurface || type == GeomAbs_BezierSurface) {
-        // Freeform surfaces: detect curvature changes by sampling interior
+      // For freeform surfaces, detect inflection points by sampling curvature
+      if (type == GeomAbs_BSplineSurface || type == GeomAbs_BezierSurface) {
         find_inflections(adaptor, true, u_splits);
         find_inflections(adaptor, false, v_splits);
-      } else {
-        // Fallback for other surface types: conservative edge measurement
-        // (may create extra splits, but ensures large curved areas get subdivided)
-        check_edge_arc_lengths(face, u_splits, v_splits);
       }
 
+      // Always check boundary arc lengths — handles all surface types including
+      // distorted/exported cylinders and edgeless closed surfaces
+      std::vector<double> edge_u_splits, edge_v_splits;
+      check_edge_arc_lengths(face, edge_u_splits, edge_v_splits);
+      u_splits.insert(u_splits.end(), edge_u_splits.begin(), edge_u_splits.end());
+      v_splits.insert(v_splits.end(), edge_v_splits.begin(), edge_v_splits.end());
+
       if (u_splits.empty() && v_splits.empty()) {continue;}
+
+      Handle(Geom_Surface) surf = adaptor.Surface().Surface();
+      double u_min = adaptor.FirstUParameter();
+      double u_max = adaptor.LastUParameter();
+      double v_min = adaptor.FirstVParameter();
+      double v_max = adaptor.LastVParameter();
+
+      const char * type_str = "Other";
+      switch (type) {
+        case GeomAbs_Cylinder:       type_str = "Cylinder"; break;
+        case GeomAbs_Cone:           type_str = "Cone"; break;
+        case GeomAbs_Sphere:         type_str = "Sphere"; break;
+        case GeomAbs_Torus:          type_str = "Torus"; break;
+        case GeomAbs_BSplineSurface: type_str = "BSpline"; break;
+        case GeomAbs_BezierSurface:  type_str = "Bezier"; break;
+        default: break;
+      }
+
+      RCLCPP_DEBUG(logger_, "Splitting %s face: %zu U split(s), %zu V split(s)",
+        type_str, u_splits.size(), v_splits.size());
+
+      for (double u : u_splits) {
+        Handle(Geom_Curve) u_iso = surf->UIso(u);
+        BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
+        if (edge_maker.IsDone()) {
+          splitter.Add(edge_maker.Edge(), face);
+          needs_split = true;
+          total_splits++;
+        }
+      }
+
+      for (double v : v_splits) {
+        Handle(Geom_Curve) v_iso = surf->VIso(v);
+        BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
+        if (edge_maker.IsDone()) {
+          splitter.Add(edge_maker.Edge(), face);
+          needs_split = true;
+          total_splits++;
+        }
+      }
+    }
+
+    if (needs_split) {
+      splitter.Build();
+      if (splitter.IsDone()) {
+        current_shape = splitter.Shape();
+        RCLCPP_DEBUG(logger_, "Surface splitting complete: %zu split(s) applied", total_splits);
+      }
+    }
+
+    // Final pass: force-split any face whose area ratio still exceeds threshold
+    BRepFeat_SplitShape final_splitter(current_shape);
+    bool needs_final_split = false;
+
+    TopExp_Explorer final_exp(current_shape, TopAbs_FACE);
+    for (; final_exp.More(); final_exp.Next()) {
+      const TopoDS_Face & face = TopoDS::Face(final_exp.Current());
+
+      GProp_GProps face_props;
+      try {
+        BRepGProp::SurfaceProperties(face, face_props);
+      } catch (Standard_Failure &) {
+        continue;
+      }
+
+      double area_ratio = face_props.Mass() / global_total_area;
+      if (area_ratio <= max_face_area_ratio_) {continue;}
+
+      BRepAdaptor_Surface adaptor(face);
+      const char * type_str = "Other";
+      switch (adaptor.GetType()) {
+        case GeomAbs_Plane:          type_str = "Plane"; break;
+        case GeomAbs_Cylinder:       type_str = "Cylinder"; break;
+        case GeomAbs_Cone:           type_str = "Cone"; break;
+        case GeomAbs_Sphere:         type_str = "Sphere"; break;
+        case GeomAbs_Torus:          type_str = "Torus"; break;
+        case GeomAbs_BSplineSurface: type_str = "BSpline"; break;
+        case GeomAbs_BezierSurface:  type_str = "Bezier"; break;
+        default: break;
+      }
+
+      RCLCPP_WARN(logger_,
+        "Face still exceeds area ratio (%.1f%% > %.1f%%) after splitting - "
+        "forcing edge-based split. Surface type: %s",
+        area_ratio * 100.0, max_face_area_ratio_ * 100.0, type_str);
+
+      std::vector<double> u_splits, v_splits;
+      check_edge_arc_lengths(face, u_splits, v_splits);
 
       Handle(Geom_Surface) surf = adaptor.Surface().Surface();
       double u_min = adaptor.FirstUParameter();
@@ -142,8 +227,8 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
         Handle(Geom_Curve) u_iso = surf->UIso(u);
         BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
         if (edge_maker.IsDone()) {
-          splitter.Add(edge_maker.Edge(), face);
-          needs_split = true;
+          final_splitter.Add(edge_maker.Edge(), face);
+          needs_final_split = true;
         }
       }
 
@@ -151,43 +236,17 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
         Handle(Geom_Curve) v_iso = surf->VIso(v);
         BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
         if (edge_maker.IsDone()) {
-          splitter.Add(edge_maker.Edge(), face);
-          needs_split = true;
+          final_splitter.Add(edge_maker.Edge(), face);
+          needs_final_split = true;
         }
       }
     }
 
-    if (needs_split) {
-      splitter.Build();
-      if (splitter.IsDone()) {
-        current_shape = splitter.Shape();
-      }
-    }
-
-    TopExp_Explorer sanity_exp(current_shape, TopAbs_FACE);
-    for (; sanity_exp.More(); sanity_exp.Next()) {
-      const TopoDS_Face & face = TopoDS::Face(sanity_exp.Current());
-      GProp_GProps face_props;
-      BRepGProp::SurfaceProperties(face, face_props);
-      double face_area = face_props.Mass();
-
-      if (face_area > (global_total_area * 0.3)) {
-        BRepAdaptor_Surface adaptor(face);
-        const char * type_str = "Other";
-        switch (adaptor.GetType()) {
-          case GeomAbs_Plane: type_str = "Plane"; break;
-          case GeomAbs_Cylinder: type_str = "Cylinder"; break;
-          case GeomAbs_Cone: type_str = "Cone"; break;
-          case GeomAbs_Sphere: type_str = "Sphere"; break;
-          case GeomAbs_Torus: type_str = "Torus"; break;
-          case GeomAbs_BSplineSurface: type_str = "BSpline"; break;
-          case GeomAbs_BezierSurface: type_str = "Bezier"; break;
-          default: break;
-        }
-        RCLCPP_WARN(logger_,
-          "Large unsplit surface detected (%.1f%% of total area). "
-          "This may reduce gripper sampling quality. Surface type: %s",
-          (face_area / global_total_area * 100.0), type_str);
+    if (needs_final_split) {
+      final_splitter.Build();
+      if (final_splitter.IsDone()) {
+        current_shape = final_splitter.Shape();
+        RCLCPP_DEBUG(logger_, "Final area ratio split complete");
       }
     }
 
@@ -195,9 +254,9 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
     final_unifier.Build();
 
     return final_unifier.Shape();
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Error in shape refinement: %s - returning original shape",
-      e.what());
+  } catch (Standard_Failure & e) {
+    RCLCPP_ERROR(logger_, "OCCT error in shape refinement: %s - returning original shape",
+      e.GetMessageString());
     return raw_shape;
   } catch (...) {
     RCLCPP_ERROR(logger_, "Unknown error in shape refinement - returning original shape");
@@ -226,15 +285,17 @@ void ShapeRefiner::identify_enclave_features(
     for (; wire_exp.More(); wire_exp.Next()) {
       const TopoDS_Wire & wire = TopoDS::Wire(wire_exp.Current());
 
-            // Skip the outer wire - only process inner wires (holes)
+      // Skip the outer wire — only process inner wires (holes)
       if (!outer_wire.IsNull() && wire.IsSame(outer_wire)) {
         continue;
       }
 
       TopTools_ListOfShape enclave_faces;
+      // BFS from inner wire boundary to collect all enclosed faces
       collect_enclave_faces(wire, parent_face, edge_to_faces, enclave_faces);
 
       if (should_suppress_enclave(parent_face, enclave_faces, global_total_area)) {
+        RCLCPP_DEBUG(logger_, "Suppressing enclave with %d face(s)", enclave_faces.Size());
         for (TopTools_ListIteratorOfListOfShape it(enclave_faces); it.More(); it.Next()) {
           kill_list.Append(it.Value());
           processed_faces.Add(it.Value());
@@ -294,7 +355,6 @@ bool ShapeRefiner::should_suppress_enclave(
 {
   if (enclave_faces.IsEmpty()) {return false;}
 
-    // Check total area of enclave
   double enclave_area = 0.0;
   GProp_GProps area_props;
   for (TopTools_ListIteratorOfListOfShape it(enclave_faces); it.More(); it.Next()) {
@@ -302,27 +362,20 @@ bool ShapeRefiner::should_suppress_enclave(
     enclave_area += area_props.Mass();
   }
 
-    // If enclave is too large (occupies significant chunk), keep it
   if ((enclave_area / global_total_area) > enclave_area_ratio_) {return false;}
 
-    // Check angle between parent and enclave walls
-    // Small angle (< threshold) = shallow pocket (nearly parallel) → REMOVE
-    // Large angle (> threshold) = steep walls (poking out) → KEEP
   gp_Dir n_parent = calculate_safe_normal(parent_face);
 
   for (TopTools_ListIteratorOfListOfShape it(enclave_faces); it.More(); it.Next()) {
     gp_Dir n_wall = calculate_safe_normal(TopoDS::Face(it.Value()));
     double angle_deg = n_parent.Angle(n_wall) * (180.0 / M_PI);
 
-    // If angle is steep (not near 0° or 180°), walls are poking out significantly - keep it
-    // Angles near 0° or 180° mean walls are nearly parallel/anti-parallel (shallow pocket)
-    // Only keep enclave if angle is in the "steep" middle range
+    // Steep walls indicate a real feature — keep the enclave
     if (angle_deg > enclave_angle_threshold_ && angle_deg < (180.0 - enclave_angle_threshold_)) {
-      return false;  // Steep walls - keep the enclave
+      return false;
     }
   }
 
-    // All enclave faces have shallow angles - safe to remove
   return true;
 }
 
@@ -333,7 +386,8 @@ void ShapeRefiner::find_inflections(
 {
   double start = scan_u ? surface.FirstUParameter() : surface.FirstVParameter();
   double end = scan_u ? surface.LastUParameter() : surface.LastVParameter();
-  double other_mid = scan_u ? (surface.FirstVParameter() + surface.LastVParameter()) / 2.0 :
+  double other_mid = scan_u ?
+    (surface.FirstVParameter() + surface.LastVParameter()) / 2.0 :
     (surface.FirstUParameter() + surface.LastUParameter()) / 2.0;
 
   const int num_samples = 25;
@@ -349,14 +403,10 @@ void ShapeRefiner::find_inflections(
     if (props.IsCurvatureDefined()) {
       double current_k = props.GaussianCurvature();
       if (i > 0 && (prev_k * current_k) < 0.0) {
-        // Inflection point detected (curvature sign change)
-        // Interpolate exact position using linear approximation
-        // Check that curvatures are significant to avoid division by near-zero
-        // (both curvatures near zero could be numerical noise, not real inflection)
+        // Curvature sign change — interpolate split position
         double denom = std::abs(prev_k) + std::abs(current_k);
         if (denom > 1e-10) {
-          double ratio = std::abs(prev_k) / denom;
-          splits.push_back((start + (i - 1) * step) + (step * ratio));
+          splits.push_back((start + (i - 1) * step) + (step * std::abs(prev_k) / denom));
         }
       }
       prev_k = current_k;
@@ -364,47 +414,6 @@ void ShapeRefiner::find_inflections(
   }
 }
 
-void ShapeRefiner::get_cylinder_splits(
-  const TopoDS_Face & face,
-  std::vector<double> & u_splits) const
-{
-  BRepAdaptor_Surface surface(face);
-  gp_Cylinder cylinder = surface.Cylinder();
-  double radius = cylinder.Radius();
-
-    // Check radius limit for perfect cylinders
-  if (radius > max_cylinder_radius_) {
-    double u_min = surface.FirstUParameter();
-    double u_max = surface.LastUParameter();
-    double circumference = 2.0 * M_PI * radius;
-
-    int num_pieces = std::ceil(circumference / max_arc_length_);
-    if (num_pieces > 1) {
-      double step = (u_max - u_min) / num_pieces;
-      for (int i = 1; i < num_pieces; ++i) {
-        u_splits.push_back(u_min + (i * step));
-      }
-      return;
-    }
-  }
-
-    // Check arc length using edge measurement
-  std::vector<double> v_splits_unused;
-  check_edge_arc_lengths(face, u_splits, v_splits_unused);
-}
-
-void ShapeRefiner::get_analytical_splits(
-  const TopoDS_Face & face,
-  std::vector<double> & u_splits,
-  std::vector<double> & v_splits) const
-{
-  check_edge_arc_lengths(face, u_splits, v_splits);
-}
-
-// Estimates surface arc lengths by measuring boundary edges.
-// This is a conservative fallback for generic surfaces where interior curvature
-// cannot be analytically determined. Uses max edge length for both U and V directions
-// to avoid missing needed splits (at the cost of potentially creating extra splits).
 void ShapeRefiner::check_edge_arc_lengths(
   const TopoDS_Face & face,
   std::vector<double> & u_splits,
@@ -416,49 +425,27 @@ void ShapeRefiner::check_edge_arc_lengths(
   double v_min = surface.FirstVParameter();
   double v_max = surface.LastVParameter();
 
-    // Measure all boundary edges to estimate surface arc lengths.
-    // This is a fallback method for generic surfaces where we can't analyze interior curvature.
-  TopExp_Explorer edge_exp(face, TopAbs_EDGE);
+  // Conservative fallback: use max boundary edge length for both U and V.
+  // May create extra splits but guarantees no needed splits are missed.
   double max_u_edge_length = 0.0;
   double max_v_edge_length = 0.0;
   bool has_edges = false;
 
-  for (; edge_exp.More(); edge_exp.Next()) {
+  for (TopExp_Explorer edge_exp(face, TopAbs_EDGE); edge_exp.More(); edge_exp.Next()) {
     has_edges = true;
-    const TopoDS_Edge & edge = TopoDS::Edge(edge_exp.Current());
-
     try {
-      BRepAdaptor_Curve curve(edge);
+      BRepAdaptor_Curve curve(TopoDS::Edge(edge_exp.Current()));
       double length = GCPnts_AbscissaPoint::Length(curve);
-
-      // CONSERVATIVE STRATEGY FOR SAMPLING:
-      // We assign the maximum edge length to BOTH U and V directions.
-      //
-      // Why not classify edges by direction?
-      // - Boundary edges don't reliably represent interior surface arc length
-      // - For doubly curved surfaces, interior can curve more than edges suggest
-      // - Edge classification heuristics can fail on complex topology
-      //
-      // Conservative approach (current):
-      // - Use max(all edges) for both directions
-      // - May create extra unnecessary splits → acceptable for sampling
-      // - Guarantees we won't MISS needed splits → critical for coverage
-      //
-      // For surfaces where we can analyze curvature (BSpline/Bezier), we use
-      // find_inflections() instead which samples the interior properly.
       max_u_edge_length = std::max(max_u_edge_length, length);
       max_v_edge_length = std::max(max_v_edge_length, length);
-    } catch (const std::exception & e) {
-            // Skip degenerate or problematic edges
-      RCLCPP_DEBUG(logger_, "Failed to compute edge length: %s", e.what());
-      continue;
+    } catch (Standard_Failure & e) {
+      RCLCPP_DEBUG(logger_, "Failed to compute edge length: %s", e.GetMessageString());
     } catch (...) {
-      RCLCPP_DEBUG(logger_, "Failed to compute edge length (unknown error)");
-      continue;
+      RCLCPP_DEBUG(logger_, "Failed to compute edge length");
     }
   }
 
-    // Fallback for surfaces without edges (closed surfaces like spheres)
+  // Fallback for edgeless surfaces (e.g. closed spheres)
   if (!has_edges || (max_u_edge_length < 1e-6 && max_v_edge_length < 1e-6)) {
     GeomAbs_SurfaceType type = surface.GetType();
     if (type == GeomAbs_Cylinder) {
@@ -467,17 +454,13 @@ void ShapeRefiner::check_edge_arc_lengths(
       max_u_edge_length = 2.0 * M_PI * surface.Sphere().Radius();
       max_v_edge_length = M_PI * surface.Sphere().Radius();
     } else {
-      return;       // Can't estimate arc length
+      return;
     }
 
-        // Adjust for partial parametric range
-    double u_range_ratio = (u_max - u_min) / (2.0 * M_PI);
-    double v_range_ratio = (v_max - v_min) / (2.0 * M_PI);
-    max_u_edge_length *= u_range_ratio;
-    max_v_edge_length *= v_range_ratio;
+    max_u_edge_length *= (u_max - u_min) / (2.0 * M_PI);
+    max_v_edge_length *= (v_max - v_min) / (2.0 * M_PI);
   }
 
-    // Split U direction if edge exceeds limit
   if (max_u_edge_length > max_arc_length_) {
     int num_pieces = std::ceil(max_u_edge_length / max_arc_length_);
     double step = (u_max - u_min) / num_pieces;
@@ -486,7 +469,6 @@ void ShapeRefiner::check_edge_arc_lengths(
     }
   }
 
-    // Split V direction if edge exceeds limit
   if (max_v_edge_length > max_arc_length_) {
     int num_pieces = std::ceil(max_v_edge_length / max_arc_length_);
     double step = (v_max - v_min) / num_pieces;
@@ -503,7 +485,6 @@ bool ShapeRefiner::is_physically_planar(const TopoDS_Face & face) const
 
   gp_Dir ref_normal = calculate_safe_normal(face);
 
-    // Check corners for deviation
   double u_params[] = {surface.FirstUParameter(), surface.LastUParameter()};
   double v_params[] = {surface.FirstVParameter(), surface.LastVParameter()};
 
@@ -526,18 +507,17 @@ gp_Dir ShapeRefiner::calculate_safe_normal(const TopoDS_Face & face) const
     double v_mid = (surface.FirstVParameter() + surface.LastVParameter()) / 2.0;
 
     GeomLProp_SLProps props(surface.Surface().Surface(), u_mid, v_mid, 1, 1e-7);
+
     if (!props.IsNormalDefined()) {
-      // Try offset point
-      u_mid = surface.FirstUParameter() + (surface.LastUParameter() - surface.FirstUParameter()) *
-        0.1;
-      v_mid = surface.FirstVParameter() + (surface.LastVParameter() - surface.FirstVParameter()) *
-        0.1;
+      u_mid = surface.FirstUParameter() +
+        (surface.LastUParameter() - surface.FirstUParameter()) * 0.1;
+      v_mid = surface.FirstVParameter() +
+        (surface.LastVParameter() - surface.FirstVParameter()) * 0.1;
       props.SetParameters(u_mid, v_mid);
     }
 
     if (!props.IsNormalDefined()) {
-      // Last resort: unable to compute actual normal, use default Z-up
-      RCLCPP_WARN(logger_, "Unable to compute face normal, using default Z-up direction");
+      RCLCPP_WARN(logger_, "Unable to compute face normal, using Z-up fallback");
       return gp_Dir(0, 0, 1);
     }
 

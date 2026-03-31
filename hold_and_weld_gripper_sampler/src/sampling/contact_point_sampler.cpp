@@ -27,31 +27,31 @@
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
-#include <BRepIntCurveSurface_Inter.hxx>
-#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom2d_Curve.hxx>
 #include <GeomLProp_SLProps.hxx>
 #include <Geom_Surface.hxx>
-#include <gp_Dir.hxx>
-#include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <GProp_GProps.hxx>
 #include <rclcpp/rclcpp.hpp>
 #include <Standard_Failure.hxx>
-#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+
+// TODO(@silanus23): Surface pairing uses face_min_distance as a pre-filter which false-rejects
+// valid pairs on organic/curved shapes where face edges are close but centers are graspable.
+// Fix: remove distance check from find_surface_pairs, keep only normal angle pre-filter,
+// let contact sampling handle distance validation entirely.
+// This is required before using the system on non-prismatic workpieces.
 
 namespace hold_and_weld_gripper_sampler
 {
 namespace sampling
 {
 
-// Logger for this module
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 ContactPointSampler::ContactPointSampler(const SamplingConfig & config)
@@ -73,12 +73,8 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
   size_t rejected_diagonal = 0;
   size_t rejected_grip_distance = 0;
 
-  RCLCPP_INFO(logger_, "Starting contact point sampling");
-  RCLCPP_INFO(logger_, "  Valid surfaces: %zu", valid_surface_ids.size());
-  RCLCPP_INFO(logger_, "  Exclusion areas: %zu", exclusion_areas.size());
-  RCLCPP_INFO(logger_, "  Gripper opening range: [%.3f, %.3f] m",
-    config_.min_gripper_opening, config_.max_gripper_opening);
-  RCLCPP_INFO(logger_, "  Sample density: %.4f m", config_.sample_density);
+  RCLCPP_INFO(logger_, "Starting contact point sampling on %zu surfaces, %zu exclusion areas",
+    valid_surface_ids.size(), exclusion_areas.size());
 
   if (valid_surface_ids.empty()) {
     RCLCPP_WARN(logger_, "No valid surfaces provided - returning empty contact pairs");
@@ -107,33 +103,28 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       total_samples++;
       gp_Pnt contact_2;
 
-      if (!find_opposing_contact(contact_1, pair.face_1, pair.face_2, contact_2)) {
+      if (!find_opposing_contact(contact_1, pair.face_2, contact_2)) {
         rejected_no_opposing++;
         continue;
       }
 
-      // Check if contact_2 is in an exclusion zone on surface 2
       if (is_point_in_exclusion(contact_2, pair.face_2, pair.surface_id_2, exclusion_areas)) {
         rejected_exclusion++;
         continue;
       }
 
-      // Check if contact_2 is in an allowed sample area on surface 2
       if (!is_point_in_allowed_area(contact_2, pair.face_2, pair.surface_id_2, exclusion_areas)) {
         rejected_not_in_allowed_area++;
         continue;
       }
 
-      // Validate pairing is "direct" (not diagonal)
       if (!is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2)) {
         rejected_diagonal++;
         continue;
       }
 
-      // Compute grip distance
       double grip_distance = contact_1.Distance(contact_2);
 
-      // Re-validate grip distance is still within range after projection
       if (grip_distance < config_.min_gripper_opening ||
         grip_distance > config_.max_gripper_opening)
       {
@@ -144,7 +135,6 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
       auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
 
-      // Skip if normals couldn't be computed
       if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
         rejected_no_opposing++;
         continue;
@@ -174,33 +164,28 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       total_samples++;
       gp_Pnt contact_1;
 
-      if (!find_opposing_contact(contact_2, pair.face_2, pair.face_1, contact_1)) {
+      if (!find_opposing_contact(contact_2, pair.face_1, contact_1)) {
         rejected_no_opposing++;
         continue;
       }
 
-      // Check if contact_1 is in an exclusion zone on surface 1
       if (is_point_in_exclusion(contact_1, pair.face_1, pair.surface_id_1, exclusion_areas)) {
         rejected_exclusion++;
         continue;
       }
 
-      // Check if contact_1 is in an allowed sample area on surface 1
       if (!is_point_in_allowed_area(contact_1, pair.face_1, pair.surface_id_1, exclusion_areas)) {
         rejected_not_in_allowed_area++;
         continue;
       }
 
-      // Validate pairing is "direct" (not diagonal)
       if (!is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2)) {
         rejected_diagonal++;
         continue;
       }
 
-      // Compute grip distance
       double grip_distance = contact_1.Distance(contact_2);
 
-      // Re-validate grip distance is still within range after projection
       if (grip_distance < config_.min_gripper_opening ||
         grip_distance > config_.max_gripper_opening)
       {
@@ -211,7 +196,6 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
       auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
 
-      // Skip if normals couldn't be computed
       if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
         rejected_no_opposing++;
         continue;
@@ -237,33 +221,20 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
   contact_pairs = deduplicate_contact_pairs(contact_pairs, config_.sample_density / 2.0);
   size_t rejected_duplicate = pairs_before_dedup - contact_pairs.size();
 
-  RCLCPP_INFO(logger_, "Contact point sampling complete:");
-  RCLCPP_INFO(logger_, "  Total samples tested: %zu", total_samples);
-  RCLCPP_INFO(logger_, "  Valid contact pairs (before dedup): %zu", pairs_before_dedup);
-  RCLCPP_INFO(logger_, "  Valid contact pairs (after dedup): %zu", contact_pairs.size());
+  RCLCPP_INFO(logger_,
+    "Contact point sampling complete: %zu samples tested, %zu valid pairs (after dedup)",
+    total_samples, contact_pairs.size());
 
   if (total_samples > 0) {
-    RCLCPP_INFO(logger_, "Rejection breakdown:");
-    RCLCPP_INFO(logger_, "  No opposing contact: %zu (%.1f%%)",
-      rejected_no_opposing, 100.0 * rejected_no_opposing / total_samples);
-    RCLCPP_INFO(logger_, "  Exclusion zone: %zu (%.1f%%)",
-      rejected_exclusion, 100.0 * rejected_exclusion / total_samples);
-    RCLCPP_INFO(logger_, "  Not in allowed area: %zu (%.1f%%)",
-      rejected_not_in_allowed_area, 100.0 * rejected_not_in_allowed_area / total_samples);
-    RCLCPP_INFO(logger_, "  Diagonal pairing: %zu (%.1f%%)",
-      rejected_diagonal, 100.0 * rejected_diagonal / total_samples);
-    RCLCPP_INFO(logger_, "  Grip distance out of range: %zu (%.1f%%)",
-      rejected_grip_distance, 100.0 * rejected_grip_distance / total_samples);
-    RCLCPP_INFO(logger_, "  Spatial duplicates: %zu (%.1f%%)",
-      rejected_duplicate, 100.0 * rejected_duplicate / total_samples);
-
-    double success_rate = 100.0 * contact_pairs.size() / total_samples;
-    RCLCPP_INFO(logger_, "  Success rate: %.1f%%", success_rate);
+    RCLCPP_DEBUG(logger_, "Rejection breakdown: no_opposing=%zu, exclusion=%zu, "
+      "not_allowed=%zu, diagonal=%zu, grip_distance=%zu, duplicates=%zu",
+      rejected_no_opposing, rejected_exclusion, rejected_not_in_allowed_area,
+      rejected_diagonal, rejected_grip_distance, rejected_duplicate);
   }
 
   if (contact_pairs.empty()) {
-    RCLCPP_WARN(logger_, "No valid contact pairs found! Check surface geometry, "
-      "exclusion zones, and gripper configuration.");
+    RCLCPP_WARN(logger_, "No valid contact pairs found - check surface geometry, "
+      "exclusion zones, and gripper configuration");
   }
 
   return contact_pairs;
@@ -280,19 +251,15 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
   double min_dot = std::cos(config_.max_angle_deg * M_PI / 180.0);
   double max_dot = std::cos(config_.min_angle_deg * M_PI / 180.0);
 
-  // Debug statistics
   size_t total_pairs_checked = 0;
   size_t rejected_distance_too_small = 0;
   size_t rejected_distance_too_large = 0;
   size_t rejected_normals_not_antiparallel = 0;
 
-  RCLCPP_INFO(logger_, "=== SURFACE PAIR ANALYSIS ===");
-  RCLCPP_INFO(logger_, "  Checking %zu surfaces (%zu potential pairs)",
+  RCLCPP_INFO(logger_, "Surface pair analysis: %zu surfaces, angle [%.1f°, %.1f°], "
+    "distance [%.4f, %.4f] m",
     valid_surface_ids.size(),
-    (valid_surface_ids.size() * (valid_surface_ids.size() - 1)) / 2);
-  RCLCPP_INFO(logger_, "  Angle range: [%.1f°, %.1f°] (dot product: [%.3f, %.3f])",
-    config_.min_angle_deg, config_.max_angle_deg, min_dot, max_dot);
-  RCLCPP_INFO(logger_, "  Distance range: [%.4f, %.4f] m",
+    config_.min_angle_deg, config_.max_angle_deg,
     config_.min_gripper_opening, config_.max_gripper_opening);
 
   for (size_t i = 0; i < valid_surface_ids.size(); i++) {
@@ -308,13 +275,13 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
       double min_distance = geometry::face_min_distance(s1.face, s2.face);
       if (min_distance < config_.min_gripper_opening) {
         rejected_distance_too_small++;
-        RCLCPP_DEBUG(logger_, "  Pair [%d, %d]: REJECTED - distance %.4f m < min %.4f m",
+        RCLCPP_DEBUG(logger_, "Pair [%d, %d]: REJECTED - distance %.4f m < min %.4f m",
           id1, id2, min_distance, config_.min_gripper_opening);
         continue;
       }
       if (min_distance > config_.max_gripper_opening) {
         rejected_distance_too_large++;
-        RCLCPP_DEBUG(logger_, "  Pair [%d, %d]: REJECTED - distance %.4f m > max %.4f m",
+        RCLCPP_DEBUG(logger_, "Pair [%d, %d]: REJECTED - distance %.4f m > max %.4f m",
           id1, id2, min_distance, config_.max_gripper_opening);
         continue;
       }
@@ -324,13 +291,11 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
         exclusion_areas, min_dot, max_dot))
       {
         rejected_normals_not_antiparallel++;
-        RCLCPP_DEBUG(logger_, "  Pair [%d, %d]: REJECTED - no antiparallel normals found "
-          "in allowed sample regions",
+        RCLCPP_DEBUG(logger_, "Pair [%d, %d]: REJECTED - no antiparallel normals in allowed regions",
           id1, id2);
         continue;
       }
 
-      // Valid pair
       SurfacePair pair;
       pair.surface_id_1 = id1;
       pair.surface_id_2 = id2;
@@ -342,30 +307,17 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
 
       pairs.push_back(pair);
 
-      RCLCPP_DEBUG(logger_, "  Pair [%d, %d]: VALID - distance=%.4f m, "
-        "normals=(%.2f,%.2f,%.2f) vs (%.2f,%.2f,%.2f)",
-        id1, id2, min_distance,
-        s1.normal.X(), s1.normal.Y(), s1.normal.Z(),
-        s2.normal.X(), s2.normal.Y(), s2.normal.Z());
+      RCLCPP_DEBUG(logger_, "Pair [%d, %d]: VALID - distance=%.4f m",
+        id1, id2, min_distance);
     }
   }
 
-  RCLCPP_INFO(logger_, "Surface pair analysis complete:");
-  RCLCPP_INFO(logger_, "  Total pairs checked: %zu", total_pairs_checked);
-  RCLCPP_INFO(logger_, "  Valid pairs found: %zu", pairs.size());
-  RCLCPP_INFO(logger_, "  Rejected (distance too small): %zu", rejected_distance_too_small);
-  RCLCPP_INFO(logger_, "  Rejected (distance too large): %zu", rejected_distance_too_large);
-  RCLCPP_INFO(logger_, "  Rejected (normals not antiparallel): %zu",
-        rejected_normals_not_antiparallel);
-
-  // Log valid pairs summary
-  if (!pairs.empty()) {
-    RCLCPP_INFO(logger_, "Valid surface pairs:");
-    for (const auto & p : pairs) {
-      RCLCPP_INFO(logger_, "  [%d, %d] distance=%.4f m",
-        p.surface_id_1, p.surface_id_2, p.min_distance);
-    }
-  }
+  RCLCPP_INFO(logger_,
+    "Surface pair analysis complete: %zu checked, %zu valid, "
+    "rejected: dist_small=%zu, dist_large=%zu, normals=%zu",
+    total_pairs_checked, pairs.size(),
+    rejected_distance_too_small, rejected_distance_too_large,
+    rejected_normals_not_antiparallel);
 
   return pairs;
 }
@@ -378,7 +330,6 @@ std::vector<gp_Pnt> ContactPointSampler::sample_surface(
   RCLCPP_DEBUG(logger_, "Sampling surface %d with density %.4f m",
     surface_id, config_.sample_density);
 
-  // Find exclusion wires for this surface
   std::vector<TopoDS_Wire> wires;
   for (const auto & area : exclusion_areas) {
     if (area.surface_id == surface_id) {
@@ -387,11 +338,13 @@ std::vector<gp_Pnt> ContactPointSampler::sample_surface(
   }
 
   if (wires.empty()) {
-    // No exclusions, sample full face
-    return sample_full_face(face);
+    auto points = sample_full_face(face);
+    RCLCPP_DEBUG(logger_, "Surface %d: %zu points sampled", surface_id, points.size());
+    return points;
   } else {
-    // Has exclusions, sample with wire constraints
-    return sample_with_exclusions(face, wires);
+    auto points = sample_with_exclusions(face, wires);
+    RCLCPP_DEBUG(logger_, "Surface %d: %zu points sampled (with exclusions)", surface_id, points.size());
+    return points;
   }
 }
 
@@ -399,11 +352,9 @@ std::vector<gp_Pnt> ContactPointSampler::sample_full_face(const TopoDS_Face & fa
 {
   std::vector<gp_Pnt> points;
 
-  // Get UV bounds
   Standard_Real u_min, u_max, v_min, v_max;
   BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
-  // Calculate grid steps
   double u_range = u_max - u_min;
   double v_range = v_max - v_min;
   int u_steps = static_cast<int>(std::ceil(u_range / config_.sample_density));
@@ -412,16 +363,13 @@ std::vector<gp_Pnt> ContactPointSampler::sample_full_face(const TopoDS_Face & fa
   if (u_steps < 1) {u_steps = 1;}
   if (v_steps < 1) {v_steps = 1;}
 
-  // Get surface
   Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
 
-  // Sample grid
   for (int i = 0; i <= u_steps; i++) {
     for (int j = 0; j <= v_steps; j++) {
       double u = u_min + i * u_range / u_steps;
       double v = v_min + j * v_range / v_steps;
 
-      // Validate that UV point is actually inside the face boundary
       gp_Pnt2d uv_point(u, v);
       BRepClass_FaceClassifier classifier(face, uv_point, 1e-6);
       TopAbs_State state = classifier.State();
@@ -430,12 +378,8 @@ std::vector<gp_Pnt> ContactPointSampler::sample_full_face(const TopoDS_Face & fa
         continue;
       }
 
-      try {
-        gp_Pnt point = surf->Value(u, v);
-        points.push_back(point);
-      } catch (...) {
-        continue;
-      }
+      gp_Pnt point = surf->Value(u, v);
+      points.push_back(point);
     }
   }
 
@@ -448,11 +392,9 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
 {
   std::vector<gp_Pnt> points;
 
-  // Get UV bounds
   Standard_Real u_min, u_max, v_min, v_max;
   BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
-  // Calculate grid steps
   double u_range = u_max - u_min;
   double v_range = v_max - v_min;
   int u_steps = static_cast<int>(std::ceil(u_range / config_.sample_density));
@@ -461,10 +403,8 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
   if (u_steps < 1) {u_steps = 1;}
   if (v_steps < 1) {v_steps = 1;}
 
-  // Get surface
   Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
 
-  // Sample grid
   for (int i = 0; i <= u_steps; i++) {
     for (int j = 0; j <= v_steps; j++) {
       double u = u_min + i * u_range / u_steps;
@@ -472,7 +412,6 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
 
       gp_Pnt2d point_2d(u, v);
 
-      // First, validate that UV point is inside the face boundary
       BRepClass_FaceClassifier face_classifier(face, point_2d, 1e-6);
       TopAbs_State face_state = face_classifier.State();
 
@@ -480,7 +419,6 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
         continue;
       }
 
-      // Check against ALL exclusion wires
       bool is_excluded = false;
       for (const auto & wire : wires) {
         bool inside_wire = is_point_inside_wire(point_2d, wire, face);
@@ -499,12 +437,8 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
         continue;
       }
 
-      try {
-        gp_Pnt point = surf->Value(u, v);
-        points.push_back(point);
-      } catch (...) {
-        continue;
-      }
+      gp_Pnt point = surf->Value(u, v);
+      points.push_back(point);
     }
   }
 
@@ -553,7 +487,7 @@ bool ContactPointSampler::is_point_inside_wire(
     }
   }
 
-  return  crossings % 2 == 1;
+  return crossings % 2 == 1;
 }
 
 bool ContactPointSampler::is_point_in_exclusion(
@@ -604,7 +538,6 @@ bool ContactPointSampler::is_point_in_allowed_area(
   int surface_id,
   const std::vector<core::SampleArea> & exclusion_areas) const
 {
-  // Find wires for this surface
   std::vector<TopoDS_Wire> wires;
   for (const auto & area : exclusion_areas) {
     if (area.surface_id == surface_id) {
@@ -612,12 +545,10 @@ bool ContactPointSampler::is_point_in_allowed_area(
     }
   }
 
-  // If no sample areas defined, entire surface is allowed
   if (wires.empty()) {
     return true;
   }
 
-  // Project 3D point to UV space
   Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
   GeomAPI_ProjectPointOnSurf projector(point_3d, surf);
 
@@ -629,15 +560,14 @@ bool ContactPointSampler::is_point_in_allowed_area(
   projector.Parameters(1, u, v);
   gp_Pnt2d point_2d(u, v);
 
-  // Check against all wires
   for (const auto & wire : wires) {
     bool inside_wire = is_point_inside_wire(point_2d, wire, face);
     bool is_exclusion_zone = (wire.Orientation() == TopAbs_REVERSED);
 
     if (is_exclusion_zone && inside_wire) {
-      return false;  // Point is in an exclusion zone
+      return false;
     } else if (!is_exclusion_zone && !inside_wire) {
-      return false;  // Point is outside an inclusion zone
+      return false;
     }
   }
 
@@ -646,33 +576,31 @@ bool ContactPointSampler::is_point_in_allowed_area(
 
 bool ContactPointSampler::find_opposing_contact(
   const gp_Pnt & contact_1,
-  const TopoDS_Face & face_1,
   const TopoDS_Face & face_2,
   gp_Pnt & opposing_contact) const
 {
-  (void)face_1;
-  try {
-    // Build a vertex from contact_1 and find the nearest point on the
-    // *trimmed* face_2 (not the infinite underlying surface).
-    BRepBuilderAPI_MakeVertex vertex_maker(contact_1);
-    if (!vertex_maker.IsDone()) {
-      return false;
-    }
-
-    BRepExtrema_DistShapeShape dist(vertex_maker.Vertex(), face_2);
-    if (!dist.IsDone() || dist.NbSolution() == 0) {
-      return false;
-    }
-
-    opposing_contact = dist.PointOnShape2(1);
-    return true;
-  } catch (const std::exception & e) {
-    RCLCPP_DEBUG(logger_, "Exception in find_opposing_contact: %s", e.what());
-    return false;
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "Unknown exception in find_opposing_contact");
+  // Guard: reject degenerate input coordinates
+  if (!std::isfinite(contact_1.X()) ||
+    !std::isfinite(contact_1.Y()) ||
+    !std::isfinite(contact_1.Z()))
+  {
     return false;
   }
+
+  // Build a vertex from contact_1 and find the nearest point on the
+  // *trimmed* face_2 (not the infinite underlying surface).
+  BRepBuilderAPI_MakeVertex vertex_maker(contact_1);
+  if (!vertex_maker.IsDone()) {
+    return false;
+  }
+
+  BRepExtrema_DistShapeShape dist(vertex_maker.Vertex(), face_2);
+  if (!dist.IsDone() || dist.NbSolution() == 0) {
+    return false;
+  }
+
+  opposing_contact = dist.PointOnShape2(1);
+  return true;
 }
 
 bool ContactPointSampler::is_valid_pairing(
@@ -732,54 +660,47 @@ bool ContactPointSampler::has_antiparallel_local_normals(
   double min_dot,
   double max_dot) const
 {
-  try {
-    Handle(Geom_Surface) surf_1 = BRep_Tool::Surface(face_1);
-    Handle(Geom_Surface) surf_2 = BRep_Tool::Surface(face_2);
-
-    // Find wires for both surfaces
-    std::vector<TopoDS_Wire> wires_1, wires_2;
-    for (const auto & area : exclusion_areas) {
-      if (area.surface_id == surface_id_1) {
-        wires_1.push_back(area.wire);
-      } else if (area.surface_id == surface_id_2) {
-        wires_2.push_back(area.wire);
-      }
-    }
-
-    // Sample normals from allowed regions on both faces
-    auto normals_1 = sample_normals_from_allowed_region(
-      face_1, surf_1, wires_1, 10, 100, config_.normal_sample_density);
-    auto normals_2 = sample_normals_from_allowed_region(
-      face_2, surf_2, wires_2, 10, 100, config_.normal_sample_density);
-
-    if (normals_1.empty() || normals_2.empty()) {
-      RCLCPP_DEBUG(logger_,
-        "No normals sampled from allowed regions - surfaces [%d, %d]",
-        surface_id_1, surface_id_2);
-      return false;
-    }
-
-    // Check if any pair of normals is antiparallel
-    for (const auto & n1 : normals_1) {
-      for (const auto & n2 : normals_2) {
-        double dot = n1.Dot(n2);
-        if (dot >= min_dot && dot <= max_dot) {
-          RCLCPP_DEBUG(logger_,
-            "Found antiparallel normals in allowed regions - surfaces [%d, %d], dot=%.3f",
-            surface_id_1, surface_id_2, dot);
-          return true;
-        }
-      }
-    }
-
-    return false;
-  } catch (const std::exception & e) {
-    RCLCPP_DEBUG(logger_, "Exception in has_antiparallel_local_normals: %s", e.what());
-    return false;
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "Unknown exception in has_antiparallel_local_normals");
+  if (face_1.IsNull() || face_2.IsNull()) {
     return false;
   }
+
+  Handle(Geom_Surface) surf_1 = BRep_Tool::Surface(face_1);
+  Handle(Geom_Surface) surf_2 = BRep_Tool::Surface(face_2);
+
+  std::vector<TopoDS_Wire> wires_1, wires_2;
+  for (const auto & area : exclusion_areas) {
+    if (area.surface_id == surface_id_1) {
+      wires_1.push_back(area.wire);
+    } else if (area.surface_id == surface_id_2) {
+      wires_2.push_back(area.wire);
+    }
+  }
+
+  auto normals_1 = sample_normals_from_allowed_region(
+    face_1, surf_1, wires_1, 10, 100, config_.normal_sample_density);
+  auto normals_2 = sample_normals_from_allowed_region(
+    face_2, surf_2, wires_2, 10, 100, config_.normal_sample_density);
+
+  if (normals_1.empty() || normals_2.empty()) {
+    RCLCPP_DEBUG(logger_,
+      "No normals sampled from allowed regions - surfaces [%d, %d]",
+      surface_id_1, surface_id_2);
+    return false;
+  }
+
+  for (const auto & n1 : normals_1) {
+    for (const auto & n2 : normals_2) {
+      double dot = n1.Dot(n2);
+      if (dot >= min_dot && dot <= max_dot) {
+        RCLCPP_DEBUG(logger_,
+          "Found antiparallel normals in allowed regions - surfaces [%d, %d], dot=%.3f",
+          surface_id_1, surface_id_2, dot);
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 std::vector<gp_Vec> ContactPointSampler::sample_normals_from_allowed_region(
@@ -795,17 +716,14 @@ std::vector<gp_Vec> ContactPointSampler::sample_normals_from_allowed_region(
   Standard_Real u_min, u_max, v_min, v_max;
   BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
-  // Calculate target sample count based on area
   int target_samples = min_samples;
 
   if (wires.empty()) {
-    // No constraints - use face area
     GProp_GProps props;
     BRepGProp::SurfaceProperties(face, props);
     double area_cm2 = props.Mass() * 10000.0;
     target_samples = static_cast<int>(area_cm2 * samples_per_cm2);
   } else {
-    // Has constraints - estimate allowed area
     int coarse_u = 20;
     int coarse_v = 20;
     int allowed_count = 0;
@@ -854,30 +772,25 @@ std::vector<gp_Vec> ContactPointSampler::sample_normals_from_allowed_region(
     }
   }
 
-  // Clamp to min/max
   target_samples = std::max(min_samples, std::min(max_samples, target_samples));
 
-  // Calculate grid dimensions to achieve target sample count
   int samples_per_dim = std::max(1, static_cast<int>(std::sqrt(target_samples * 2.0)));
 
   RCLCPP_DEBUG(logger_, "Sampling %d normals (target=%d, grid=%dx%d)",
     samples_per_dim * samples_per_dim, target_samples,
     samples_per_dim, samples_per_dim);
 
-  // Sample with wire constraints if present
   for (int i = 0; i < samples_per_dim; ++i) {
     for (int j = 0; j < samples_per_dim; ++j) {
       double u = u_min + (u_max - u_min) * (i + 0.5) / samples_per_dim;
       double v = v_min + (v_max - v_min) * (j + 0.5) / samples_per_dim;
       gp_Pnt2d point_2d(u, v);
 
-      // Check face boundary
       BRepClass_FaceClassifier classifier(face, point_2d, 1e-6);
       if (classifier.State() != TopAbs_IN && classifier.State() != TopAbs_ON) {
         continue;
       }
 
-      // Check wire constraints
       if (!wires.empty()) {
         bool is_allowed = true;
 
@@ -899,7 +812,6 @@ std::vector<gp_Vec> ContactPointSampler::sample_normals_from_allowed_region(
         }
       }
 
-      // Sample normal at this point
       GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
       if (props.IsNormalDefined()) {
         gp_Vec normal = props.Normal();
@@ -929,7 +841,6 @@ std::vector<ContactPair> ContactPointSampler::deduplicate_contact_pairs(
   std::map<std::tuple<int, int, int, int, int, int>, ContactPair> grid_map;
 
   for (const auto & pair : pairs) {
-    // Compute grid cell indices for both contact points
     int x1 = static_cast<int>(std::floor(pair.contact_1.X() / tolerance));
     int y1 = static_cast<int>(std::floor(pair.contact_1.Y() / tolerance));
     int z1 = static_cast<int>(std::floor(pair.contact_1.Z() / tolerance));
@@ -940,13 +851,11 @@ std::vector<ContactPair> ContactPointSampler::deduplicate_contact_pairs(
 
     auto key = std::make_tuple(x1, y1, z1, x2, y2, z2);
 
-    // Keep first pair in each grid cell
     if (grid_map.find(key) == grid_map.end()) {
       grid_map[key] = pair;
     }
   }
 
-  // Extract deduplicated pairs
   std::vector<ContactPair> result;
   result.reserve(grid_map.size());
   for (const auto & [key, pair] : grid_map) {

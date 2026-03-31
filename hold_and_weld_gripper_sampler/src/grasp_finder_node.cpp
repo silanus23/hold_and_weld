@@ -22,24 +22,23 @@
  */
 
 #include <chrono>
-
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <rclcpp/rclcpp.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <rclcpp/rclcpp.hpp>
 
 #include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
 #include "hold_and_weld_gripper_sampler/io/config_parser.hpp"
-#include "hold_and_weld_gripper_sampler/io/result_writer.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
-#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
+#include "hold_and_weld_gripper_sampler/io/result_writer.hpp"
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 
 using namespace hold_and_weld_gripper_sampler;  // NOLINT
@@ -54,7 +53,6 @@ int main(int argc, char ** argv)
   auto node = std::make_shared<rclcpp::Node>("grasp_finder_node");
   auto logger = node->get_logger();
 
-  // Get package directories
   std::string sampler_pkg_share;
   std::string app_pkg_share;
 
@@ -71,7 +69,6 @@ int main(int argc, char ** argv)
     return 1;
   }
 
-  // Get config path and optional output path from arguments
   std::string config_path;
   std::string output_path_arg;
 
@@ -91,7 +88,6 @@ int main(int argc, char ** argv)
     RCLCPP_INFO(logger, "Using config: %s", config_path.c_str());
   }
 
-  // Parse configuration
   io::ConfigParser parser;
   auto config_opt = parser.parse_file(config_path, sampler_pkg_share);
 
@@ -101,17 +97,8 @@ int main(int argc, char ** argv)
   }
 
   auto config = config_opt.value();
-  RCLCPP_INFO(logger, "Configuration loaded successfully");
-  RCLCPP_INFO(logger, "Frame ID: %s", config.frame_id.c_str());
-  RCLCPP_INFO(logger, "Primary source: %s",
-    config.primary.step_path.empty() ? config.primary.urdf_path.c_str() :
-    config.primary.step_path.c_str());
-  RCLCPP_INFO(logger, "Gripper: %s", config.gripper_urdf_path.c_str());
-  RCLCPP_INFO(logger, "Secondaries: %zu", config.secondaries.size());
-  RCLCPP_INFO(logger, "Exclusion circles: %zu", config.exclusion_circles.size());
-  RCLCPP_INFO(logger, "Exclusion polygons: %zu", config.exclusion_polygons.size());
-  RCLCPP_INFO(logger, "Exclusion lines: %zu", config.exclusion_lines.size());
-  RCLCPP_INFO(logger, " ");
+  RCLCPP_INFO(logger, "Configuration loaded: frame=%s, gripper=%s, secondaries=%zu",
+    config.frame_id.c_str(), config.gripper_urdf_path.c_str(), config.secondaries.size());
 
   auto mapper = std::make_shared<geometry::GeometryMapper>();
   geometry::Topology topology;
@@ -128,7 +115,6 @@ int main(int argc, char ** argv)
     } else if (!config.primary.urdf_path.empty()) {
       primary_shape = loader.load_from_urdf(config.primary.urdf_path);
 
-      // Apply transform to primary shape (URDF is loaded in local frame)
       if (config.primary.translation.norm() > 1e-9 ||
         !config.primary.rotation.isApprox(Eigen::Quaterniond::Identity()))
       {
@@ -160,14 +146,12 @@ int main(int argc, char ** argv)
       }
     }
 
-    // Now build topology from the (possibly refined) shape
     topology = mapper->load_from_shape(primary_shape, "workpiece");
 
-    // Triangulate primary shape for kissing surface detection
+    // Triangulate primary shape for kissing surface detection (side-effect on shape)
     RCLCPP_DEBUG(logger, "Triangulating primary shape for contact detection...");
-    Standard_Real lin_deflection = 0.0001;
-    Standard_Real ang_deflection = 0.5;
-    BRepMesh_IncrementalMesh mesher(primary_shape, lin_deflection, Standard_False, ang_deflection);
+    BRepMesh_IncrementalMesh mesher(primary_shape, 0.0001, Standard_False, 0.5);
+    (void)mesher;
     RCLCPP_DEBUG(logger, "Primary shape triangulation complete");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger, "Failed to load primary shape: %s", e.what());
@@ -177,15 +161,9 @@ int main(int argc, char ** argv)
     return 1;
   }
 
-  RCLCPP_INFO(logger, "Primary shape loaded successfully:");
-  RCLCPP_INFO(logger, "  Surfaces: %zu", topology.num_surfaces());
-  RCLCPP_INFO(logger, "  Edges: %zu", topology.num_edges());
-  RCLCPP_INFO(logger, "  Corners: %zu", topology.num_corners());
-  RCLCPP_INFO(logger, "  Shape null: %s", primary_shape.IsNull() ? "YES (ERROR!)" : "NO");
-  RCLCPP_INFO(logger, " ");
+  RCLCPP_INFO(logger, "Primary shape loaded: surfaces=%zu, edges=%zu, corners=%zu",
+    topology.num_surfaces(), topology.num_edges(), topology.num_corners());
 
-  // Load gripper
-  RCLCPP_INFO(logger, "LOADING GRIPPER");
   io::GripperParser gripper_parser;
   ParsedGripper gripper;
 
@@ -203,23 +181,9 @@ int main(int argc, char ** argv)
     return 1;
   }
 
-  RCLCPP_INFO(logger, "Gripper loaded successfully:");
-  RCLCPP_INFO(logger, "  Type: %s", gripper.gripper_type.c_str());
-  RCLCPP_INFO(logger, "  Opening range: [0.0000, %.4f] m", gripper.max_opening);
-  RCLCPP_INFO(logger, "  TCP offset: (%.4f, %.4f, %.4f)",
-    gripper.tcp_offset.x(), gripper.tcp_offset.y(), gripper.tcp_offset.z());
-  RCLCPP_INFO(logger, "  Finger 1 axis: (%.2f, %.2f, %.2f)",
-    gripper.finger_1_axis.x(), gripper.finger_1_axis.y(), gripper.finger_1_axis.z());
-  RCLCPP_INFO(logger, "  Finger 2 axis: (%.2f, %.2f, %.2f)",
-    gripper.finger_2_axis.x(), gripper.finger_2_axis.y(), gripper.finger_2_axis.z());
-  RCLCPP_INFO(logger, "  Base shape null: %s", gripper.base.IsNull() ? "YES (ERROR!)" : "NO");
-  RCLCPP_INFO(logger, "  Finger 1 shape null: %s",
-    gripper.finger_1.IsNull() ? "YES (ERROR!)" : "NO");
-  RCLCPP_INFO(logger, "  Finger 2 shape null: %s",
-    gripper.finger_2.IsNull() ? "YES (ERROR!)" : "NO");
-  RCLCPP_INFO(logger, " ");
+  RCLCPP_INFO(logger, "Gripper loaded: type=%s, max_opening=%.4f m",
+    gripper.gripper_type.c_str(), gripper.max_opening);
 
-  RCLCPP_INFO(logger, "Configured secondaries: %zu", config.secondaries.size());
   std::vector<TopoDS_Shape> secondary_shapes;
   io::ShapeLoader shape_loader;
 
@@ -248,9 +212,8 @@ int main(int argc, char ** argv)
       }
 
       secondary_shapes.push_back(shape);
-      RCLCPP_INFO(logger, "  [✓] %s (%s) - shape null: %s",
-        sec_config.id.c_str(), sec_config.type.c_str(),
-        shape.IsNull() ? "YES (ERROR!)" : "NO");
+      RCLCPP_DEBUG(logger, "Secondary loaded: %s (%s)",
+        sec_config.id.c_str(), sec_config.type.c_str());
     } catch (const std::exception & e) {
       RCLCPP_WARN(logger, "Failed to load secondary '%s': %s",
         sec_config.id.c_str(), e.what());
@@ -261,76 +224,33 @@ int main(int argc, char ** argv)
     }
   }
 
-  RCLCPP_INFO(logger, "Total secondary shapes loaded: %zu", secondary_shapes.size());
-  RCLCPP_INFO(logger, " ");
+  RCLCPP_INFO(logger, "Secondary shapes loaded: %zu / %zu",
+    secondary_shapes.size(), config.secondaries.size());
 
-  // Prepare exclusion zones
-  RCLCPP_INFO(logger, "EXCLUSION ZONES");
   std::optional<std::vector<constraints::exclusion_circle>> circles_opt;
   std::optional<std::vector<constraints::exclusion_polygon>> polygons_opt;
   std::optional<std::vector<constraints::exclusion_line>> lines_opt;
 
   if (!config.exclusion_circles.empty()) {
     circles_opt = config.exclusion_circles;
-    RCLCPP_INFO(logger, "Exclusion circles: %zu", config.exclusion_circles.size());
-    for (size_t i = 0; i < config.exclusion_circles.size(); i++) {
-      const auto & c = config.exclusion_circles[i];
-      RCLCPP_INFO(logger, "  [%zu] center=(%.3f,%.3f,%.3f) radius=%.3f depth=%.3f",
-        i, c.center.x(), c.center.y(), c.center.z(), c.radius, c.projection_depth);
-    }
-  } else {
-    RCLCPP_INFO(logger, "Exclusion circles: 0 (none defined)");
   }
-
   if (!config.exclusion_polygons.empty()) {
     polygons_opt = config.exclusion_polygons;
-    RCLCPP_INFO(logger, "Exclusion polygons: %zu", config.exclusion_polygons.size());
-    for (size_t i = 0; i < config.exclusion_polygons.size(); i++) {
-      const auto & p = config.exclusion_polygons[i];
-      RCLCPP_INFO(logger, "  [%zu] corners=%zu depth=%.3f",
-        i, p.exclusion_corners.size(), p.projection_depth);
-    }
-  } else {
-    RCLCPP_INFO(logger, "Exclusion polygons: 0 (none defined)");
   }
-
   if (!config.exclusion_lines.empty()) {
     lines_opt = config.exclusion_lines;
-    RCLCPP_INFO(logger, "Exclusion lines: %zu", config.exclusion_lines.size());
-    for (size_t i = 0; i < config.exclusion_lines.size(); i++) {
-      const auto & l = config.exclusion_lines[i];
-      RCLCPP_INFO(logger, "  [%zu] start=(%.3f,%.3f,%.3f) end=(%.3f,%.3f,%.3f) radius=%.3f",
-        i, l.start.x(), l.start.y(), l.start.z(), l.end.x(), l.end.y(), l.end.z(),
-        l.exclusion_radius);
-    }
-  } else {
-    RCLCPP_INFO(logger, "Exclusion lines: 0 (none defined)");
   }
-  RCLCPP_INFO(logger, " ");
 
-  // Create GraspFinder
-  RCLCPP_INFO(logger, "CREATING GRASP FINDER");
-  RCLCPP_INFO(logger, "Sampling config:");
-  RCLCPP_INFO(logger, "  Min angle: %.1f°, Max angle: %.1f°",
-    config.finder_config.sampling.min_angle_deg, config.finder_config.sampling.max_angle_deg);
-  RCLCPP_INFO(logger, "  Gripper opening: [%.4f, %.4f] m",
+  RCLCPP_INFO(logger, "Exclusion zones: circles=%zu, polygons=%zu, lines=%zu",
+    config.exclusion_circles.size(),
+    config.exclusion_polygons.size(),
+    config.exclusion_lines.size());
+
+  RCLCPP_DEBUG(logger, "Sampling: angle=[%.1f°, %.1f°], opening=[%.4f, %.4f] m, density=%.4f m",
+    config.finder_config.sampling.min_angle_deg, config.finder_config.sampling.max_angle_deg,
     config.finder_config.sampling.min_gripper_opening,
-    config.finder_config.sampling.max_gripper_opening);
-  RCLCPP_INFO(logger, "  Sample density: %.4f m", config.finder_config.sampling.sample_density);
-  RCLCPP_INFO(logger, "Orientation config:");
-  RCLCPP_INFO(logger, "  Finger length: %.4f m, radius: %.4f m",
-    config.finder_config.orientation.finger_length,
-    config.finder_config.orientation.finger_radius);
-  RCLCPP_INFO(logger, "  Max edge candidates: %zu",
-    config.finder_config.orientation.max_edge_candidates);
-  RCLCPP_INFO(logger, "  Dual seed dedup tolerance: %.1f°",
-    config.finder_config.orientation.dual_seed_dedup_tolerance_deg);
-  RCLCPP_INFO(logger, "  Angle offsets: %zu values",
-    config.finder_config.orientation.angle_offsets.size());
-  RCLCPP_INFO(logger, "FCL: %s, Kissing threshold: %.1f%%",
-    config.finder_config.use_fcl ? "ENABLED" : "DISABLED",
-    config.finder_config.kissing_contact_threshold * 100.0);
-  RCLCPP_INFO(logger, " ");
+    config.finder_config.sampling.max_gripper_opening,
+    config.finder_config.sampling.sample_density);
 
   GraspFinder finder(
     mapper,
@@ -351,29 +271,24 @@ int main(int argc, char ** argv)
   auto end_time = std::chrono::steady_clock::now();
   double elapsed_seconds = std::chrono::duration<double>(end_time - start_time).count();
 
-  RCLCPP_INFO(logger, " ");
-
   if (!result.success) {
     RCLCPP_ERROR(logger, "Grasp finding failed: %s", result.error_message.c_str());
     return 1;
   }
 
-  RCLCPP_INFO(logger, "Time elapsed: %.2f seconds", elapsed_seconds);
-  RCLCPP_INFO(logger, " ");
-  RCLCPP_INFO(logger, "Pipeline statistics:");
-  RCLCPP_INFO(logger, "  Valid surfaces: %zu", result.num_valid_surfaces);
-  RCLCPP_INFO(logger, "  Banned surfaces: %zu", result.num_banned_surfaces);
-  RCLCPP_INFO(logger, "  Exclusion areas: %zu", result.num_exclusion_areas);
-  RCLCPP_INFO(logger, "  Contact pairs: %zu", result.num_contact_pairs);
-  RCLCPP_INFO(logger, "  Grasp candidates: %zu", result.num_candidates);
-  RCLCPP_INFO(logger, "  Final grasps: %zu", result.grasps.size());
-  RCLCPP_INFO(logger, " ");
+  RCLCPP_INFO(logger,
+    "Grasp finding complete in %.2fs: valid_surfaces=%zu, contact_pairs=%zu, "
+    "candidates=%zu, final_grasps=%zu",
+    elapsed_seconds,
+    result.num_valid_surfaces,
+    result.num_contact_pairs,
+    result.num_candidates,
+    result.grasps.size());
 
-  // Resolve output path: --output arg takes priority, then ament_index share dir, then CWD.
   std::string output_path;
   if (!output_path_arg.empty()) {
     output_path = output_path_arg;
-    RCLCPP_INFO(logger, "Output path from --output arg: %s", output_path.c_str());
+    RCLCPP_INFO(logger, "Output path: %s", output_path.c_str());
   } else {
     std::string output_dir = app_pkg_share + "/grasps";
     try {
@@ -384,10 +299,9 @@ int main(int argc, char ** argv)
       return 1;
     }
     output_path = output_dir + "/grasps.json";
-    RCLCPP_INFO(logger, "Output path (ament_index): %s", output_path.c_str());
+    RCLCPP_INFO(logger, "Output path: %s", output_path.c_str());
   }
 
-  // Ensure parent directory of an explicit --output path also exists
   if (!output_path_arg.empty()) {
     std::filesystem::path parent = std::filesystem::path(output_path).parent_path();
     if (!parent.empty()) {

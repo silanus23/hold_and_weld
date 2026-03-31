@@ -15,12 +15,12 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__IO__SHAPE_LOADER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__IO__SHAPE_LOADER_HPP_
 
-#include <Eigen/Dense>
-#include <Eigen/Geometry>
-
 #include <string>
 #include <vector>
 
+#include <Eigen/Dense>
+
+#include <gp_Trsf.hxx>
 #include <TopoDS_Shape.hxx>
 
 namespace hold_and_weld_gripper_sampler
@@ -33,79 +33,49 @@ namespace io
  */
 struct ShapeLoaderConfig
 {
-  /// Linear deflection for triangulation (meters)
-  double linear_deflection = 0.0001;  // 0.1mm
-
-  /// Angular deflection for triangulation (radians)
-  double angular_deflection = 0.5;
-
-  /// Whether to automatically triangulate loaded shapes
-  bool auto_triangulate = true;
+  double linear_deflection = 0.0001;   // Linear deflection for triangulation [m]
+  double angular_deflection = 0.5;     // Angular deflection for triangulation [rad]
+  bool auto_triangulate = true;        // Triangulate loaded shapes automatically
 };
 
 /**
  * @brief Simple shape loader for secondary objects (fixtures, obstacles, ground)
  *
- * This class provides lightweight shape loading WITHOUT topology extraction.
+ * Provides lightweight shape loading WITHOUT topology extraction.
  * Use this for objects that only need collision detection, not grasp sampling.
- *
  * For primary workpieces that need full topology, use GeometryMapper instead.
  *
- * Supported formats:
- * - STEP (.step, .stp)
- * - STL (.stl)
- * - Primitives (box, cylinder, sphere, plane)
- *
+ * Supported formats: STEP (.step, .stp), STL (.stl), and geometric primitives.
  * All loaded shapes are automatically triangulated for efficient collision detection.
  *
  * @example
  * @code
  * ShapeLoader loader;
- *
- * // Load fixture from STEP file
  * auto fixture = loader.load_from_step("fixture.step",
  *   Eigen::Vector3d(0, 0, 0), Eigen::Quaterniond::Identity());
- *
- * // Create ground plane as a large thin box
  * auto ground = loader.make_box(
- *   Eigen::Vector3d(2.0, 2.0, 0.01),  // 2m x 2m x 1cm
- *   Eigen::Vector3d(0, 0, -0.005),     // Centered at z=0
+ *   Eigen::Vector3d(2.0, 2.0, 0.01),
+ *   Eigen::Vector3d(0, 0, -0.005),
  *   Eigen::Quaterniond::Identity());
- *
- * // Load multiple secondaries
- * std::vector<TopoDS_Shape> secondaries = {fixture, ground};
  * @endcode
  */
 class ShapeLoader
 {
 public:
-  /**
-   * @brief Default constructor with default configuration
-   */
+  /** @brief Default constructor with default configuration */
   ShapeLoader();
 
-  /**
-   * @brief Constructor with custom configuration
-   *
-   * @param config Shape loader configuration
-   */
+  /** @brief Constructor with custom configuration */
   explicit ShapeLoader(const ShapeLoaderConfig & config);
 
-  /**
-   * @brief Destructor
-   */
   ~ShapeLoader() = default;
-
-  // =========================================================================
-  // File Loading
-  // =========================================================================
 
   /**
    * @brief Load shape from STEP file
    *
    * @param step_path Path to STEP file (.step or .stp)
-   * @param translation Translation to apply [meters]
-   * @param rotation Rotation to apply (quaternion)
+   * @param translation Translation to apply [m]
+   * @param rotation Rotation to apply
    * @return Loaded and transformed shape
    * @throw std::runtime_error if file cannot be read or is invalid
    */
@@ -118,8 +88,8 @@ public:
    * @brief Load shape from STL file
    *
    * @param stl_path Path to STL file (.stl)
-   * @param translation Translation to apply [meters]
-   * @param rotation Rotation to apply (quaternion)
+   * @param translation Translation to apply [m]
+   * @param rotation Rotation to apply
    * @return Loaded and transformed shape
    * @throw std::runtime_error if file cannot be read or is invalid
    */
@@ -131,8 +101,8 @@ public:
   /**
    * @brief Load collision geometry from URDF file
    *
-   * Extracts all collision geometries from URDF and combines them.
-   * Does NOT parse kinematics - use GripperParser for that.
+   * Extracts all collision geometries and combines them.
+   * Does NOT parse kinematics — use GripperParser for that.
    *
    * @param urdf_path Path to URDF file
    * @return Combined collision geometry shape
@@ -149,14 +119,10 @@ public:
    */
   TopoDS_Shape load_from_urdf_string(const std::string & urdf_string);
 
-  // =========================================================================
-  // Primitive Creation
-  // =========================================================================
-
   /**
    * @brief Create a box shape
    *
-   * @param dimensions Box dimensions (x, y, z) in meters
+   * @param dimensions Box dimensions (x, y, z) [m]
    * @param center Center position in world frame
    * @param rotation Rotation to apply
    * @return Box shape
@@ -167,12 +133,10 @@ public:
     const Eigen::Quaterniond & rotation = Eigen::Quaterniond::Identity());
 
   /**
-   * @brief Create a cylinder shape
+   * @brief Create a cylinder shape with axis along Z before rotation
    *
-   * Cylinder axis is along Z in local frame before rotation.
-   *
-   * @param radius Cylinder radius [meters]
-   * @param height Cylinder height [meters]
+   * @param radius Cylinder radius [m]
+   * @param height Cylinder height [m]
    * @param center Center position in world frame
    * @param rotation Rotation to apply
    * @return Cylinder shape
@@ -186,7 +150,7 @@ public:
   /**
    * @brief Create a sphere shape
    *
-   * @param radius Sphere radius [meters]
+   * @param radius Sphere radius [m]
    * @param center Center position in world frame
    * @return Sphere shape
    */
@@ -195,14 +159,12 @@ public:
     const Eigen::Vector3d & center = Eigen::Vector3d::Zero());
 
   /**
-   * @brief Create a ground plane as a thin box
+   * @brief Create a ground plane as a thin box at z=0
    *
-   * Convenience method for creating a ground plane at z=0.
-   *
-   * @param size_x Extent in X direction [meters]
-   * @param size_y Extent in Y direction [meters]
-   * @param z_position Z position of the ground surface (default 0)
-   * @param thickness Thickness of the ground box (default 0.01m = 1cm)
+   * @param size_x Extent in X direction [m]
+   * @param size_y Extent in Y direction [m]
+   * @param z_position Z position of the ground surface
+   * @param thickness Thickness of the ground box [m]
    * @return Ground plane shape
    */
   TopoDS_Shape make_ground_plane(
@@ -210,10 +172,6 @@ public:
     double size_y = 2.0,
     double z_position = 0.0,
     double thickness = 0.01);
-
-  // =========================================================================
-  // Utilities
-  // =========================================================================
 
   /**
    * @brief Triangulate a shape for collision detection
@@ -240,16 +198,12 @@ public:
   /**
    * @brief Combine multiple shapes into a compound
    *
-   * Useful for creating a single secondary shape from multiple components.
-   *
    * @param shapes Vector of shapes to combine
    * @return Compound shape containing all input shapes
    */
   TopoDS_Shape combine_shapes(const std::vector<TopoDS_Shape> & shapes) const;
 
-  /**
-   * @brief Get current configuration
-   */
+  /** @brief Get current configuration */
   const ShapeLoaderConfig & get_config() const {return config_;}
 
 private:
@@ -263,9 +217,7 @@ private:
     const Eigen::Quaterniond & rotation) const;
 
   /**
-   * @brief Resolve package:// URLs to absolute paths
-   *
-   * Uses ament_index_cpp to find package share directories.
+   * @brief Resolve package:// URLs to absolute paths using ament_index_cpp
    *
    * @param url URL to resolve (package:// or absolute path)
    * @return Resolved absolute path

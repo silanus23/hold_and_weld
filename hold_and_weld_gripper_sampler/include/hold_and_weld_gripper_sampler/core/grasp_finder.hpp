@@ -37,6 +37,7 @@
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
+
 namespace hold_and_weld_gripper_sampler
 {
 namespace core
@@ -47,25 +48,29 @@ namespace core
  */
 struct GraspFinderResult
 {
-  /// Valid grasps found (sorted by quality, descending)
-  std::vector<Grasp> grasps;
+  std::vector<Grasp> grasps; // sorted by quality descending
   size_t num_contact_pairs = 0;
   size_t num_valid_surfaces = 0;
   size_t num_banned_surfaces = 0;
-  size_t num_exclusion_areas = 0;
+  size_t num_exclusion_areas = 0; // exclusion wires passed to contact sampler
   size_t num_candidates = 0;
   bool success = false;
   std::string error_message;
 
   /**
-   * @brief Check if any grasps were found
+   * @brief Check whether any grasps were found
+   *
+   * @return true if the grasps vector is non-empty, false otherwise
    */
   bool has_grasps() const {return !grasps.empty();}
 
   /**
-   * @brief Get best grasp (highest quality)
+   * @brief Return a pointer to the highest-quality grasp
    *
-   * @return Pointer to best grasp, or nullptr if no grasps found
+   * Grasps are stored sorted by quality (descending), so the front element
+   * is always the best one.
+   *
+   * @return Pointer to the best Grasp, or nullptr if no grasps exist
    */
   const Grasp * best_grasp() const
   {
@@ -74,25 +79,15 @@ struct GraspFinderResult
 };
 
 /**
- * @brief Shape refiner configuration embedded in GraspFinderConfig
+ * @brief Shape refiner configuration
  */
 struct ShapeRefinerConfig
 {
-  /// Run ShapeRefiner on primary_shape before topology extraction.
-  /// Disable only if the shape is already pre-processed or refinement causes issues.
   bool enabled = true;
-
-  /// Maximum cylinder radius (m) before radial splitting
-  double max_cylinder_radius = 0.100;
-
-  /// Maximum edge arc length (m) before surface splitting
-  double max_arc_length = 0.200;
-
-  /// Enclave area threshold as a fraction of total area (e.g. 0.005 = 0.5%)
-  double enclave_area_ratio = 0.005;
-
-  /// Wall angle threshold (degrees) below which an enclave is suppressed
-  double enclave_angle_threshold = 45.0;
+  double max_cylinder_radius = 0.100; // meters, before radial splitting
+  double max_arc_length = 0.200;      // meters, before surface splitting
+  double enclave_area_ratio = 0.005;  // fraction of total area, e.g. 0.005 = 0.5%
+  double enclave_angle_threshold = 45.0; // degrees, shallow walls below this are removed
 };
 
 /**
@@ -104,29 +99,22 @@ struct GraspFinderConfig
   angle_finding::OrientationConfig orientation;
   ShapeRefinerConfig shape_refiner;
 
-  double kissing_contact_threshold = 0.8;
+  double kissing_contact_threshold = 0.8; // contact ratio above which surface is banned
   double ground_normal_z_threshold = -0.9;
-
-  /// Collision tolerance for secondary shape (fixture/ground) distance checks in
-  /// KissingSurfaceConstraint. Very tight (1e-6 m) because these are pre-computed
-  /// OCCT/FCL distance queries against known obstacle geometry.
-  /// NOTE: orientation.collision_tolerance is a separate field that controls primary
-  /// shape and exclusion zone checks in GraspOrientationFinder — it is intentionally
-  /// looser (default 1mm) to account for numerical instability during pose sampling.
-  /// Do NOT conflate the two: secondary checks need tight tolerance to avoid missing
-  /// contact; orientation checks need looser tolerance to avoid false rejections.
-  double collision_tolerance = 0.000001;
-
-  double ground_safety_margin = 0.005;
+  double ground_safety_margin = 0.005; // meters above ground plane
   double ground_z = 0.0;
+
+  // Collision tolerance for secondary/fixture checks. Kept tight (1e-6 m) — pre-computed
+  // queries against known geometry. Separate from orientation.collision_tolerance (1mm)
+  // which is looser to avoid false rejections during pose sampling.
+  double collision_tolerance = 0.000001;
 
   bool use_fcl = true;
   bool enable_ground_plane_check = true;
   bool use_fcl_for_ground_plane = true;
 
-  double triangulation_deflection = 0.0001;
-
-  double mesh_linear_deflection = 0.001;
+  double triangulation_deflection = 0.0001; // FCL BVH construction precision (meters)
+  double mesh_linear_deflection = 0.001;    // exclusion zone mesh precision (meters)
   double mesh_angular_deflection = 0.1;
 };
 
@@ -134,18 +122,13 @@ struct GraspFinderConfig
  * @brief Coordinator class that wires all grasp sampling components together
  *
  * GraspFinder is the main entry point for finding valid grasps on a workpiece.
- * It handles all the wiring between components in the correct order:
- *
- * 1. Load and analyze geometry (primary shape, gripper, secondaries)
- * 2. Analyze constraints (exclusion zones, kissing surfaces)
- * 3. Build FCL collision checker with all collision volumes
- * 4. Wire FCL to constraints and orientation finder
- * 5. Sample contact points
- * 6. Find valid grasp orientations
- * 7. Return sorted results
- *
- * }
- * @endcode
+ * Components are initialized lazily on the first find() call in this order:
+ * 1. Analyze constraints (exclusion zones, kissing surfaces)
+ * 2. Build FCL collision checker
+ * 3. Wire FCL to constraints and orientation finder
+ * 4. Sample contact points
+ * 5. Find valid grasp orientations
+ * 6. Return sorted results
  */
 class GraspFinder
 {
@@ -153,15 +136,10 @@ public:
   /**
    * @brief Construct GraspFinder with all required inputs
    *
-   * NOTE: If shape refinement is desired, run ShapeRefiner on primary_shape
-   * BEFORE calling this constructor, then extract primary_topology from the
-   * refined shape. Refinement must happen before mapping — topology must
-   * reflect the refined geometry, not the raw imported shape.
-   *
    * @param primary_shape Primary workpiece shape (must be pre-refined and triangulated)
-   * @param primary_topology Topology extracted from the (refined) primary shape
+   * @param primary_topology Topology extracted from the refined primary shape
    * @param gripper Parsed gripper from URDF
-   * @param secondary_shapes Fixture/ground shapes for collision (already triangulated)
+   * @param secondary_shapes Fixture/ground shapes for collision
    * @param exclusion_circles Optional exclusion circles (weld points, etc.)
    * @param exclusion_polygons Optional exclusion polygons (forbidden regions)
    * @param exclusion_lines Optional exclusion lines (weld seams, etc.)
@@ -173,30 +151,23 @@ public:
     const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
-    std::nullopt,
+      std::nullopt,
     const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons =
-    std::nullopt,
-    const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines = std::nullopt,
+      std::nullopt,
+    const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines =
+      std::nullopt,
     const GraspFinderConfig & config = GraspFinderConfig{}
   );
 
   /**
    * @brief Construct GraspFinder with shared GeometryMapper
    *
-   * Use this constructor when you want to share the GeometryMapper with other components
-   * or when you need access to face mapping for surface ID lookups.
+   * Use when the mapper is shared with other components or face ID lookups are needed.
+   * The mapper must have been loaded from the same refined shape passed as primary_shape.
    *
-   * NOTE: The correct call order in the caller is:
-   *   1. Load raw shape
-   *   2. Run ShapeRefiner::refine() on the raw shape
-   *   3. Call mapper->load_from_shape() on the REFINED shape
-   *   4. Pass refined shape, topology, and mapper to this constructor
-   * Passing a mapper built from the unrefined shape will cause face ID mismatches
-   * when exclusion zone constraints call find_topology_surface_id().
-   *
-   * @param mapper Shared geometry mapper (must have been loaded from the refined primary shape)
-   * @param primary_shape Primary workpiece shape (must be pre-refined and triangulated)
-   * @param primary_topology Topology from mapper (must match the refined shape)
+   * @param mapper Shared geometry mapper
+   * @param primary_shape Primary workpiece shape
+   * @param primary_topology Topology matching the refined shape
    * @param gripper Parsed gripper
    * @param secondary_shapes Secondary collision shapes
    * @param exclusion_circles Optional exclusion circles
@@ -211,31 +182,23 @@ public:
     const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
-    std::nullopt,
+      std::nullopt,
     const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons =
-    std::nullopt,
-    const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines = std::nullopt,
+      std::nullopt,
+    const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines =
+      std::nullopt,
     const GraspFinderConfig & config = GraspFinderConfig{}
   );
 
   /**
    * @brief Find all valid grasps
    *
-   * This is the main method. It:
-   * 1. Analyzes constraints
-   * 2. Builds and wires FCL (if enabled)
-   * 3. Samples contact points
-   * 4. Finds valid orientations
-   * 5. Converts and sorts results
-   *
-   * @return GraspFinderResult with grasps and statistics
+   * @return GraspFinderResult with grasps and pipeline statistics
    */
   GraspFinderResult find();
 
   /**
    * @brief Get top N grasps by quality
-   *
-   * Convenience method that calls find() and returns only the top N.
    *
    * @param n Maximum number of grasps to return
    * @return Vector of top N grasps (may be fewer if not enough found)
@@ -245,59 +208,61 @@ public:
   /**
    * @brief Get the best grasp
    *
-   * Convenience method that calls find() and returns only the best.
-   *
    * @return Best grasp if found, std::nullopt otherwise
    */
   std::optional<Grasp> find_best();
 
 private:
-  // Inputs (stored, not owned except mapper)
   std::shared_ptr<const geometry::GeometryMapper> mapper_;
   TopoDS_Shape primary_shape_;
   geometry::Topology primary_topology_;
   ParsedGripper gripper_;
   std::vector<TopoDS_Shape> secondary_shapes_;
 
-  // Exclusion zone definitions
   std::vector<constraints::exclusion_circle> exclusion_circles_;
   std::vector<constraints::exclusion_polygon> exclusion_polygons_;
   std::vector<constraints::exclusion_line> exclusion_lines_;
 
-  // Configuration
   GraspFinderConfig config_;
+  rclcpp::Logger logger_;
 
-  // Lazily initialized components (built on first find() call)
+  // Lazily initialized on first find() call
   bool initialized_ = false;
   std::shared_ptr<constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<constraints::KissingSurfaceConstraint> kissing_constraint_;
   std::shared_ptr<geometry::FCLCollisionChecker> fcl_checker_;
 
   /**
-   * @brief Initialize all components and wire them together
+   * @brief Lazily initialize all sub-components on the first find() call
    *
-   * Called lazily on first find() call.
+   * Constructs and wires together the ExclusionZoneConstraint,
+   * KissingSurfaceConstraint, and FCLCollisionChecker in the correct order.
    *
-   * @return Error message if initialization failed, empty string on success
+   * @return Empty string on success, or a human-readable error message on failure
    */
   std::string initialize();
 
   /**
-   * @brief Compute valid surface IDs by removing banned surfaces
+   * @brief Compute the set of surface IDs eligible for contact-point sampling
    *
-   * @param banned_ids Surface IDs to exclude
-   * @return Vector of valid surface IDs for sampling
+   * Subtracts banned_ids (surfaces fully in contact with secondaries) from
+   * the complete list of surface IDs in the primary topology.
+   *
+   * @param banned_ids Surface IDs that must be excluded from sampling
+   * @return Sorted vector of surface IDs that are available for sampling
    */
   std::vector<int> compute_valid_surface_ids(const std::vector<int> & banned_ids) const;
 
   /**
-   * @brief Merge sample areas from multiple constraints
+   * @brief Merge exclusion SampleAreas from all active constraints
    *
-   * @return Combined vector of sample areas
+   * Collects SampleArea objects produced by the ExclusionZoneConstraint and
+   * the KissingSurfaceConstraint and concatenates them into a single vector
+   * that is forwarded to the contact-point sampler.
+   *
+   * @return Combined vector of SampleArea objects from all constraints
    */
   std::vector<core::SampleArea> merge_sample_areas() const;
-
-  rclcpp::Logger logger_;
 };
 
 }  // namespace core

@@ -27,9 +27,6 @@
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
-#include <STEPControl_Reader.hxx>
-#include <Geom_Surface.hxx>
-#include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
@@ -42,125 +39,78 @@ namespace hold_and_weld_gripper_sampler
 namespace geometry
 {
 
-/**
- * @brief Convert OCCT point to Eigen vector
- */
+/** @brief Convert OCCT point to Eigen vector */
 Eigen::Vector3d to_eigen(const gp_Pnt & pnt);
 
-/**
- * @brief Convert Eigen vector to OCCT point
- */
+/** @brief Convert Eigen vector to OCCT point */
 gp_Pnt to_occt_point(const Eigen::Vector3d & vec);
 
-/**
- * @brief Convert OCCT vector to Eigen vector
- */
+/** @brief Convert OCCT vector to Eigen vector */
 Eigen::Vector3d to_eigen(const gp_Vec & vec);
 
-/**
- * @brief Convert Eigen vector to OCCT vector
- */
+/** @brief Convert Eigen vector to OCCT vector */
 gp_Vec to_occt_vec(const Eigen::Vector3d & vec);
 
-/**
- * @brief Convert OCCT direction to Eigen unit vector
- */
+/** @brief Convert OCCT direction to Eigen unit vector */
 Eigen::Vector3d to_eigen(const gp_Dir & dir);
 
-/**
- * @brief Create OCCT transform from translation and quaternion
- */
+/** @brief Create OCCT transform from translation and quaternion */
 gp_Trsf create_transform(
   const Eigen::Vector3d & translation,
   const Eigen::Quaterniond & quaternion);
 
-/**
- * @brief Apply transform to OCCT shape (creates new transformed shape)
- */
+/** @brief Apply transform to OCCT shape, returns new transformed shape */
 TopoDS_Shape apply_transform(
   const TopoDS_Shape & shape,
   const gp_Trsf & transform);
 
 /**
- * @brief Extract surface normal at face center with orientation correction
+ * @brief Extract surface normal at face center.
  *
- * CRITICAL: Handles TopAbs_REVERSED faces correctly!
+ * Handles TopAbs_REVERSED faces correctly.
  */
 gp_Vec extract_surface_normal(const TopoDS_Face & face);
 
-/**
- * @brief Extract surface center point
- */
+/** @brief Extract surface centroid */
 gp_Pnt extract_surface_center(const TopoDS_Face & face);
 
-/**
- * @brief Compute dot product between two OCCT vectors
- */
-double dot_product(const gp_Vec & v1, const gp_Vec & v2);
 
-/**
- * @brief Check if two normals are approximately parallel (same direction)
- */
-bool are_normals_aligned(
-  const gp_Vec & normal1,
-  const gp_Vec & normal2,
-  double tolerance);
-
-/**
- * @brief Check if two normals are approximately anti-parallel (opposite)
- */
-bool are_normals_opposite(
-  const gp_Vec & normal1,
-  const gp_Vec & normal2,
-  double tolerance);
-
-/**
- * @brief Compute distance between two OCCT points
- */
-double distance(const gp_Pnt & p1, const gp_Pnt & p2);
 
 /**
  * @brief Classify edge geometry type (LINE, CIRCLE, or SPLINE)
  *
- * Uses OCCT's GeomAdaptor_Curve to determine the underlying curve type.
- * - LINE: Straight line segment
- * - CIRCLE: Circular arc
- * - SPLINE: B-spline, Bezier, ellipse, hyperbola, parabola, or other curves
+ * Uses GeomAdaptor_Curve to determine the underlying curve type.
+ * SPLINE covers B-spline, Bezier, ellipse, hyperbola, parabola, and other curves.
  *
- * @param edge The TopoDS_Edge to classify
+ * @param edge Edge to classify
  * @return EdgeType classification
  */
 EdgeType classify_edge(const TopoDS_Edge & edge);
 
 /**
- * @brief Check if a face has inner holes (inner wires)
+ * @brief Check if a face has inner holes (more than one wire)
  *
- * A face with inner holes has more than one wire:
- * - Outer wire: the boundary of the surface
- * - Inner wire(s): holes cut out from the surface
+ * Example: a washer has one outer wire and one inner wire.
  *
- * Example: A washer (flat disk with center hole) has 1 outer + 1 inner wire.
- *
- * @param face The TopoDS_Face to check
- * @return true if face has inner holes (wire count > 1), false otherwise
+ * @param face Face to check
+ * @return true if face has inner holes
  */
 bool has_inner_holes(const TopoDS_Face & face);
 
 /**
  * @brief Extract corner positions from a wire
  *
- * Extracts all vertices from the wire and converts them to Eigen vectors.
- * Uses indexed map to automatically filter out duplicate vertices.
+ * Uses indexed map to filter duplicate vertices.
  *
- * @param wire The TopoDS_Wire to extract corners from
- * @return Vector of corner positions in world frame
+ * @param wire Wire to extract corners from
+ * @return Corner positions in world frame
  */
 std::vector<Eigen::Vector3d> extract_corners_from_wire(const TopoDS_Wire & wire);
 
 /**
  * @brief Extract translation component from OCCT transform
  *
- * @param transform The gp_Trsf to extract from
+ * @param transform Transform to extract from
  * @return Translation as Eigen::Vector3d
  */
 Eigen::Vector3d extract_translation(const gp_Trsf & transform);
@@ -168,33 +118,33 @@ Eigen::Vector3d extract_translation(const gp_Trsf & transform);
 /**
  * @brief Extract rotation as quaternion from OCCT transform
  *
- * @param transform The gp_Trsf to extract from
- * @return Rotation as Eigen::Quaterniond (normalized)
+ * @param transform Transform to extract from
+ * @return Normalized rotation as Eigen::Quaterniond
  */
 Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform);
 
 /**
  * @brief Compute minimum distance between two faces
  *
- * Uses BRepExtrema_DistShapeShape for exact distance computation.
+ * Uses BRepExtrema_DistShapeShape for exact computation.
  * Returns std::numeric_limits<double>::max() on failure.
  *
  * @param face_1 First face
  * @param face_2 Second face
- * @return Minimum distance between the two faces [m]
+ * @return Minimum distance in meters
  */
 double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2);
 
 /**
  * @brief Compute surface normal at a point on a face
  *
- * Projects the point onto the face's underlying surface to find UV parameters,
- * then evaluates the surface normal there. Falls back to the face center normal
- * if projection fails. Handles TopAbs_REVERSED faces correctly.
+ * Projects the point onto the surface to find UV parameters, then evaluates
+ * the normal there. Falls back to face center normal if projection fails.
+ * Handles TopAbs_REVERSED faces correctly.
  *
  * @param point Query point (should lie on or near the face)
  * @param face Face to evaluate normal on
- * @return Normal vector if defined, std::nullopt otherwise
+ * @return Normal vector, or std::nullopt if undefined
  */
 std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS_Face & face);
 

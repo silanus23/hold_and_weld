@@ -30,6 +30,7 @@
 
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 
 using namespace hold_and_weld_gripper_sampler;  // NOLINT
@@ -86,6 +87,19 @@ protected:
   {
     mapper_ = std::make_shared<GeometryMapper>();
     gripper_ = create_mock_gripper();
+  }
+
+  // Build an FCLCollisionChecker with the exclusion volumes from the constraint
+  // and wire it in so that intersects_exclusion_zone() can do real FCL queries.
+  // Must be called after analyze_constraints() so collision_volumes_ is populated.
+  static void wire_fcl(
+    ExclusionZoneConstraint & constraint,
+    const ParsedGripper & gripper,
+    const TopoDS_Shape & primary_shape)
+  {
+    auto fcl = std::make_shared<geometry::FCLCollisionChecker>(gripper, primary_shape);
+    fcl->add_exclusion_volumes(constraint.get_collision_volumes());
+    constraint.set_fcl_checker(fcl);
   }
 
   std::shared_ptr<GeometryMapper> mapper_;
@@ -169,6 +183,7 @@ TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Place gripper far away (at 1 meter away)
   gp_Trsf far_transform;
@@ -196,6 +211,7 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWhenInsideExclusionZone)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Place gripper at origin (inside the exclusion zone)
   gp_Trsf origin_transform;
@@ -223,6 +239,7 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Place gripper at origin (inside the tube)
   gp_Trsf origin_transform;
@@ -261,6 +278,7 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithPolygonExclusionZone)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Place gripper at origin (inside the prism)
   gp_Trsf origin_transform;
@@ -287,6 +305,7 @@ TEST_F(ExclusionZoneConstraintTest, GripperOpensCorrectly)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Position gripper near the exclusion zone at origin
   gp_Trsf near_transform;
@@ -325,6 +344,7 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
     TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
     Topology topology = mapper_->load_from_shape(test_box);
     constraint.analyze_constraints(test_box, topology);
+    wire_fcl(constraint, gripper_, test_box);
   });
 }
 
@@ -344,6 +364,7 @@ TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Should not crash with very small geometry
   gp_Trsf transform;
@@ -373,6 +394,7 @@ TEST_F(ExclusionZoneConstraintTest, CircleClearanceIsSymmetric)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Place gripper clearly inside the exclusion cylinder (at its center)
   gp_Trsf inside_transform;
@@ -433,6 +455,7 @@ TEST_F(ExclusionZoneConstraintTest, MultipleExclusionZonesAllChecked)
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.4, 0.2, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 
   // Collision with first zone only
   gp_Trsf near_first;

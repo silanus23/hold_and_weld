@@ -19,7 +19,6 @@
 #include <vector>
 
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepExtrema_DistShapeShape.hxx>
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -300,59 +299,70 @@ TEST_F(FCLCollisionCheckerTest, RotatedGripperCollisionCheck)
 }
 
 
-TEST_F(FCLCollisionCheckerTest, FCLvsOCCTConsistencyOnKnownPrimitive)
+TEST_F(FCLCollisionCheckerTest, FCLCollisionMonotonicWithDistance)
 {
-  // Scene: the test_gripper (fingers along ±X, base above) against a 100mm
-  // cube centred at the origin.  We sweep the gripper in Z from clearly
-  // inside the cube out to clearly outside and verify that FCL's boolean
-  // agrees with the OCCT BRepExtrema distance at every step.
+  // Sweep the gripper in Z from deep inside the primary cube out to well
+  // beyond it and verify that:
+  //  - positions clearly inside always report collision
+  //  - positions clearly outside never report collision
+  //  - the transition is consistent (no spurious flips far from the boundary)
   //
   // Gripper geometry (closed, grip_distance = 0):
   //   finger_1 / finger_2: 10×10×50 mm box, corner at (−5,−5, 0)
   //   base: 50×30×20 mm box, corner at (−25,−15, 50)
   // Primary cube: 100mm cube, corners at (−50,−50,−50) and (+50,+50,+50).
-  //
-  // The two tolerances below deliberately bracket each tested gap so one
-  // path says "collide" and the other says "clear" only at the boundary.
-  // Away from the boundary both paths must agree.
 
   FCLCollisionChecker checker(gripper_, primary_shape_);
   ASSERT_TRUE(checker.is_valid());
 
-  const double grip_distance = 0.0;   // closed gripper
-  const double tolerance    = 0.002;  // 2 mm — used by both paths
+  const double grip_distance = 0.0;  // closed gripper
+  const double tolerance    = 0.002; // 2 mm
 
-  // Z offsets to test (metres).  Negative = inside cube, positive = outside.
-  const std::vector<double> z_offsets = {
-    -0.10,   // deep inside  → both must report collision
-    -0.05,   // inside       → both must report collision
-     0.00,   // touching     → both must report collision (zero distance)
-     0.06,   // 10 mm gap    → both must report NO collision (gap > tolerance)
-     0.20,   // well outside → both must report NO collision
+  struct ZCase {double z; bool expect_collision;};
+  const std::vector<ZCase> cases = {
+    {-0.10, true},   // deep inside cube  → collision
+    {-0.05, true},   // inside cube       → collision
+    { 0.00, true},   // at cube surface   → collision (zero gap)
+    { 0.06, false},  // 10 mm gap outside → no collision (gap > 2 mm tolerance)
+    { 0.20, false},  // well outside      → no collision
   };
 
-  for (double z : z_offsets) {
+  for (const auto & c : cases) {
     gp_Trsf transform;
-    transform.SetTranslation(gp_Vec(0.0, 0.0, z));
+    transform.SetTranslation(gp_Vec(0.0, 0.0, c.z));
 
-    // --- FCL path ---
     bool fcl_collision = checker.collides_with_primary(transform, grip_distance, tolerance);
 
-    // --- OCCT path ---
-    TopoDS_Shape configured = configure_gripper(gripper_, grip_distance);
-    BRepBuilderAPI_Transform xform(configured, transform, Standard_True);
-    TopoDS_Shape placed = xform.Shape();
-    BRepExtrema_DistShapeShape dist(placed, primary_shape_);
-    ASSERT_TRUE(dist.IsDone()) << "BRepExtrema failed at z=" << z;
-    bool occt_collision = dist.Value() < tolerance;
-
-    EXPECT_EQ(fcl_collision, occt_collision)
-      << "FCL and OCCT disagree at z=" << z
-      << "  FCL=" << fcl_collision
-      << "  OCCT=" << occt_collision
-      << "  dist=" << dist.Value()
-      << "  tolerance=" << tolerance;
+    EXPECT_EQ(fcl_collision, c.expect_collision)
+      << "Unexpected FCL result at z=" << c.z
+      << "  expected=" << c.expect_collision
+      << "  got=" << fcl_collision;
   }
+}
+
+TEST_F(FCLCollisionCheckerTest, FCLDistanceMonotonicWithSeparation)
+{
+  // Verify that distance_to_primary increases as the gripper moves away from
+  // the primary shape.  Three positions sampled at increasing Z offsets must
+  // produce non-decreasing distances.
+
+  FCLCollisionChecker checker(gripper_, primary_shape_);
+  ASSERT_TRUE(checker.is_valid());
+
+  const double grip_distance = 0.0;
+
+  gp_Trsf t1, t2, t3;
+  t1.SetTranslation(gp_Vec(0.0, 0.0, 0.10));  // just outside top face
+  t2.SetTranslation(gp_Vec(0.0, 0.0, 0.20));  // 100 mm further
+  t3.SetTranslation(gp_Vec(0.0, 0.0, 0.40));  // 200 mm further still
+
+  double d1 = checker.distance_to_primary(t1, grip_distance);
+  double d2 = checker.distance_to_primary(t2, grip_distance);
+  double d3 = checker.distance_to_primary(t3, grip_distance);
+
+  EXPECT_GE(d1, 0.0) << "Distance must be non-negative when outside primary";
+  EXPECT_GE(d2, d1)  << "Distance must increase as gripper moves away (t1→t2)";
+  EXPECT_GE(d3, d2)  << "Distance must increase as gripper moves away (t2→t3)";
 }
 
 }  // namespace test

@@ -30,7 +30,6 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
-#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRep_Tool.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepLib.hxx>
@@ -55,6 +54,7 @@
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 
@@ -226,6 +226,17 @@ protected:
     mapper_ = std::make_shared<GeometryMapper>();
   }
 
+  // Build an FCLCollisionChecker from primary_shape and wire it into finder.
+  // Must be called after the finder is constructed and before find_valid_grasps.
+  static void wire_fcl(
+    GraspOrientationFinder & finder,
+    const ParsedGripper & gripper,
+    const TopoDS_Shape & primary_shape)
+  {
+    auto fcl = std::make_shared<geometry::FCLCollisionChecker>(gripper, primary_shape);
+    finder.set_fcl_checker(fcl);
+  }
+
   ParsedGripper gripper_;
   std::shared_ptr<GeometryMapper> mapper_;
 };
@@ -254,6 +265,7 @@ TEST_F(GraspOrientationFinderTest, FindGraspsOnSimpleBox)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(box, gripper_, nullptr, nullptr, config);
+  wire_fcl(finder, gripper_, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.025);   // Center of X=0 face (YZ plane)
@@ -290,6 +302,7 @@ TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
 
   ParsedGripper small_gripper = create_small_gripper();
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   // Contact pair on opposing X faces.  Y=0.008 places each contact 8 mm
   // from the nearest Y-edge of its face, well within finger_length=0.06 m.
@@ -348,6 +361,8 @@ TEST_F(GraspOrientationFinderTest, ClusteringReducesEdgeCandidates)
     box, small_gripper, nullptr, nullptr, config_no_limit);
   GraspOrientationFinder finder_capped(
     box, small_gripper, nullptr, nullptr, config_capped);
+  wire_fcl(finder_no_limit, small_gripper, box);
+  wire_fcl(finder_capped, small_gripper, box);
 
   // Contact pair across the X faces of the box
   ContactPair pair;
@@ -393,6 +408,8 @@ TEST_F(GraspOrientationFinderTest, LargerDualSeedDedupToleranceFewerOrientations
 
   GraspOrientationFinder finder_narrow(box, small_gripper, nullptr, nullptr, config_narrow);
   GraspOrientationFinder finder_wide(box, small_gripper, nullptr, nullptr, config_wide);
+  wire_fcl(finder_narrow, small_gripper, box);
+  wire_fcl(finder_wide, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -433,6 +450,8 @@ TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates
 
   GraspOrientationFinder finder_single(box, small_gripper, nullptr, nullptr, config_single);
   GraspOrientationFinder finder_triple(box, small_gripper, nullptr, nullptr, config_triple);
+  wire_fcl(finder_single, small_gripper, box);
+  wire_fcl(finder_triple, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -472,6 +491,8 @@ TEST_F(GraspOrientationFinderTest, EmptyAngleOffsetsDefaultsToZero)
 
   GraspOrientationFinder finder_empty(box, small_gripper, nullptr, nullptr, config_empty);
   GraspOrientationFinder finder_zero(box, small_gripper, nullptr, nullptr, config_zero);
+  wire_fcl(finder_empty, small_gripper, box);
+  wire_fcl(finder_zero, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -519,6 +540,8 @@ TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceIsConfigurable)
 
   GraspOrientationFinder finder_no_dedup(u_edge, small_gripper, nullptr, nullptr, config_no_dedup);
   GraspOrientationFinder finder_dedup(u_edge, small_gripper, nullptr, nullptr, config_dedup);
+  wire_fcl(finder_no_dedup, small_gripper, u_edge);
+  wire_fcl(finder_dedup, small_gripper, u_edge);
 
   // Contact inside the arc
   ContactPair pair;
@@ -554,6 +577,7 @@ TEST_F(GraspOrientationFinderTest, QualityScoreInValidRange)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -592,6 +616,7 @@ TEST_F(GraspOrientationFinderTest, QualityScoreOrderingCenterVsEdge)
   config.angle_offsets   = {0.0};  // Single angle — one grasp per pair
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   // Center contact: 50 mm from every edge on the face
   ContactPair center_pair;
@@ -659,6 +684,8 @@ TEST_F(GraspOrientationFinderTest, MaxEdgeCandidatesLimitsOutput)
     box, small_gripper, nullptr, nullptr, config_unlimited);
   GraspOrientationFinder finder_limited(
     box, small_gripper, nullptr, nullptr, config_limited);
+  wire_fcl(finder_unlimited, small_gripper, box);
+  wire_fcl(finder_limited, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -694,6 +721,7 @@ TEST_F(GraspOrientationFinderTest, RejectsUnreachableContactWhenNoEdgesInRange)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   // Contact in the center of the face (far from edges)
   ContactPair pair;
@@ -723,6 +751,7 @@ TEST_F(GraspOrientationFinderTest, ApproachDirectionPerpendicularToGripAxis)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -761,6 +790,7 @@ TEST_F(GraspOrientationFinderTest, TransformFollowsURDFConvention)
   config.angle_offsets = {0.0};
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -872,6 +902,8 @@ TEST_F(GraspOrientationFinderTest, LargerFingerLengthFindsMoreEdges)
 
   GraspOrientationFinder finder_small(box, small_gripper, nullptr, nullptr, config_small);
   GraspOrientationFinder finder_large(box, small_gripper, nullptr, nullptr, config_large);
+  wire_fcl(finder_small, small_gripper, box);
+  wire_fcl(finder_large, small_gripper, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
@@ -902,6 +934,7 @@ TEST_F(GraspOrientationFinderTest, CollisionFilteringRemovesInvalidGrasps)
   config.collision_tolerance = 0.001;
 
   GraspOrientationFinder finder(box, gripper_, nullptr, nullptr, config);
+  wire_fcl(finder, gripper_, box);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.015, 0.015);
@@ -936,6 +969,7 @@ TEST_F(GraspOrientationFinderTest, StraightEdgeHasSingleMinimum)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   // Contact point on face center - equidistant to edges
   ContactPair pair;
@@ -978,6 +1012,7 @@ TEST_F(GraspOrientationFinderTest, CurvedEdgeHasMultipleMinima)
   config.angle_offsets = {0.0};    // Single offset for cleaner results
 
   GraspOrientationFinder finder(half_disk, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, half_disk);
 
   // Contact point OFF-CENTER inside the arc - asymmetric position ensures
   // different distances to each arc endpoint, producing different approach directions
@@ -1042,6 +1077,8 @@ TEST_F(GraspOrientationFinderTest, MaxOrientationsPerPairLimitsResults)
   GraspOrientationFinder finder_unlimited(u_edge, small_gripper, nullptr, nullptr,
     config_unlimited);
   GraspOrientationFinder finder_limited(u_edge, small_gripper, nullptr, nullptr, config_limited);
+  wire_fcl(finder_unlimited, small_gripper, u_edge);
+  wire_fcl(finder_limited, small_gripper, u_edge);
 
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.02, 0.0);
@@ -1085,6 +1122,7 @@ TEST_F(GraspOrientationFinderTest, DualSeedStrategyUsesBothContacts)
   config.angle_offsets = {0.0};    // Single offset
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, box);
 
   // Contact points on opposite X faces - both have 4 nearby edges each
   // (the 4 edges of each face)
@@ -1145,6 +1183,7 @@ TEST_F(GraspOrientationFinderTest, EndpointMinimaDetected)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(compound, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, compound);
 
   // Contact very close to p1 endpoint - minimum should be at endpoint
   ContactPair pair;
@@ -1200,6 +1239,7 @@ TEST_F(GraspOrientationFinderTest, EdgePassingThroughCircleFindsMinimumInside)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(compound, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, compound);
 
   // Contact at origin
   ContactPair pair;
@@ -1247,6 +1287,7 @@ TEST_F(GraspOrientationFinderTest, EdgeOutsideCircleNoConstraints)
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(compound, small_gripper, nullptr, nullptr, config);
+  wire_fcl(finder, small_gripper, compound);
 
   // Contact at origin - edge is too far
   ContactPair pair;

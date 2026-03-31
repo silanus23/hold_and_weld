@@ -18,6 +18,7 @@
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRep_Builder.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <TopoDS_Compound.hxx>
 
@@ -26,39 +27,43 @@ namespace hold_and_weld_gripper_sampler
 
 TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distance)
 {
+  // Clamp finger travel to half the requested grip distance, bounded by max_opening
   const double finger_travel = std::max(
     0.0,
-    std::min(
-      grip_distance / 2.0,
-      gripper.max_opening / 2.0));
+    std::min(grip_distance / 2.0, gripper.max_opening / 2.0));
 
-  gp_Trsf f1_trsf;
-  f1_trsf.SetTranslation(
-    gp_Vec(
-      gripper.finger_1_axis.x(),
-      gripper.finger_1_axis.y(),
-      gripper.finger_1_axis.z()) * finger_travel);
+  try {
+    gp_Trsf f1_trsf;
+    f1_trsf.SetTranslation(
+      gp_Vec(
+        gripper.finger_1_axis.x(),
+        gripper.finger_1_axis.y(),
+        gripper.finger_1_axis.z()) * finger_travel);
 
-  gp_Trsf f2_trsf;
-  f2_trsf.SetTranslation(
-    gp_Vec(
-      gripper.finger_2_axis.x(),
-      gripper.finger_2_axis.y(),
-      gripper.finger_2_axis.z()) * finger_travel);
+    gp_Trsf f2_trsf;
+    f2_trsf.SetTranslation(
+      gp_Vec(
+        gripper.finger_2_axis.x(),
+        gripper.finger_2_axis.y(),
+        gripper.finger_2_axis.z()) * finger_travel);
 
-  TopoDS_Shape finger_1_opened =
-    BRepBuilderAPI_Transform(gripper.finger_1, f1_trsf, Standard_True).Shape();
-  TopoDS_Shape finger_2_opened =
-    BRepBuilderAPI_Transform(gripper.finger_2, f2_trsf, Standard_True).Shape();
+    TopoDS_Shape finger_1_opened =
+      BRepBuilderAPI_Transform(gripper.finger_1, f1_trsf, Standard_True).Shape();
+    TopoDS_Shape finger_2_opened =
+      BRepBuilderAPI_Transform(gripper.finger_2, f2_trsf, Standard_True).Shape();
 
-  BRep_Builder builder;
-  TopoDS_Compound compound;
-  builder.MakeCompound(compound);
-  builder.Add(compound, finger_1_opened);
-  builder.Add(compound, finger_2_opened);
-  builder.Add(compound, gripper.base);
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    builder.Add(compound, finger_1_opened);
+    builder.Add(compound, finger_2_opened);
+    builder.Add(compound, gripper.base);
 
-  return compound;
+    return compound;
+  } catch (Standard_Failure & e) {
+    throw std::runtime_error(
+      std::string("configure_gripper failed: ") + e.GetMessageString());
+  }
 }
 
 }  // namespace hold_and_weld_gripper_sampler

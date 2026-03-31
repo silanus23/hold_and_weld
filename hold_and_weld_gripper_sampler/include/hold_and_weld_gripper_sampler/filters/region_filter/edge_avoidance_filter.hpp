@@ -47,12 +47,29 @@ public:
    */
   explicit EdgeAvoidanceFilter(double offset);
 
+  /**
+   * @brief Compute inset sample areas for each valid surface
+   *
+   * For each surface ID in valid_surface_ids, builds the boundary wire,
+   * applies the inward offset, and returns a SampleArea whose region is
+   * the resulting inset polygon.
+   *
+   * @param shape Primary workpiece shape (used for face lookup)
+   * @param topology Topology of the primary shape
+   * @param valid_surface_ids Surface IDs that passed upstream filters
+   * @return Vector of SampleArea objects, one per successfully inset surface
+   */
   std::vector<core::SampleArea> evaluate(
     const TopoDS_Shape & shape,
     const geometry::Topology & topology,
     const std::vector<int> & valid_surface_ids
   ) const override;
 
+  /**
+   * @brief Return human-readable filter name for logging
+   *
+   * @return Name string identifying this filter
+   */
   std::string get_name() const override;
 
 private:

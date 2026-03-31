@@ -69,19 +69,27 @@ struct exclusion_polygon
   double clearance = 0.01;
 };
 
-
-
 /**
  * @brief Constraint for user-defined exclusion zones (welds, screws, forbidden areas)
  *
  * Handles:
- * 1. Creates exclusion wires for sampling
- * 2. Configures gripper kinematics (opens fingers to grip distance)
- * 3. Validates gripper collision at configured state
+ * 1. Creates exclusion wires for sampling via analyze_constraints()
+ * 2. Validates gripper collision against exclusion volumes via intersects_exclusion_zone()
  */
 class ExclusionZoneConstraint
 {
 public:
+  /**
+   * @brief Constructor
+   *
+   * @param mapper Shared geometry mapper for face ID lookups
+   * @param gripper Parsed gripper kinematic information
+   * @param circles Optional exclusion circles (e.g. weld spots, screw heads)
+   * @param polygons Optional exclusion polygons (e.g. forbidden rectangular regions)
+   * @param lines Optional exclusion lines (e.g. weld seams)
+   * @param mesh_linear_deflection Max distance between mesh edge and actual curve (meters)
+   * @param mesh_angular_deflection Max angular deviation between adjacent mesh triangles (radians)
+   */
   ExclusionZoneConstraint(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
     const ParsedGripper & gripper,
@@ -95,9 +103,6 @@ public:
   /**
    * @brief Set FCL collision checker for fast collision queries
    *
-   * When set, intersects_exclusion_zone() will use FCL instead of OCCT.
-   * The FCL checker must have exclusion volumes added via add_exclusion_volumes().
-   *
    * @param fcl_checker Shared pointer to FCL collision checker
    */
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
@@ -105,8 +110,8 @@ public:
   /**
    * @brief Analyze exclusion constraints against primary shape
    *
-   * Creates constraint volumes, projects to get exclusion wires
-   * Must be called before get_sample_areas()
+   * Creates constraint volumes and projects them onto the primary shape to
+   * extract exclusion wires. Must be called before get_sample_areas().
    *
    * @param shape Primary shape to project constraints onto
    * @param topology Topology of the primary shape
@@ -119,24 +124,16 @@ public:
   /**
    * @brief Get exclusion wires for sampling
    *
-   * Call after analyze_constraints()
-   *
    * @return Vector of SampleArea objects with exclusion wires
    */
   std::vector<core::SampleArea> get_sample_areas() const;
 
-
   /**
-   * @brief Check if gripper at specified pose and grip distance collides with exclusion zones
-   *
-   * This method:
-   * 1. Configures gripper fingers to grip_distance
-   * 2. Transforms configured gripper to gripper_transform
-   * 3. Checks collision with exclusion zone volumes
+   * @brief Check if gripper at specified pose collides with exclusion zones
    *
    * @param gripper_transform 6-DOF pose of gripper
-   * @param grip_distance Distance between fingers (determines joint state)
-   * @param tolerance Distance threshold for collision detection (default 0.001m = 1mm)
+   * @param grip_distance Distance between fingers
+   * @param tolerance Distance threshold for collision detection (default 1mm)
    * @return true if collision detected, false otherwise
    */
   bool intersects_exclusion_zone(
@@ -145,17 +142,19 @@ public:
     double tolerance = 0.001
   ) const;
 
-  std::string get_name() const;
-
   /**
    * @brief Get collision volumes for FCL checker initialization
-   *
-   * Returns the exclusion volumes with clearance applied, suitable for
-   * adding to FCLCollisionChecker via add_exclusion_volumes().
    *
    * @return Vector of collision volume shapes
    */
   const std::vector<TopoDS_Shape> & get_collision_volumes() const;
+
+  /**
+   * @brief Get the human-readable name of this constraint
+   *
+   * @return Constraint name string (e.g. "ExclusionZoneConstraint")
+   */
+  std::string get_name() const;
 
 private:
   std::shared_ptr<const geometry::GeometryMapper> mapper_;
@@ -171,13 +170,11 @@ private:
 
   std::vector<core::SampleArea> sample_areas_;
 
-  // Mesh deflection parameters for OCCT triangulation
-  // Linear deflection: maximum distance between mesh edge and actual curve
-  // Angular deflection: maximum angular deviation in radians
+  // Linear deflection: max distance between mesh edge and actual curve (meters)
+  // Angular deflection: max angular deviation between adjacent triangles (radians)
   double mesh_linear_deflection_;
   double mesh_angular_deflection_;
 
-  // Logger
   rclcpp::Logger logger_;
 
   /**
@@ -219,8 +216,8 @@ private:
   /**
    * @brief Section constraint volume with shape to extract exclusion wires
    *
-   * @param constraint_volume Constraint geometry to project
-   * @param shape Primary shape to section with
+   * @param constraint_volume Constraint geometry to section
+   * @param shape Primary shape to section against
    * @return Vector of SampleArea objects with exclusion wires per surface
    */
   std::vector<core::SampleArea> process_constraint_volume(
