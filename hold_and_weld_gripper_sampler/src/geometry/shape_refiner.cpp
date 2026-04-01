@@ -19,6 +19,7 @@
 #include <stdexcept>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <GeomAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -30,6 +31,7 @@
 #include <GProp_GProps.hxx>
 #include <rclcpp/rclcpp.hpp>
 #include <ShapeFix_Shape.hxx>
+#include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -98,6 +100,76 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
       }
     }
 
+    // Pre-split all U-periodic (closed/seamed) faces that exceed the arc length limit.
+    // BRepFeat_SplitShape silently fails on U-periodic faces — cylinders, cones, spheres,
+    // tori and full-revolution BSplines — because it cannot wire ISO curve edges into a
+    // face that has no existing seam edge. ShapeUpgrade_ShapeDivideClosed opens the seam
+    // on all such faces so BRepFeat_SplitShape can work correctly on the resulting open faces.
+    {
+      int nb_split_points = 0;
+      for (TopExp_Explorer e(current_shape, TopAbs_FACE); e.More(); e.Next()) {
+        BRepAdaptor_Surface adaptor(TopoDS::Face(e.Current()));
+        if (!adaptor.IsUPeriodic()) {continue;}
+
+        // Estimate the full U-period arc length to determine how many splits are needed.
+        // For analytical surfaces use the exact formula; for BSpline/Bezier sample the
+        // mid-V isocurve over the full U period.
+        double u_arc_length = 0.0;
+        const GeomAbs_SurfaceType stype = adaptor.GetType();
+        if (stype == GeomAbs_Cylinder) {
+          u_arc_length = 2.0 * M_PI * adaptor.Cylinder().Radius();
+        } else if (stype == GeomAbs_Cone) {
+          // Approximate via the reference radius of the cone
+          u_arc_length = 2.0 * M_PI * adaptor.Cone().RefRadius();
+        } else if (stype == GeomAbs_Sphere) {
+          u_arc_length = 2.0 * M_PI * adaptor.Sphere().Radius();
+        } else if (stype == GeomAbs_Torus) {
+          u_arc_length = 2.0 * M_PI * (adaptor.Torus().MajorRadius() +
+            adaptor.Torus().MinorRadius());
+        } else {
+          // BSpline, Bezier or other — sample the mid-V isocurve length as an estimate
+          try {
+            Handle(Geom_Curve) iso = adaptor.Surface().Surface()->UIso(
+              (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2.0);
+            if (!iso.IsNull()) {
+              GeomAdaptor_Curve iso_adaptor(iso,
+                adaptor.FirstVParameter(), adaptor.LastVParameter());
+              u_arc_length = GCPnts_AbscissaPoint::Length(iso_adaptor);
+            }
+          } catch (Standard_Failure &) {}
+        }
+
+        if (u_arc_length > max_arc_length_) {
+          int pieces = static_cast<int>(std::ceil(u_arc_length / max_arc_length_));
+          nb_split_points = std::max(nb_split_points, pieces - 1);
+        }
+      }
+
+      if (nb_split_points > 0) {
+        RCLCPP_INFO(logger_,
+          "U-periodic face(s) exceed arc length limit - "
+          "pre-splitting to open seam before surface splitter (%d point(s)).",
+          nb_split_points);
+        try {
+          ShapeUpgrade_ShapeDivideClosed divider(current_shape);
+          divider.SetNbSplitPoints(nb_split_points);
+          divider.Perform();
+          TopoDS_Shape divided = divider.Result();
+          if (!divided.IsNull()) {
+            current_shape = divided;
+            RCLCPP_DEBUG(logger_,
+              "Pre-split complete: %d split point(s) applied", nb_split_points);
+          }
+        } catch (Standard_Failure & e) {
+          RCLCPP_WARN(logger_,
+            "ShapeDivideClosed failed: %s - continuing without pre-split",
+            e.GetMessageString());
+        } catch (...) {
+          RCLCPP_WARN(logger_, "ShapeDivideClosed failed - continuing without pre-split");
+        }
+      }
+    }
+
     BRepFeat_SplitShape splitter(current_shape);
     bool needs_split = false;
     size_t total_splits = 0;
@@ -110,6 +182,9 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
 
       BRepAdaptor_Surface adaptor(face);
       GeomAbs_SurfaceType type = adaptor.GetType();
+
+      // Skip U-periodic faces — already handled by ShapeUpgrade_ShapeDivideClosed above
+      if (adaptor.IsUPeriodic()) {continue;}
       std::vector<double> u_splits, v_splits;
 
       // For freeform surfaces, detect inflection points by sampling curvature
@@ -459,6 +534,9 @@ void ShapeRefiner::check_edge_arc_lengths(
     max_v_edge_length *= (v_max - v_min) / (2.0 * M_PI);
   }
 
+  // Generates split parameters for any face where an edge exceeds the arc length limit.
+  // Handles planes, cones, partial cylinders (non-periodic), and freeform surfaces.
+  // Full closed cylinders reach here only via the final area-ratio pass.
   if (max_u_edge_length > max_arc_length_) {
     int num_pieces = std::ceil(max_u_edge_length / max_arc_length_);
     double step = (u_max - u_min) / num_pieces;
