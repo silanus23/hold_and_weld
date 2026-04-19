@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<!--
+  Cylinder Workpiece URDF
+  =======================
+  A cylindrical workpiece for testing the grasp sampling pipeline.
+  This is a standalone URDF (no xacro processing required).
+
+  Workpiece specifications (from cylinder.urdf.xacro):
+  - Radius:  225mm (0.225m)
+  - Height:  250mm (0.250m)
+  - Diameter: 450mm (0.450m)
+
+  Origin is at the geometric center of the cylinder.
+  The cylinder axis is along Z (URDF convention for <cylinder>).
+
+  When placed with center at z=0.125m, the bottom circular face sits
+  flush on z=0.0 (ground plane).
+
+  Graspable surface pairs with test_gripper (60–360mm opening):
+  - Curved side vs curved side: diameter = 450mm → exceeds gripper range ✗
+  - Top flat vs bottom flat:    height   = 250mm → within range ✓
+    (bottom face banned by ground plane — expect 0 valid grasps)
+
+  This workpiece is intentionally a hard/impossible case for this gripper.
+  The pipeline should exit cleanly with 0 grasps and a clear log message.
+-->
+<robot name="cylinder_workpiece">
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.225" length="0.250"/>
+      </geometry>
+      <material name="steel">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.225" length="0.250"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="8.0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <!-- Solid cylinder inertia:
+           Ixx = Iyy = (1/12) * m * (3*r^2 + h^2)
+                     = (1/12) * 8 * (3*0.225^2 + 0.250^2)
+                     = (1/12) * 8 * (0.151875 + 0.0625)
+                     = (1/12) * 8 * 0.214375
+                     = 0.1429
+           Izz = (1/2) * m * r^2
+               = (1/2) * 8 * 0.225^2
+               = 0.2025
+      -->
+      <inertia ixx="0.1429" ixy="0.0" ixz="0.0"
+               iyy="0.1429" iyz="0.0"
+               izz="0.2025"/>
+    </inertial>
+  </link>
+
+</robot>

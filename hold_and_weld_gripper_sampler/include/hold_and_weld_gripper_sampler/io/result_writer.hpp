@@ -49,6 +49,9 @@ struct ResultMetadata
   double total_time_seconds = 0.0;
   double sampling_time_seconds = 0.0;
   double orientation_time_seconds = 0.0;
+
+  // Gripper geometry (for visualization)
+  double finger_length = 0.0;
 };
 
 /**

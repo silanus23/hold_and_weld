@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -64,6 +65,22 @@ static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 GeometryMapper::GeometryMapper() {}
 GeometryMapper::~GeometryMapper() {}
+
+// Helper for orientation math to declutter the URDF parser
+static gp_Quaternion rpy_to_quat(double r, double p, double y)
+{
+  double cy = std::cos(y * 0.5);
+  double sy = std::sin(y * 0.5);
+  double cp = std::cos(p * 0.5);
+  double sp = std::sin(p * 0.5);
+  double cr = std::cos(r * 0.5);
+  double sr = std::sin(r * 0.5);
+  return gp_Quaternion(
+    sr * cp * cy - cr * sp * sy,
+    cr * sp * cy + sr * cp * sy,
+    cr * cp * sy - sr * sp * cy,
+    cr * cp * cy + sr * sp * sy);
+}
 
 TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & urdf_string)
 {
@@ -116,7 +133,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
           transform.SetTranslation(gp_Vec(x, y, z));
         } else {
           RCLCPP_WARN(logger_, "Failed to parse xyz attribute for link '%s'",
-            link_name_str.c_str());
+                link_name_str.c_str());
         }
       }
 
@@ -124,26 +141,12 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
       if (rpy_str) {
         double roll, pitch, yaw;
         if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
-          // RPY to quaternion using ZYX aerospace sequence
-          double cy = std::cos(yaw * 0.5);
-          double sy = std::sin(yaw * 0.5);
-          double cp = std::cos(pitch * 0.5);
-          double sp = std::sin(pitch * 0.5);
-          double cr = std::cos(roll * 0.5);
-          double sr = std::sin(roll * 0.5);
-
-          gp_Quaternion quat(
-            sr * cp * cy - cr * sp * sy,
-            cr * sp * cy + sr * cp * sy,
-            cr * cp * sy - sr * sp * cy,
-            cr * cp * cy + sr * sp * sy);
-
           gp_Trsf rot_transform;
-          rot_transform.SetRotation(quat);
+          rot_transform.SetRotation(rpy_to_quat(roll, pitch, yaw));
           transform = transform * rot_transform;
         } else {
           RCLCPP_WARN(logger_, "Failed to parse rpy attribute for link '%s'",
-            link_name_str.c_str());
+                link_name_str.c_str());
         }
       }
     }
@@ -151,75 +154,54 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
     TopoDS_Shape shape;
 
     try {
-      if (tinyxml2::XMLElement * box = geometry->FirstChildElement("box")) {
-        const char * size_str = box->Attribute("size");
-        if (!size_str) {
-          throw std::runtime_error("Box geometry missing 'size' attribute");
-        }
-
+      if (auto * box = geometry->FirstChildElement("box")) {
         double x, y, z;
-        if (std::sscanf(size_str, "%lf %lf %lf", &x, &y, &z) != 3) {
-          throw std::runtime_error("Failed to parse box size");
+        if (std::sscanf(box->Attribute("size"), "%lf %lf %lf", &x, &y, &z) != 3) {
+          throw std::runtime_error("Invalid box size attributes");
         }
-
-        // URDF convention: box centered at origin
-        shape = BRepPrimAPI_MakeBox(gp_Pnt(-x / 2.0, -y / 2.0, -z / 2.0), x, y, z).Shape();
-
-      } else if (tinyxml2::XMLElement * cylinder = geometry->FirstChildElement("cylinder")) {
-        const char * radius_str = cylinder->Attribute("radius");
-        const char * length_str = cylinder->Attribute("length");
-
-        if (!radius_str || !length_str) {
-          throw std::runtime_error("Cylinder geometry missing 'radius' or 'length' attribute");
+        if (x <= 1e-6 || y <= 1e-6 || z <= 1e-6) {
+          throw std::runtime_error("Box dimensions too small");
         }
+        BRepPrimAPI_MakeBox maker(gp_Pnt(-x / 2.0, -y / 2.0, -z / 2.0), x, y, z);
+        shape = maker.Shape();
 
-        double radius, length;
-        if (std::sscanf(radius_str, "%lf", &radius) != 1 ||
-          std::sscanf(length_str, "%lf", &length) != 1)
+      } else if (auto * cylinder = geometry->FirstChildElement("cylinder")) {
+        double r, l;
+        if (std::sscanf(cylinder->Attribute("radius"), "%lf", &r) != 1 ||
+          std::sscanf(cylinder->Attribute("length"), "%lf", &l) != 1)
         {
-          throw std::runtime_error("Failed to parse cylinder parameters");
+          throw std::runtime_error("Invalid cylinder attributes");
         }
+        if (r <= 1e-6 || l <= 1e-6) {throw std::runtime_error("Cylinder dimensions too small");}
+        BRepPrimAPI_MakeCylinder maker(gp_Ax2(gp_Pnt(0, 0, -l / 2.0), gp_Dir(0, 0, 1)), r, l);
+        shape = maker.Shape();
 
-        // URDF convention: cylinder centered at origin, axis along Z
-        shape = BRepPrimAPI_MakeCylinder(
-          gp_Ax2(gp_Pnt(0, 0, -length / 2.0), gp_Dir(0, 0, 1)), radius, length).Shape();
-
-      } else if (tinyxml2::XMLElement * sphere = geometry->FirstChildElement("sphere")) {
-        const char * radius_str = sphere->Attribute("radius");
-
-        if (!radius_str) {
-          throw std::runtime_error("Sphere geometry missing 'radius' attribute");
+      } else if (auto * sphere = geometry->FirstChildElement("sphere")) {
+        double r;
+        if (std::sscanf(sphere->Attribute("radius"), "%lf", &r) != 1) {
+          throw std::runtime_error("Invalid sphere radius");
         }
-
-        double radius;
-        if (std::sscanf(radius_str, "%lf", &radius) != 1) {
-          throw std::runtime_error("Failed to parse sphere radius");
-        }
-
-        shape = BRepPrimAPI_MakeSphere(radius).Shape();
-
-      } else if (geometry->FirstChildElement("mesh")) {
-        RCLCPP_WARN(logger_, "Mesh geometry not supported for link '%s', skipping",
-          link_name_str.c_str());
-        continue;
-
-      } else {
-        throw std::runtime_error("Unknown or unsupported geometry type");
+        if (r <= 1e-6) {throw std::runtime_error("Sphere radius too small");}
+        BRepPrimAPI_MakeSphere maker(r);
+        shape = maker.Shape();
       }
 
-      if (origin) {
-        BRepBuilderAPI_Transform transformer(shape, transform, true);
+      if (!shape.IsNull() && origin) {
+        BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
+        if (!transformer.IsDone()) {
+          throw std::runtime_error("Geometry transformation failed for link: " + link_name_str);
+        }
         shape = transformer.Shape();
       }
     } catch (Standard_Failure & e) {
-      throw std::runtime_error(
-        "OCCT error creating geometry for link '" + link_name_str +
-        "': " + e.GetMessageString());
+      RCLCPP_ERROR(logger_, "OCCT Geometric Error for link '%s': %s", link_name_str.c_str(),
+            e.GetMessageString());
+      continue;
     } catch (const std::exception & e) {
-      throw std::runtime_error(
-        "Error creating geometry for link '" + link_name_str + "': " + e.what());
+      RCLCPP_ERROR(logger_, "Error creating geometry for link '%s': %s", link_name_str.c_str(),
+            e.what());
+      continue;
     }
-
     builder.Add(compound, shape);
     link_count++;
   }
@@ -230,18 +212,16 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
 
 TopoDS_Shape GeometryMapper::create_shape_from_urdf_file(const std::string & urdf_path)
 {
-  RCLCPP_INFO(logger_, "Loading URDF file: %s", urdf_path.c_str());
+  RCLCPP_DEBUG(logger_, "Loading URDF file: %s", urdf_path.c_str());
 
-  tinyxml2::XMLDocument doc;
-
-  if (doc.LoadFile(urdf_path.c_str()) != tinyxml2::XML_SUCCESS) {
-    throw std::runtime_error(
-      "Failed to load URDF file: " + urdf_path + " - " + std::string(doc.ErrorStr()));
+  std::ifstream file(urdf_path);
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to open URDF file: " + urdf_path);
   }
 
-  tinyxml2::XMLPrinter printer;
-  doc.Print(&printer);
-  return create_shape_from_urdf_string(printer.CStr());
+  std::ostringstream buffer;
+  buffer << file.rdbuf();
+  return create_shape_from_urdf_string(buffer.str());
 }
 
 TopoDS_Shape GeometryMapper::create_shape_from_step(
@@ -259,35 +239,35 @@ TopoDS_Shape GeometryMapper::create_shape_from_step(
       throw std::runtime_error("Failed to read STEP file: " + step_path);
     }
 
-    Standard_Integer num_roots = reader.TransferRoots();
-    RCLCPP_DEBUG(logger_, "Transferred %d root(s) from STEP file", num_roots);
-
+    reader.TransferRoots();
     TopoDS_Shape shape = reader.OneShape();
+
     if (shape.IsNull()) {
       throw std::runtime_error("STEP file contains no valid shapes: " + step_path);
     }
 
-    // Combine rotation then translation
-    gp_Trsf rot_transform;
-    rot_transform.SetRotation(
-      gp_Quaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w()));
+    gp_Trsf rot_trsf;
+    rot_trsf.SetRotation(gp_Quaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w()));
 
-    gp_Trsf trans_transform;
-    trans_transform.SetTranslation(gp_Vec(translation.x(), translation.y(), translation.z()));
+    gp_Trsf trans_trsf;
+    trans_trsf.SetTranslation(gp_Vec(translation.x(), translation.y(), translation.z()));
 
-    BRepBuilderAPI_Transform transformer(shape, trans_transform * rot_transform, true);
-    TopoDS_Shape transformed_shape = transformer.Shape();
+    BRepBuilderAPI_Transform transformer(shape, trans_trsf * rot_trsf, Standard_True);
+
+    if (!transformer.IsDone()) {
+      throw std::runtime_error("Failed to apply transform to STEP model");
+    }
+
+    TopoDS_Shape result = transformer.Shape();
+    if (result.IsNull()) {
+      throw std::runtime_error("Transformation resulted in a null shape");
+    }
 
     RCLCPP_INFO(logger_, "STEP file loaded successfully");
-    return transformed_shape;
+    return result;
+
   } catch (Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT error loading STEP file '%s': %s",
-      step_path.c_str(), e.GetMessageString());
-    throw std::runtime_error(
-      "OCCT error loading STEP file '" + step_path + "': " + e.GetMessageString());
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Error loading STEP file '%s': %s", step_path.c_str(), e.what());
-    throw std::runtime_error("Error loading STEP file '" + step_path + "': " + e.what());
+    throw std::runtime_error(std::string("OCCT STEP Error: ") + e.GetMessageString());
   }
 }
 
@@ -299,16 +279,15 @@ Topology GeometryMapper::create_topology_from_shape(
 
   RCLCPP_DEBUG(logger_, "Extracting topology from shape");
 
-  // Fallback normal when surface normal cannot be computed
   const auto make_fallback_normal = [](const gp_Pnt & center) -> gp_Vec {
-    gp_Vec fallback(center.X(), center.Y(), center.Z());
-    if (fallback.Magnitude() > 1e-9) {
-      fallback.Normalize();
-    } else {
-      fallback = gp_Vec(0, 0, 1);
-    }
-    return fallback;
-  };
+      gp_Vec fallback(center.X(), center.Y(), center.Z());
+      if (fallback.Magnitude() > 1e-6) {
+        fallback.Normalize();
+      } else {
+        fallback = gp_Vec(0, 0, 1);
+      }
+      return fallback;
+    };
 
   try {
     TopTools_IndexedMapOfShape vertex_map;
@@ -367,8 +346,6 @@ Topology GeometryMapper::create_topology_from_shape(
         vertex_map.FindIndex(v1) - 1,
         vertex_map.FindIndex(v2) - 1);
 
-      edge_data.type = classify_edge(edge);
-
       if (edge_to_faces.Contains(edge)) {
         for (TopTools_ListIteratorOfListOfShape it(edge_to_faces.FindFromKey(edge));
           it.More(); it.Next())
@@ -399,21 +376,20 @@ Topology GeometryMapper::create_topology_from_shape(
       BRepGProp::SurfaceProperties(face, props);
       surface.center = props.CentreOfMass();
 
-      Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-      if (surf.IsNull()) {
+      Handle(Geom_Surface) surf_geom = BRep_Tool::Surface(face);
+      if (surf_geom.IsNull()) {
         surface.normal = make_fallback_normal(surface.center);
       } else {
         Standard_Real u_min, u_max, v_min, v_max;
         BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
-        GeomLProp_SLProps props_normal(
-          surf, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1, 1e-6);
+        // Standard: Sampling at midpoint with standard epsilon
+        GeomLProp_SLProps props_normal(surf_geom, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1,
+          1e-6);
 
         if (props_normal.IsNormalDefined()) {
           gp_Vec normal = props_normal.Normal();
-          if (face.Orientation() == TopAbs_REVERSED) {
-            normal.Reverse();
-          }
+          if (face.Orientation() == TopAbs_REVERSED) {normal.Reverse();}
           surface.normal = normal;
         } else {
           surface.normal = make_fallback_normal(surface.center);
@@ -422,9 +398,15 @@ Topology GeometryMapper::create_topology_from_shape(
     }
 
     Topology topology;
-    for (size_t i = 0; i < corners.size(); i++) {topology.add_corner(i, corners[i]);}
-    for (size_t i = 0; i < edges.size(); i++) {topology.add_edge(i, edges[i]);}
-    for (size_t i = 0; i < surfaces.size(); i++) {topology.add_surface(i, surfaces[i]);}
+    for (size_t i = 0; i < corners.size(); i++) {
+      topology.add_corner(i, corners[i]);
+    }
+    for (size_t i = 0; i < edges.size(); i++) {
+      topology.add_edge(i, edges[i]);
+    }
+    for (size_t i = 0; i < surfaces.size(); i++) {
+      topology.add_surface(i, surfaces[i]);
+    }
 
     RCLCPP_DEBUG(logger_, "Topology extraction complete: %zu corners, %zu edges, %zu surfaces",
       corners.size(), edges.size(), surfaces.size());

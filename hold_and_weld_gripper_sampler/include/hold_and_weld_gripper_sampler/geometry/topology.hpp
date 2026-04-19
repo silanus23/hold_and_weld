@@ -37,16 +37,6 @@ namespace geometry
 {
 
 /**
- * @brief Classification of edge geometry type
- */
-enum class EdgeType
-{
-  LINE,     // Straight line segment
-  CIRCLE,   // Circular arc
-  SPLINE    // B-spline, Bezier, ellipse, or other curved edge
-};
-
-/**
  * @brief Represents a corner (vertex) in the object topology.
  *
  * Stores position and connectivity to adjacent edges and surfaces.
@@ -103,15 +93,7 @@ struct Edge
    */
   std::vector<int> connected_surfaces;
 
-  /**
-   * @brief Geometric type of this edge
-   *
-   * Classified as LINE, CIRCLE, or SPLINE based on underlying curve geometry.
-   */
-  EdgeType type;
-
-  Edge()
-  : type(EdgeType::LINE) {}
+  Edge() = default;
 };
 
 /**

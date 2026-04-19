@@ -333,19 +333,19 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
   // about which part of the gripper is closest to the secondary.
   ParsedGripper flat_gripper;
   // 60x60x10 mm block — bottom face at z=0, top face at z=0.01
-  flat_gripper.base  = BRepPrimAPI_MakeBox(
+  flat_gripper.base = BRepPrimAPI_MakeBox(
     gp_Pnt(-0.03, -0.03, 0.0), 0.06, 0.06, 0.01).Shape();
   flat_gripper.finger_1 = flat_gripper.base;
   flat_gripper.finger_2 = flat_gripper.base;
   flat_gripper.finger_1_axis = Eigen::Vector3d(0.0, 1.0, 0.0);
   flat_gripper.finger_2_axis = Eigen::Vector3d(0.0, -1.0, 0.0);
-  flat_gripper.max_opening   = 0.06;
-  flat_gripper.gripper_type  = "parallel";
-  flat_gripper.tcp_offset    = Eigen::Vector3d::Zero();
-  flat_gripper.tcp_rpy       = Eigen::Vector3d::Zero();
-  flat_gripper.base_link_name      = "flat_base";
-  flat_gripper.finger_1_link_name  = "flat_f1";
-  flat_gripper.finger_2_link_name  = "flat_f2";
+  flat_gripper.max_opening = 0.06;
+  flat_gripper.gripper_type = "parallel";
+  flat_gripper.tcp_offset = Eigen::Vector3d::Zero();
+  flat_gripper.tcp_rpy = Eigen::Vector3d::Zero();
+  flat_gripper.base_link_name = "flat_base";
+  flat_gripper.finger_1_link_name = "flat_f1";
+  flat_gripper.finger_2_link_name = "flat_f2";
   flat_gripper.finger_1_joint_name = "flat_j1";
   flat_gripper.finger_2_joint_name = "flat_j2";
 

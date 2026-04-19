@@ -15,17 +15,15 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__ANGLE_FINDING__GRASP_ORIENTATION_FINDER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__ANGLE_FINDING__GRASP_ORIENTATION_FINDER_HPP_
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
-#include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <rclcpp/rclcpp.hpp>
-#include <TopoDS_Edge.hxx>
-#include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
@@ -33,6 +31,7 @@
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
+
 namespace hold_and_weld_gripper_sampler
 {
 
@@ -52,28 +51,50 @@ struct OrientationConfig
 {
   double finger_length = 0.10;
   double finger_radius = 0.02;
-  size_t max_orientations_per_pair = 0;
+  size_t max_orientations_per_pair = 3;
+  double collision_tolerance = 0.001;
+  bool stop_on_first_valid = false;
+  double ring_step_size = 0.010;
+  double angular_step_deg = 2.0;
+  double flat_detection_tolerance_m = 0.003;
+  double cliff_merge_tolerance_deg = 2.0;
+  double min_cliff_width_deg = 5.0;
+
+  // Kept for config-parser compatibility — not used by the radial-map algorithm
   size_t max_edge_candidates = 3;
   double dual_seed_dedup_tolerance_deg = 3.0;
   size_t max_edges_per_contact = 0;
   std::vector<double> angle_offsets = {-15.0, 0.0, 15.0};
-  // When true, orientation search stops after the first valid grasp per contact pair.
-  // TODO(@silanus23): Jump over grasp finder if it's true cause otherwise meaningless work
-  bool stop_on_first_valid = false;
-
-  // Collision tolerance for primary shape and exclusion zone checks (meters).
-  double collision_tolerance = 0.001;
 };
 
 /**
- * @brief Represents an edge within the finger circle
+ * @brief Classification of a surface sample relative to the contact plane
+ *
+ *   FLAT — surface exists at the contact elevation (no edge here)
+ *   HIGH — surface rises above the contact plane (wall, instant ban)
+ *   LOW  — no hit (cliff / drop-off, graspable direction)
  */
-struct EdgeConstraint
+enum class SurfaceState : uint8_t { FLAT, HIGH, LOW };
+
+/**
+ * @brief A contiguous arc of uniform SurfaceState on one ring
+ */
+struct RadialSegment
 {
-  TopoDS_Edge edge;
-  gp_Pnt closest_point;
-  double distance;
-  double bearing_angle;
+  double start_rad;
+  double end_rad;
+  double radius;
+  SurfaceState state;
+};
+
+/**
+ * @brief Complete radial surface map around one contact point
+ */
+struct RadialMaps
+{
+  std::vector<RadialSegment> flat;
+  std::vector<RadialSegment> high;
+  std::vector<RadialSegment> low;
 };
 
 /**
@@ -83,19 +104,17 @@ struct GraspCandidate
 {
   gp_Pnt contact_1;
   gp_Pnt contact_2;
-  gp_Vec approach_direction;   // Finger axis direction
-  gp_Trsf gripper_transform;   // Full gripper placement transform
+  gp_Vec approach_direction;
+  gp_Trsf gripper_transform;
+  gp_Pnt base_position;
   int surface_id_1;
   int surface_id_2;
   double grip_distance;
-  double quality_score;        // Distance from edges (higher = better)
+  double quality_score;
 };
 
 /**
  * @brief Convert GraspCandidate (OCCT types) to Grasp (Eigen types)
- *
- * @param candidate GraspCandidate from orientation finding
- * @return Grasp with Eigen types ready for downstream use
  */
 Grasp to_grasp(const GraspCandidate & candidate);
 
@@ -103,23 +122,23 @@ Grasp to_grasp(const GraspCandidate & candidate);
  * @brief Finds valid gripper orientations for contact point pairs
  *
  * Algorithm:
- * 1. Find edges within finger circle around contact point
- * 2. Identify local minima (closest edge points)
- * 3. For each minimum, test multiple approach angles
- * 4. Validate collision with primary, exclusion zones, and secondaries
+ * 1. Build a local tangent frame per contact from its own surface normal.
+ * 2. Sweep the outer ring (r = finger_length) using FCL raycasting in the
+ *    local tangent plane. Miss = LOW (cliff), hit = FLAT or HIGH based on
+ *    elevation relative to contact point.
+ * 3. Calibrate each contact's angular segments to a shared reference frame
+ *    before merging.
+ * 4. If no LOW arcs on the outer ring → skip this contact pair (fully flat).
+ * 5. Sweep inner rings (r < finger_length) only within the LOW arc ranges
+ *    found on the outer ring. Look only for HIGHs — a HIGH at any inner
+ *    radius trims that arc from the candidate set.
+ * 6. Cluster surviving LOW arcs → one approach seed per cliff.
+ * 7. Validate each seed against primary collision, exclusion zones, and
+ *    secondary shapes via FCL.
  */
 class GraspOrientationFinder
 {
 public:
-  /**
-   * @brief Constructor
-   *
-   * @param primary_shape Primary workpiece shape used for collision validation
-   * @param gripper Parsed gripper containing finger geometry and kinematics
-   * @param exclusion_constraint Constraint defining forbidden zones (welds, screws, etc.)
-   * @param kissing_constraint Constraint defining secondary shape collisions (fixtures, ground)
-   * @param config Tuning parameters for orientation search (finger dimensions, angle offsets, etc.)
-   */
   GraspOrientationFinder(
     const TopoDS_Shape & primary_shape,
     const ParsedGripper & gripper,
@@ -128,20 +147,8 @@ public:
     const OrientationConfig & config = OrientationConfig{}
   );
 
-  /**
-   * @brief Set FCL collision checker for fast collision queries
-   *
-   * @param fcl_checker Shared pointer to FCL collision checker
-   */
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
 
-  /**
-   * @brief Find all valid grasp orientations for contact pairs
-   *
-   * @param contact_pairs Contact point pairs from sampling
-   * @param topology Primary shape topology
-   * @return Vector of valid grasp candidates
-   */
   std::vector<GraspCandidate> find_valid_grasps(
     const std::vector<sampling::ContactPair> & contact_pairs,
     const geometry::Topology & topology
@@ -153,151 +160,99 @@ private:
   std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint_;
   OrientationConfig config_;
-
-  // Optional FCL collision checker for fast queries
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
-
-  // Logger
   rclcpp::Logger logger_;
 
   /**
-   * @brief Find edges within finger circle around contact point
+   * @brief Build a RadialMaps for one contact point using FCL raycasting.
    *
-   * Only checks edges belonging to the contact surface (not all edges in topology).
+   * Rays are cast in the local tangent plane defined by lx/ly (built from
+   * the contact's own surface normal). Segments are stored in the calibrated
+   * shared angular frame (local_angle - angle_offset), so both contacts in a
+   * pair are comparable after this call.
    *
-   * @param contact Contact point
-   * @param surface_id ID of the surface where contact point lies
-   * @param topology Topology for edge access
-   * @return Vector of edge constraints (multiple per edge if curved)
+   * @param contact        Contact point on the workpiece surface
+   * @param normal         Outward surface normal at the contact
+   * @param lx             Local tangent frame X axis (0° in local frame)
+   * @param ly             Local tangent frame Y axis (90° in local frame)
+   * @param lifted_center  contact + normal * kCeilingOffset (pre-computed)
+   * @param angle_offset   Rotation from local frame to shared reference [rad]
    */
-  std::vector<EdgeConstraint> find_edges_in_circle(
+  RadialMaps create_radial_maps(
     const gp_Pnt & contact,
-    int surface_id,
-    const geometry::Topology & topology
+    const gp_Dir & normal,
+    const gp_Vec & lx,
+    const gp_Vec & ly,
+    const gp_Pnt & lifted_center,
+    double angle_offset
   ) const;
 
   /**
-   * @brief Find all local minima points on a single edge. This assumed to be most reachable point.
+   * @brief Classify a single FCL ray hit relative to the contact plane.
    *
-   *
-   * @param contact Contact point to measure distance from
-   * @param edge Edge to analyze
-   * @return Vector of EdgeConstraint for each local minimum found
+   * @param hit_found   Whether the ray hit the shape
+   * @param hit_point   Hit point (valid only if hit_found)
+   * @param contact     Contact point (elevation reference)
+   * @param normal_vec  Outward surface normal as gp_Vec
+   * @param tol         Flat-detection tolerance [m]
    */
-  std::vector<EdgeConstraint> find_local_minima_on_edge(
+  SurfaceState classify_hit(
+    bool hit_found,
+    const gp_Pnt & hit_point,
     const gp_Pnt & contact,
-    const TopoDS_Edge & edge
+    const gp_Vec & normal_vec,
+    double tol
+  ) const;
+
+  /** @brief Intersect LOW segments from two contact RadialMaps. */
+  std::vector<RadialSegment> merge_low_segments(
+    const RadialMaps & maps_1,
+    const RadialMaps & maps_2
   ) const;
 
   /**
-   * @brief Find closest edges to contact point. This assumed to be most reachable point.
+   * @brief Remove segments covered by HIGH on the outermost ring in either map.
    *
-   * @param edges Edge constraints (distance already computed)
-   * @return Filtered edge constraints sorted by distance
+   * FLAT at outer ring means open space (no geometry within finger_length)
+   * and does NOT block a segment.
    */
-  std::vector<EdgeConstraint> find_local_minima(
-    const std::vector<EdgeConstraint> & edges
+  std::vector<RadialSegment> filter_by_outer_ring(
+    const std::vector<RadialSegment> & segments,
+    const RadialMaps & maps_1,
+    const RadialMaps & maps_2
+  ) const;
+
+  /** @brief Remove segments that overlap any HIGH segment at any radius. */
+  std::vector<RadialSegment> ban_high_angles(
+    const std::vector<RadialSegment> & segments,
+    const RadialMaps & maps_1,
+    const RadialMaps & maps_2
   ) const;
 
   /**
-   * @brief Compute bearing angle of edge relative to contact point
-   *
-   * Projects the direction from contact to edge onto the plane perpendicular
-   * to the grip axis, then computes the angle in that plane.
-   * Used for dual-seed deduplication.
-   *
-   * @param contact Contact point
-   * @param edge_point Closest point on edge
-   * @param grip_axis Grip direction (normal to the bearing plane)
-   * @return Bearing angle in radians [-π, π]
+   * @brief Group angularly close segments into clusters and discard narrow ones.
    */
-  double compute_bearing_angle(
-    const gp_Pnt & contact,
-    const gp_Pnt & edge_point,
-    const gp_Vec & grip_axis
+  std::vector<std::vector<RadialSegment>> cluster_and_filter(
+    const std::vector<RadialSegment> & segments
   ) const;
 
-  /**
-   * @brief Compute approach direction pointing away from edge constraint
-   *
-   * Computes the direction from the nearest edge toward the TCP (midpoint between contacts).
-   * This direction is projected onto the plane perpendicular to the grip axis.
-   * NOTE: Using TCP instead of individual contact points is semantically clearer,
-   * though mathematically equivalent after projection (the component along grip_axis
-   * is removed anyway).
-   *
-   * @param contact_1 First contact point
-   * @param contact_2 Second contact point
-   * @param edge_constraint Edge to orient away from
-   * @param angle_offset Rotation offset in degrees (around grip axis)
-   * @param grip_axis Direction from contact_1 to contact_2 (normalized)
-   * @return Approach direction vector (perpendicular to grip axis, unit length)
-   */
-  gp_Vec compute_approach_direction(
-    const gp_Pnt & contact_1,
-    const gp_Pnt & contact_2,
-    const EdgeConstraint & edge_constraint,
-    double angle_offset,
-    const gp_Vec & grip_axis
+  /** @brief Return the midpoint angle of a cluster (handles 0/2π wrap-around). */
+  double cluster_midpoint(const std::vector<RadialSegment> & cluster) const;
+
+  /** @brief Top-level orchestrator: derive approach seeds from two RadialMaps. */
+  std::vector<double> build_approach_seeds(
+    const RadialMaps & maps_1,
+    const RadialMaps & maps_2
   ) const;
 
-  /**
-   * @brief Compute full gripper transform from contacts and approach
-   *
-   * @param contact_1 First contact point
-   * @param contact_2 Second contact point
-   * @param approach Approach direction
-   * @return Gripper placement transformation
-   */
   gp_Trsf compute_gripper_transform(
     const gp_Pnt & contact_1,
     const gp_Pnt & contact_2,
-    const gp_Vec & approach
+    const gp_Vec & approach,
+    gp_Pnt & out_base
   ) const;
 
-  /**
-   * @brief Check if gripper collides with primary shape
-   *
-   * @param gripper_transform Gripper pose
-   * @param grip_distance Finger opening distance
-   * @return true if collision detected
-   */
-  bool collides_with_primary(
-    const gp_Trsf & gripper_transform,
-    double grip_distance
-  ) const;
-
-  /**
-   * @brief Compute quality score for grasp (higher = better)
-   *
-   * Quality is based on minimum edge clearance at BOTH contact points.
-   *
-   * @param contact_1 First contact point
-   * @param contact_2 Second contact point
-   * @param edges_1 Edge constraints around contact_1
-   * @param edges_2 Edge constraints around contact_2
-   * @return Quality score based on minimum clearance at either contact
-   */
-  double compute_quality_score(
-    const gp_Pnt & contact_1,
-    const gp_Pnt & contact_2,
-    const std::vector<EdgeConstraint> & edges_1,
-    const std::vector<EdgeConstraint> & edges_2
-  ) const;
-
-  /**
-   * @brief Compute closest point on edge to query point
-   *
-   * @param point Query point
-   * @param edge Edge to measure against
-   * @param closest_point Output closest point on edge
-   * @return Distance from point to edge
-   */
-  double compute_closest_point_on_edge(
-    const gp_Pnt & point,
-    const TopoDS_Edge & edge,
-    gp_Pnt & closest_point
-  ) const;
+  bool collides_with_primary(const gp_Trsf & transform, double grip_distance) const;
 };
 
 }  // namespace angle_finding

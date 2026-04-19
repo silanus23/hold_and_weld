@@ -29,6 +29,8 @@
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <rclcpp/rclcpp.hpp>
 
@@ -153,6 +155,34 @@ int main(int argc, char ** argv)
     BRepMesh_IncrementalMesh mesher(primary_shape, 0.0001, Standard_False, 0.5);
     (void)mesher;
     RCLCPP_DEBUG(logger, "Primary shape triangulation complete");
+
+    // Compute primary bounding box — used to place the FCL ground plane
+    // exactly under the object (top at lowest Z, centered on object XY footprint).
+    {
+      Bnd_Box bbox;
+      BRepBndLib::Add(primary_shape, bbox);
+      if (!bbox.IsVoid()) {
+        double xmin, ymin, zmin, xmax, ymax, zmax;
+        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        config.finder_config.ground_bottom_z = zmin;
+        config.finder_config.ground_center_x = (xmin + xmax) / 2.0;
+        config.finder_config.ground_center_y = (ymin + ymax) / 2.0;
+        config.finder_config.ground_size_x = xmax - xmin;
+        config.finder_config.ground_size_y = ymax - ymin;
+        RCLCPP_INFO(logger,
+          "Primary bbox: x=[%.3f,%.3f] y=[%.3f,%.3f] z=[%.3f,%.3f]",
+          xmin, xmax, ymin, ymax, zmin, zmax);
+        RCLCPP_INFO(logger,
+          "Ground plane: bottom_z=%.3f center=(%.3f,%.3f) size=(%.3f x %.3f)",
+          zmin,
+          config.finder_config.ground_center_x,
+          config.finder_config.ground_center_y,
+          config.finder_config.ground_size_x,
+          config.finder_config.ground_size_y);
+      } else {
+        RCLCPP_WARN(logger, "Primary shape bounding box is void — using default ground plane");
+      }
+    }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger, "Failed to load primary shape: %s", e.what());
     return 1;
@@ -186,14 +216,21 @@ int main(int argc, char ** argv)
 
   std::vector<TopoDS_Shape> secondary_shapes;
   io::ShapeLoader shape_loader;
+  bool ground_plane_loaded_as_secondary = false;
 
   for (const auto & sec_config : config.secondaries) {
     try {
       TopoDS_Shape shape;
 
       if (sec_config.type == "ground_plane") {
+        // Use auto-computed values from primary bbox, not YAML z_position/size
         shape = shape_loader.make_ground_plane(
-          sec_config.size_x, sec_config.size_y, sec_config.z_position);
+          config.finder_config.ground_size_x,
+          config.finder_config.ground_size_y,
+          config.finder_config.ground_bottom_z,
+          0.01,
+          config.finder_config.ground_center_x,
+          config.finder_config.ground_center_y);
       } else if (sec_config.type == "box") {
         shape = shape_loader.make_box(
           sec_config.dimensions, sec_config.translation, sec_config.rotation);
@@ -206,12 +243,21 @@ int main(int argc, char ** argv)
           sec_config.file_path, sec_config.translation, sec_config.rotation);
       } else if (sec_config.type == "urdf") {
         shape = shape_loader.load_from_urdf(sec_config.file_path);
+        if (sec_config.translation.norm() > 1e-9 ||
+          !sec_config.rotation.isApprox(Eigen::Quaterniond::Identity()))
+        {
+          shape = shape_loader.apply_transform(
+            shape, sec_config.translation, sec_config.rotation);
+        }
       } else {
         RCLCPP_WARN(logger, "Unknown secondary type '%s', skipping", sec_config.type.c_str());
         continue;
       }
 
       secondary_shapes.push_back(shape);
+      if (sec_config.type == "ground_plane") {
+        ground_plane_loaded_as_secondary = true;
+      }
       RCLCPP_DEBUG(logger, "Secondary loaded: %s (%s)",
         sec_config.id.c_str(), sec_config.type.c_str());
     } catch (const std::exception & e) {
@@ -226,6 +272,14 @@ int main(int argc, char ** argv)
 
   RCLCPP_INFO(logger, "Secondary shapes loaded: %zu / %zu",
     secondary_shapes.size(), config.secondaries.size());
+
+  // If the ground plane was already loaded as a regular secondary shape it will
+  // be added to the FCL checker's secondary_bvhs_ — no need to also add it via
+  // add_ground_plane(), which would create a duplicate ground_plane_bvh_ check.
+  if (ground_plane_loaded_as_secondary) {
+    config.finder_config.enable_ground_plane_check = false;
+    RCLCPP_DEBUG(logger, "Ground plane loaded as secondary — disabling duplicate FCL ground plane");
+  }
 
   std::optional<std::vector<constraints::exclusion_circle>> circles_opt;
   std::optional<std::vector<constraints::exclusion_polygon>> polygons_opt;
@@ -323,6 +377,7 @@ int main(int argc, char ** argv)
   metadata.config_source = config_path;
   metadata.num_surfaces_total = topology.num_surfaces();
   metadata.total_time_seconds = elapsed_seconds;
+  metadata.finger_length = config.finder_config.orientation.finger_length;
 
   io::WriterOptions writer_options;
   writer_options.pretty_print = true;

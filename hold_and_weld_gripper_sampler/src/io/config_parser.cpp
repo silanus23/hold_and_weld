@@ -35,7 +35,6 @@ std::optional<ParsedConfig> ConfigParser::parse_file(
   if (!package_share_dir.empty()) {
     base_dir_ = package_share_dir;
   } else {
-    // Extract directory from yaml_path
     size_t last_slash = yaml_path.find_last_of('/');
     if (last_slash != std::string::npos) {
       base_dir_ = yaml_path.substr(0, last_slash);
@@ -81,7 +80,6 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
   ParsedConfig config;
 
   try {
-    // Navigate to parameters node (handles /**:/ros__parameters: format)
     YAML::Node params = get_parameters_node(root_node);
 
     if (!params || params.IsNull()) {
@@ -89,12 +87,10 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       return std::nullopt;
     }
 
-    // Parse frame_id
     if (params["frame_id"]) {
       config.frame_id = params["frame_id"].as<std::string>();
     }
 
-    // Parse primary workpiece
     if (params["primary"]) {
       if (!parse_primary(params["primary"], config.primary)) {
         return std::nullopt;
@@ -104,7 +100,6 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       return std::nullopt;
     }
 
-    // Parse gripper
     if (params["gripper"]) {
       if (!parse_gripper(params["gripper"], config)) {
         return std::nullopt;
@@ -114,21 +109,18 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       return std::nullopt;
     }
 
-    // Parse secondaries (optional)
     if (params["secondaries"]) {
       if (!parse_secondaries(params["secondaries"], config.secondaries)) {
         return std::nullopt;
       }
     }
 
-    // Parse exclusion zones (optional)
     if (params["exclusion_zones"]) {
       if (!parse_exclusion_zones(params["exclusion_zones"], config)) {
         return std::nullopt;
       }
     }
 
-    // Parse mesh deflection parameters (optional)
     if (params["mesh_deflection"]) {
       if (params["mesh_deflection"]["linear"]) {
         config.mesh_linear_deflection = params["mesh_deflection"]["linear"].as<double>();
@@ -140,29 +132,29 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       }
     }
 
-    // Parse sampling config (optional, use defaults if not present)
     if (params["sampling"]) {
       if (!parse_sampling(params["sampling"], config.finder_config.sampling)) {
         return std::nullopt;
       }
     }
 
-    // Parse orientation config (optional)
     if (params["orientation"]) {
       if (!parse_orientation(params["orientation"], config.finder_config.orientation)) {
         return std::nullopt;
       }
     }
 
-    // Parse kissing surface config (optional)
     if (params["kissing"]) {
       if (params["kissing"]["contact_threshold"]) {
         config.finder_config.kissing_contact_threshold =
           params["kissing"]["contact_threshold"].as<double>();
       }
+      if (params["kissing"]["collision_tolerance"]) {
+        config.finder_config.collision_tolerance =
+          params["kissing"]["collision_tolerance"].as<double>();
+      }
     }
 
-    // Parse FCL config (optional)
     if (params["fcl"]) {
       if (params["fcl"]["enabled"]) {
         config.finder_config.use_fcl = params["fcl"]["enabled"].as<bool>();
@@ -173,7 +165,6 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       }
     }
 
-    // Parse output config (optional)
     if (params["output"]) {
       if (!parse_output(params["output"], config.output)) {
         return std::nullopt;
@@ -196,19 +187,16 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
 
 YAML::Node ConfigParser::get_parameters_node(const YAML::Node & root) const
 {
-  // Handle ROS2 parameter file format: /**:/ros__parameters:
   if (root["/**"]) {
     if (root["/**"]["ros__parameters"]) {
       return root["/**"]["ros__parameters"];
     }
   }
 
-  // Handle direct ros__parameters
   if (root["ros__parameters"]) {
     return root["ros__parameters"];
   }
 
-  // Assume root is the parameters node
   return root;
 }
 
@@ -279,7 +267,6 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
     config.id = node["id"].as<std::string>();
   }
 
-  // Parse based on type
   if (config.type == "step" || config.type == "urdf") {
     if (node["step_path"]) {
       config.file_path = resolve_path(node["step_path"].as<std::string>());
@@ -329,7 +316,6 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
 
 bool ConfigParser::parse_exclusion_zones(const YAML::Node & node, ParsedConfig & config)
 {
-  // Parse circles
   if (node["circles"] && node["circles"].IsSequence()) {
     for (const auto & item : node["circles"]) {
       constraints::exclusion_circle circle;
@@ -340,7 +326,6 @@ bool ConfigParser::parse_exclusion_zones(const YAML::Node & node, ParsedConfig &
     }
   }
 
-  // Parse polygons
   if (node["polygons"] && node["polygons"].IsSequence()) {
     for (const auto & item : node["polygons"]) {
       constraints::exclusion_polygon polygon;
@@ -351,7 +336,6 @@ bool ConfigParser::parse_exclusion_zones(const YAML::Node & node, ParsedConfig &
     }
   }
 
-  // Parse lines
   if (node["lines"] && node["lines"].IsSequence()) {
     for (const auto & item : node["lines"]) {
       constraints::exclusion_line line;
@@ -582,7 +566,6 @@ std::string ConfigParser::resolve_path(const std::string & path) const
     return path;
   }
 
-  // Handle package:// URLs
   if (path.substr(0, 10) == "package://") {
     size_t pkg_end = path.find('/', 10);
     if (pkg_end != std::string::npos) {
@@ -598,12 +581,10 @@ std::string ConfigParser::resolve_path(const std::string & path) const
     }
   }
 
-  // Handle absolute paths
   if (path[0] == '/') {
     return path;
   }
 
-  // Handle relative paths
   return base_dir_ + "/" + path;
 }
 

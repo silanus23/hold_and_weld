@@ -19,6 +19,8 @@
 #include <Eigen/Geometry>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <vector>
 
 namespace hold_and_weld_gripper_sampler
@@ -159,7 +161,6 @@ struct Grasp
 };
 
 
-
 /**
  * @brief Sort grasps by quality score descending (best first)
  *
@@ -172,6 +173,109 @@ inline void sort_by_quality(std::vector<Grasp> & grasps)
     [](const Grasp & a, const Grasp & b) {
       return a.quality_score > b.quality_score;
     });
+}
+
+/**
+ * @brief Diversity-aware reordering: interleave geometrically distant grasps.
+ *
+ * Uses greedy farthest-point selection so that each successive grasp in the
+ * output list is as different as possible from all previously selected ones.
+ * Diversity is measured by a combined distance in (TCP position, approach
+ * direction) space, weighted so that a 180° orientation flip counts roughly
+ * the same as a full workpiece-width translation.
+ *
+ * Quality is used as a tie-breaker when two candidates are equidistant: the
+ * higher-quality grasp is seeded first (the first element is always the best
+ * by quality), so the planner still gets the strongest grasp up front while
+ * the remainder of the list varies maximally.
+ *
+ * @param grasps     Vector of grasps to reorder in place (should already be
+ *                   quality-sorted so the seed is the global best).
+ * @param pos_weight Scale factor applied to TCP position distances [m].
+ *                   Default 1.0 — tune upward to prefer spatial spread.
+ * @param ori_weight Scale factor applied to orientation distances [rad].
+ *                   Default 1.0 — tune upward to prefer angular spread.
+ */
+inline void sort_by_diversity(
+  std::vector<Grasp> & grasps,
+  double pos_weight = 1.0,
+  double ori_weight = 1.0)
+{
+  const std::size_t n = grasps.size();
+  if (n < 2) {
+    return;
+  }
+
+  // Pre-extract approach directions from quaternion rotation matrices.
+  // Convention: gripper Z-axis (third column of rotation matrix) is the
+  // approach direction — consistent with compute_gripper_transform which
+  // builds gp_Ax3 with Z = y_axis × x_axis (toward body).
+  std::vector<Eigen::Vector3d> approach(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    approach[i] = grasps[i].tcp_orientation.toRotationMatrix().col(2);
+  }
+
+  // min-distance from each candidate to the already-selected set
+  std::vector<double> min_dist(n, std::numeric_limits<double>::max());
+  std::vector<bool> selected(n, false);
+
+  std::vector<Grasp> result;
+  result.reserve(n);
+
+  // Seed: index 0 is already the highest-quality grasp (caller should
+  // quality-sort first). Pick it unconditionally.
+  std::size_t pick = 0;
+
+  for (std::size_t step = 0; step < n; ++step) {
+    selected[pick] = true;
+    result.push_back(grasps[pick]);
+
+    const Eigen::Vector3d & p_pick = grasps[pick].tcp_position;
+    const Eigen::Vector3d & a_pick = approach[pick];
+
+    // Update min_dist for all remaining candidates
+    double best_dist = -1.0;
+    std::size_t next_pick = 0;
+    bool found_next = false;
+
+    for (std::size_t i = 0; i < n; ++i) {
+      if (selected[i]) {
+        continue;
+      }
+
+      // Euclidean distance in TCP position space [m]
+      double d_pos = pos_weight * (grasps[i].tcp_position - p_pick).norm();
+
+      // Angular distance between approach directions [rad], clamped to [0, π]
+      double dot = approach[i].dot(a_pick);
+      dot = std::max(-1.0, std::min(1.0, dot));
+      double d_ori = ori_weight * std::acos(dot);
+
+      double d = d_pos + d_ori;
+      if (d < min_dist[i]) {
+        min_dist[i] = d;
+      }
+
+      // Farthest-point: candidate with largest min_dist wins.
+      // Tie-break by quality_score (higher is better).
+      if (!found_next ||
+        min_dist[i] > best_dist ||
+        (std::abs(min_dist[i] - best_dist) < 1e-9 &&
+        grasps[i].quality_score > grasps[next_pick].quality_score))
+      {
+        best_dist = min_dist[i];
+        next_pick = i;
+        found_next = true;
+      }
+    }
+
+    if (!found_next) {
+      break;
+    }
+    pick = next_pick;
+  }
+
+  grasps = std::move(result);
 }
 
 }  // namespace hold_and_weld_gripper_sampler

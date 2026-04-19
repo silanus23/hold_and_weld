@@ -13,10 +13,17 @@
 # limitations under the License.
 
 """
-Magic wand launch file.
+Grasp visualizer launch file.
 
-Launches visualization system with MoveIt, collision objects,
-and interactive torch tip markers from trajectory JSON.
+Counterpart to magic_wand.launch.py for the holding gripper side.
+
+Differences from magic_wand.launch.py:
+  - Launches finger_visualizer.py instead of magic_wand.py.
+  - finger_visualizer.py spawns objects at their START pose (where the gripper
+    picks them up) rather than the welded end pose.
+  - Visualizes gripper finger boxes from the latest grasps/*.json.
+  - Does NOT launch add_collision_objects.py — finger_visualizer.py handles
+    spawning internally so objects appear at the correct start position.
 """
 
 import os
@@ -38,27 +45,26 @@ import yaml
 
 
 def generate_launch_description():
-    """Launch magic wand visualization system."""
-    # PACKAGE DIRECTORIES
+    """Launch grasp visualizer system."""
     bringup_pkg = get_package_share_directory('hold_and_weld_bringup')
     desc_pkg = get_package_share_directory('hold_and_weld_description')
 
-    # LAUNCH ARGUMENTS
     declared_arguments = [
         DeclareLaunchArgument(
             'use_rviz',
             default_value='true',
-            description='Launch RViz visualization',
+            description='Launch RViz2 for visualization',
         ),
     ]
 
     use_rviz = LaunchConfiguration('use_rviz')
 
+    # Reuse the magic_wand RViz config — same robot, same frame, same
+    # display types (MarkerArray + InteractiveMarkers).
     rviz_config = PathJoinSubstitution(
-        [FindPackageShare('hold_and_weld_description'), 'rviz', 'magic_wand.rviz']
+        [FindPackageShare('hold_and_weld_description'), 'rviz', 'finger_vis.rviz']
     )
 
-    # ROBOT DESCRIPTION (URDF) - Robot 1 only
     robot_description_content = ParameterValue(
         Command([
             PathJoinSubstitution([FindExecutable(name='xacro')]),
@@ -73,39 +79,42 @@ def generate_launch_description():
     )
     robot_description = {'robot_description': robot_description_content}
 
-    # ROBOT SEMANTIC DESCRIPTION (SRDF)
     srdf_file = os.path.join(desc_pkg, 'config', 'robot1_gripper.srdf')
-    with open(srdf_file, 'r') as file:
-        robot_description_semantic_content = file.read()
+    with open(srdf_file, 'r') as fh:
+        robot_description_semantic_content = fh.read()
     robot_description_semantic = {
         'robot_description_semantic': robot_description_semantic_content
     }
 
-    # MOVEIT CONFIGURATION
-    kinematics_yaml_path = os.path.join(bringup_pkg, 'config', 'moveit', 'kinematics.yaml')
-    with open(kinematics_yaml_path, 'r') as file:
-        kinematics_yaml_dict = yaml.safe_load(file)
+    kinematics_yaml_path = os.path.join(
+        bringup_pkg, 'config', 'moveit', 'kinematics.yaml'
+    )
+    with open(kinematics_yaml_path, 'r') as fh:
+        kinematics_cfg = yaml.safe_load(fh)
     kinematics_config = {
-        'robot_description_kinematics': kinematics_yaml_dict.get('/**', {}).get(
+        'robot_description_kinematics': kinematics_cfg.get('/**', {}).get(
             'ros__parameters', {}
         )
     }
 
-    joint_limits_yaml_path = os.path.join(bringup_pkg, 'config', 'moveit', 'joint_limits.yaml')
-    with open(joint_limits_yaml_path, 'r') as file:
-        joint_limits_yaml_dict = yaml.safe_load(file)
-        joint_limits_config = joint_limits_yaml_dict.get('/**', {}).get(
-            'ros__parameters', {}
-        )
+    joint_limits_yaml_path = os.path.join(
+        bringup_pkg, 'config', 'moveit', 'joint_limits.yaml'
+    )
+    with open(joint_limits_yaml_path, 'r') as fh:
+        joint_limits_cfg = yaml.safe_load(fh)
+    joint_limits_config = joint_limits_cfg.get('/**', {}).get(
+        'ros__parameters', {}
+    )
 
-    ompl_planning_yaml_path = os.path.join(bringup_pkg, 'config', 'moveit', 'ompl_planning.yaml')
-    with open(ompl_planning_yaml_path, 'r') as file:
-        ompl_planning_yaml_dict = yaml.safe_load(file)
-        ompl_planning_config = ompl_planning_yaml_dict.get('/**', {}).get(
-            'ros__parameters', {}
-        )
+    ompl_planning_yaml_path = os.path.join(
+        bringup_pkg, 'config', 'moveit', 'ompl_planning.yaml'
+    )
+    with open(ompl_planning_yaml_path, 'r') as fh:
+        ompl_planning_cfg = yaml.safe_load(fh)
+    ompl_planning_config = ompl_planning_cfg.get('/**', {}).get(
+        'ros__parameters', {}
+    )
 
-    # MoveIt configuration parameters
     planning_scene_monitor_parameters = {
         'publish_planning_scene': True,
         'publish_geometry_updates': True,
@@ -117,7 +126,8 @@ def generate_launch_description():
         'move_group': {'planning_plugins': ['ompl_interface/OMPLPlanner']}
     }
 
-    # ROBOT STATE PUBLISHER
+
+    # Robot state publisher
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -125,7 +135,7 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}, robot_description],
     )
 
-    # STATIC TRANSFORM PUBLISHER (world frame)
+    # Static TF: world → base_link
     static_tf_world = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -134,7 +144,8 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}],
     )
 
-    # MOVEIT MOVE_GROUP
+    # MoveIt move_group — needed so collision objects land in the
+    # planning scene and can be inspected in RViz.
     move_group = Node(
         package='moveit_ros_move_group',
         executable='move_group',
@@ -152,6 +163,7 @@ def generate_launch_description():
         ],
     )
 
+    # RViz2
     rviz = Node(
         package='rviz2',
         executable='rviz2',
@@ -169,35 +181,34 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # COLLISION OBJECTS
-    add_collision_objects = Node(
+    # Finger visualizer — spawns objects at START pose and publishes finger markers.
+    # No add_collision_objects.py here: finger_visualizer.py owns the scene setup
+    # so objects are guaranteed to be at the position the sampler used.
+    finger_visualizer = Node(
         package='hold_and_weld_application',
-        executable='add_collision_objects.py',
-        name='add_collision_objects',
+        executable='finger_visualizer.py',
+        name='finger_visualizer',
         output='screen',
         parameters=[{'use_sim_time': False}],
     )
 
-    magic_wand = Node(
-        package='hold_and_weld_application',
-        executable='magic_wand.py',
-        name='magic_wand',
-        output='screen',
-        parameters=[{'use_sim_time': False}],
-    )
-
+    # Same timing as magic_wand.launch.py:
+    #   t=0 s  robot_state_publisher + static_tf (immediate)
+    #   t=2 s  move_group
+    #   t=5 s  rviz2
+    #   t=9 s  finger_visualizer  (move_group must be ready before collision objects
+    #                        are published — 7 s is enough, but 9 s gives
+    #                        RViz time to connect its planning scene monitor)
     delay_move_group = TimerAction(period=2.0, actions=[move_group])
     delay_rviz = TimerAction(period=5.0, actions=[rviz])
-    delay_add_collision_objects = TimerAction(period=7.0, actions=[add_collision_objects])
-    delay_magic_wand = TimerAction(period=9.0, actions=[magic_wand])
+    delay_finger_visualizer = TimerAction(period=9.0, actions=[finger_visualizer])
 
     nodes = [
         robot_state_publisher,
         static_tf_world,
         delay_move_group,
         delay_rviz,
-        delay_add_collision_objects,
-        delay_magic_wand,
+        delay_finger_visualizer,
     ]
 
     return LaunchDescription(declared_arguments + nodes)

@@ -1,0 +1,114 @@
+# =============================================================================
+# GraspFinder Configuration — Cube Workpiece (Start Position)
+# =============================================================================
+# Workpiece: cube.urdf.xacro — 250mm × 250mm × 250mm
+# Start pose from objects.yaml: (1.2, 0.3, 0.125) — bottom face sits on z=0
+# Gripper: test_gripper.urdf — 60mm–360mm opening, 200mm fingers
+#
+# Coordinate system: meters / quaternion. Frame: world.
+# =============================================================================
+
+/**:
+  ros__parameters:
+    frame_id: 'world'
+
+    # =========================================================================
+    # Primary Workpiece
+    # =========================================================================
+    # 250×250×250 mm cube. URDF origin is at the geometric center, so the
+    # cube occupies z ∈ [0.0, 0.25] at its start position.
+    # Translation puts the center at (1.2, 0.3, 0.125).
+    primary:
+      urdf_path: 'config/cube_workpiece.urdf'
+      transform:
+        translation:
+          x: 1.2
+          y: 0.3
+          z: 0.125
+        rotation:
+          x: 0.0
+          y: 0.0
+          z: 0.0
+          w: 1.0
+
+    # =========================================================================
+    # Gripper
+    # =========================================================================
+    # Fingers: 30×40×200 mm.  Opening: 60 mm (closed) → 360 mm (fully open).
+    # The cube is 250 mm wide — well within range.
+    gripper:
+      urdf_path: 'config/test_gripper.urdf'
+      max_opening: 0.36    # 360 mm
+
+    # =========================================================================
+    # Secondary Shapes (collision obstacles)
+    # =========================================================================
+    secondaries:
+      # Ground plane — bans the bottom face of the cube (z = 0.0)
+      - id: 'ground_plane'
+        type: 'ground_plane'
+        size_x: 3.0
+        size_y: 3.0
+        z_position: 0.0
+
+    # =========================================================================
+    # Exclusion Zones
+    # =========================================================================
+    # None defined for the plain cube — add weld-point circles here if needed.
+
+    # =========================================================================
+    # Sampling
+    # =========================================================================
+    sampling:
+      # Opposing faces of a cube are perfectly anti-parallel (180°).
+      min_angle_deg: 160.0
+      max_angle_deg: 180.0
+
+      # Cube side = 250 mm. 60 mm min keeps fingers inside the face.
+      min_gripper_opening: 0.06    # 60 mm
+      max_gripper_opening: 0.36    # 360 mm — allow full range
+
+      # 15 mm grid: fast enough, fine enough for a 250 mm face.
+      sample_density: 0.015
+
+      normal_sample_density: 1.0
+      max_lateral_deviation: 0.03   # 30 mm diagonal tolerance
+      alignment_threshold: 0.95
+
+    # =========================================================================
+    # Orientation Finding
+    # =========================================================================
+    orientation:
+      finger_length: 0.20            # 200 mm
+      finger_radius: 0.02            # 20 mm (half of 40 mm width)
+
+      max_edge_candidates: 5
+      dual_seed_dedup_tolerance_deg: 3.0
+      max_edges_per_contact: 0       # unlimited
+
+      # Three offsets give good coverage around each edge seed.
+      angle_offsets: [-15.0, 0.0, 15.0]
+
+      stop_on_first_valid: false
+      collision_tolerance: 0.001     # 1 mm
+
+    # =========================================================================
+    # Kissing Surface
+    # =========================================================================
+    kissing:
+      contact_threshold: 0.8        # >80 % contact → banned
+
+    # =========================================================================
+    # FCL
+    # =========================================================================
+    fcl:
+      enabled: true
+      triangulation_deflection: 0.001   # 1 mm — sufficient for box geometry
+
+    # =========================================================================
+    # Output
+    # =========================================================================
+    output:
+      max_grasps: 50
+      min_quality: 0.0
+      include_debug: true

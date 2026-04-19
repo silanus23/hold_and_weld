@@ -14,22 +14,16 @@
 
 #include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
 
-#include <fcl/narrowphase/collision.h>
-#include <fcl/narrowphase/distance.h>
-
-#include <algorithm>
-#include <memory>
-#include <limits>
-#include <vector>
-
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
 #include <Poly_Triangulation.hxx>
-#include <rclcpp/rclcpp.hpp>
 #include <TopExp_Explorer.hxx>
-#include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
+#include <rclcpp/rclcpp.hpp>
+
+#include <limits>
+#include <stack>
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -38,60 +32,175 @@ namespace geometry
 
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
+static bool ray_aabb(
+  const fcl::Vector3<double> & ro,
+  const fcl::Vector3<double> & inv_rd,
+  const fcl::Vector3<double> & aabb_min,
+  const fcl::Vector3<double> & aabb_max,
+  double max_t)
+{
+  double tmin = 0.0;
+  double tmax = max_t;
+
+  for (int i = 0; i < 3; ++i) {
+    double t1 = (aabb_min[i] - ro[i]) * inv_rd[i];
+    double t2 = (aabb_max[i] - ro[i]) * inv_rd[i];
+    if (t1 > t2) {std::swap(t1, t2);}
+    tmin = std::max(tmin, t1);
+    tmax = std::min(tmax, t2);
+    if (tmin > tmax) {return false;}
+  }
+  return true;
+}
+
+// Möller–Trumbore ray-triangle intersection
+static double ray_triangle(
+  const fcl::Vector3<double> & ro,
+  const fcl::Vector3<double> & rd,
+  const fcl::Vector3<double> & v0,
+  const fcl::Vector3<double> & v1,
+  const fcl::Vector3<double> & v2)
+{
+  constexpr double kEps = 1e-8;
+  fcl::Vector3<double> e1 = v1 - v0;
+  fcl::Vector3<double> e2 = v2 - v0;
+  fcl::Vector3<double> h = rd.cross(e2);
+  double a = e1.dot(h);
+  if (std::abs(a) < kEps) {return -1.0;}
+
+  double f = 1.0 / a;
+  fcl::Vector3<double> s = ro - v0;
+  double u = f * s.dot(h);
+  if (u < 0.0 || u > 1.0) {return -1.0;}
+
+  fcl::Vector3<double> q = s.cross(e1);
+  double v = f * rd.dot(q);
+  if (v < 0.0 || u + v > 1.0) {return -1.0;}
+
+  double t = f * e2.dot(q);
+  return (t > kEps) ? t : -1.0;
+}
+
+// BVH traversal ray cast — returns closest hit t and triangle index, or -1
+static double bvh_ray_cast(
+  const FCLCollisionChecker::BVHModel & bvh,
+  const fcl::Vector3<double> & ro,
+  const fcl::Vector3<double> & rd,
+  double max_distance,
+  int & hit_tri_out)
+{
+  hit_tri_out = -1;
+  double closest_t = max_distance;
+
+  fcl::Vector3<double> inv_rd(
+    std::abs(rd[0]) > 1e-12 ? 1.0 / rd[0] : std::numeric_limits<double>::max(),
+    std::abs(rd[1]) > 1e-12 ? 1.0 / rd[1] : std::numeric_limits<double>::max(),
+    std::abs(rd[2]) > 1e-12 ? 1.0 / rd[2] : std::numeric_limits<double>::max());
+
+  // FCL BVHModel stores the root at index 0, not getNumBVs()-1.
+  // Starting from the wrong node causes most of the tree to be skipped,
+  // resulting in all rays missing even when the geometry is correctly placed.
+  std::stack<int> stack;
+  stack.push(0);
+
+  while (!stack.empty()) {
+    int node_idx = stack.top();
+    stack.pop();
+
+    const auto & node = bvh.getBV(node_idx);
+    const auto & bv = node.bv;
+
+    // Extract AABB from OBBRSS via its RSS component's AABB
+    const auto & obb = bv.obb;
+    fcl::Vector3<double> center = obb.To;
+    fcl::Vector3<double> half_extents = obb.extent;
+    fcl::Vector3<double> aabb_min, aabb_max;
+    for (int i = 0; i < 3; ++i) {
+      double r = 0.0;
+      for (int j = 0; j < 3; ++j) {
+        r += std::abs(obb.axis.col(j)[i]) * half_extents[j];
+      }
+      aabb_min[i] = center[i] - r;
+      aabb_max[i] = center[i] + r;
+    }
+
+    if (!ray_aabb(ro, inv_rd, aabb_min, aabb_max, closest_t)) {
+      continue;
+    }
+
+    if (node.isLeaf()) {
+      int tri_idx = node.primitiveId();
+      const auto & tri = bvh.tri_indices[tri_idx];
+      const auto & v0 = bvh.vertices[tri[0]];
+      const auto & v1 = bvh.vertices[tri[1]];
+      const auto & v2 = bvh.vertices[tri[2]];
+
+      double t = ray_triangle(ro, rd, v0, v1, v2);
+      if (t > 0.0 && t < closest_t) {
+        closest_t = t;
+        hit_tri_out = tri_idx;
+      }
+    } else {
+      stack.push(node.leftChild());
+      stack.push(node.rightChild());
+    }
+  }
+
+  return (hit_tri_out >= 0) ? closest_t : -1.0;
+}
+
 FCLCollisionChecker::FCLCollisionChecker(
   const ParsedGripper & gripper,
   const TopoDS_Shape & primary_shape,
   double linear_deflection)
 : finger_1_axis_(gripper.finger_1_axis),
   finger_2_axis_(gripper.finger_2_axis),
+  rest_gap_(0.0),
   linear_deflection_(linear_deflection),
   valid_(false)
 {
-  RCLCPP_DEBUG(logger_, "Initializing FCL collision checker");
+  finger_1_bvh_ = shape_to_bvh(gripper.finger_1);
+  finger_2_bvh_ = shape_to_bvh(gripper.finger_2);
+  base_bvh_ = shape_to_bvh(gripper.base);
+  primary_bvh_ = shape_to_bvh(primary_shape);
 
-  try {
-    Standard_Real ang_deflection = 0.5;
-
-    BRepMesh_IncrementalMesh mesh_f1(gripper.finger_1, linear_deflection_, Standard_False,
-      ang_deflection);
-    BRepMesh_IncrementalMesh mesh_f2(gripper.finger_2, linear_deflection_, Standard_False,
-      ang_deflection);
-    BRepMesh_IncrementalMesh mesh_base(gripper.base, linear_deflection_, Standard_False,
-      ang_deflection);
-    BRepMesh_IncrementalMesh mesh_primary(primary_shape, linear_deflection_, Standard_False,
-      ang_deflection);
-
-    finger_1_bvh_ = shape_to_bvh(gripper.finger_1);
-    finger_2_bvh_ = shape_to_bvh(gripper.finger_2);
-    base_bvh_ = shape_to_bvh(gripper.base);
-
-    if (!finger_1_bvh_ || !finger_2_bvh_ || !base_bvh_) {
-      RCLCPP_ERROR(logger_, "Failed to build BVH models for gripper components");
-      return;
+  // Compute rest_gap_: distance between inner faces of the two fingers at rest (closed position).
+  // Using a shared grip axis (finger_2_axis_), find:
+  //   - finger_2 inner face = minimum projection onto finger_2_axis (face closest to center)
+  //   - finger_1 inner face = maximum projection onto finger_2_axis (face closest to center)
+  // rest_gap_ = finger_2_inner - finger_1_inner
+  auto proj_on_axis = [](
+    const std::shared_ptr<BVHModel> & bvh,
+    const Eigen::Vector3d & axis,
+    bool find_min) -> double
+  {
+    if (!bvh || bvh->num_vertices == 0) {return 0.0;}
+    double result = find_min ? std::numeric_limits<double>::max()
+                             : -std::numeric_limits<double>::max();
+    for (int i = 0; i < bvh->num_vertices; ++i) {
+      double p = Eigen::Vector3d(
+        bvh->vertices[i][0],
+        bvh->vertices[i][1],
+        bvh->vertices[i][2]).dot(axis);
+      result = find_min ? std::min(result, p) : std::max(result, p);
     }
+    return result;
+  };
 
-    RCLCPP_DEBUG(logger_, "Gripper BVH models built successfully");
-    RCLCPP_DEBUG(logger_, "  Finger 1: %d triangles", finger_1_bvh_->num_tris);
-    RCLCPP_DEBUG(logger_, "  Finger 2: %d triangles", finger_2_bvh_->num_tris);
-    RCLCPP_DEBUG(logger_, "  Base: %d triangles", base_bvh_->num_tris);
+  // finger_2_axis_ points from center outward toward finger_2
+  // finger_1 inner face: max projection onto finger_2_axis (highest Y for +Y axis)
+  // finger_2 inner face: min projection onto finger_2_axis (lowest Y for +Y axis)
+  double f1_inner = proj_on_axis(finger_1_bvh_, finger_2_axis_, false);
+  double f2_inner = proj_on_axis(finger_2_bvh_, finger_2_axis_, true);
+  rest_gap_ = f2_inner - f1_inner;
+  if (rest_gap_ < 0.0) {rest_gap_ = 0.0;}
 
-    primary_bvh_ = shape_to_bvh(primary_shape);
 
-    if (!primary_bvh_) {
-      RCLCPP_ERROR(logger_, "Failed to build BVH model for primary shape");
-      return;
-    }
-
-    RCLCPP_DEBUG(logger_, "Primary shape BVH built: %d triangles", primary_bvh_->num_tris);
-
+  if (finger_1_bvh_ && finger_2_bvh_ && base_bvh_ && primary_bvh_) {
+    RCLCPP_INFO(logger_, "primary_bvh_ triangle count: %d", primary_bvh_->num_tris);
     valid_ = true;
-    RCLCPP_INFO(logger_, "FCL collision checker initialized successfully");
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Exception during FCL initialization: %s", e.what());
-    valid_ = false;
-  } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown exception during FCL initialization");
-    valid_ = false;
+  } else {
+    RCLCPP_ERROR(logger_, "FCL checker: failed to build one or more BVH models");
   }
 }
 
@@ -105,282 +214,275 @@ FCLCollisionChecker::FCLCollisionChecker(
   double linear_deflection)
 : FCLCollisionChecker(gripper, primary_shape, linear_deflection)
 {
-  if (!exclusion_volumes.empty()) {
-    add_exclusion_volumes(exclusion_volumes);
-  }
-  if (!secondary_shapes.empty()) {
-    add_secondary_shapes(secondary_shapes);
-  }
+  add_exclusion_volumes(exclusion_volumes);
+  add_secondary_shapes(secondary_shapes);
   if (enable_ground_plane) {
     add_ground_plane(ground_z);
   }
 }
 
-void FCLCollisionChecker::add_exclusion_volumes(const std::vector<TopoDS_Shape> & exclusion_volumes)
+void FCLCollisionChecker::add_exclusion_volumes(
+  const std::vector<TopoDS_Shape> & exclusion_volumes)
 {
-  RCLCPP_DEBUG(logger_, "Adding %zu exclusion volumes", exclusion_volumes.size());
-
-  Standard_Real ang_deflection = 0.5;
-
-  for (size_t i = 0; i < exclusion_volumes.size(); ++i) {
-    const auto & volume = exclusion_volumes[i];
-
-    try {
-      BRepMesh_IncrementalMesh mesher(volume, linear_deflection_, Standard_False, ang_deflection);
-
-      auto bvh = shape_to_bvh(volume);
-
-      if (bvh) {
-        exclusion_bvhs_.push_back(bvh);
-        RCLCPP_DEBUG(logger_, "  Exclusion volume %zu: %d triangles", i, bvh->num_tris);
-      } else {
-        RCLCPP_WARN(logger_, "  Exclusion volume %zu: failed to build BVH", i);
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(logger_, "  Exclusion volume %zu: exception: %s", i, e.what());
-    } catch (...) {
-      RCLCPP_WARN(logger_, "  Exclusion volume %zu: unknown exception", i);
-    }
+  for (const auto & shape : exclusion_volumes) {
+    auto bvh = shape_to_bvh(shape);
+    if (bvh) {exclusion_bvhs_.push_back(bvh);}
   }
-
-  RCLCPP_DEBUG(logger_, "Added %zu exclusion BVH models", exclusion_bvhs_.size());
 }
 
-void FCLCollisionChecker::add_secondary_shapes(const std::vector<TopoDS_Shape> & secondary_shapes)
+void FCLCollisionChecker::add_secondary_shapes(
+  const std::vector<TopoDS_Shape> & secondary_shapes)
 {
-  RCLCPP_DEBUG(logger_, "Adding %zu secondary shapes", secondary_shapes.size());
-
-  Standard_Real ang_deflection = 0.5;
-
-  for (size_t i = 0; i < secondary_shapes.size(); ++i) {
-    const auto & shape = secondary_shapes[i];
-
-    try {
-      BRepMesh_IncrementalMesh mesher(shape, linear_deflection_, Standard_False, ang_deflection);
-
-      auto bvh = shape_to_bvh(shape);
-
-      if (bvh) {
-        secondary_bvhs_.push_back(bvh);
-        RCLCPP_DEBUG(logger_, "  Secondary shape %zu: %d triangles", i, bvh->num_tris);
-      } else {
-        RCLCPP_WARN(logger_, "  Secondary shape %zu: failed to build BVH", i);
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(logger_, "  Secondary shape %zu: exception: %s", i, e.what());
-    } catch (...) {
-      RCLCPP_WARN(logger_, "  Secondary shape %zu: unknown exception", i);
-    }
+  for (const auto & shape : secondary_shapes) {
+    auto bvh = shape_to_bvh(shape);
+    if (bvh) {secondary_bvhs_.push_back(bvh);}
   }
-
-  RCLCPP_DEBUG(logger_, "Added %zu secondary BVH models", secondary_bvhs_.size());
 }
 
 void FCLCollisionChecker::add_ground_plane(
-  double ground_z,
-  double size,
-  double thickness,
-  double center_x,
-  double center_y)
+  double ground_z, double size, double thickness,
+  double center_x, double center_y)
 {
-  RCLCPP_DEBUG(logger_,
-        "Adding ground plane at z=%.3f, size=%.1f, thickness=%.3f, center=(%.1f, %.1f)",
-    ground_z, size, thickness, center_x, center_y);
+  // Build ground plane as a flat box BVH
+  auto bvh = std::make_shared<BVHModel>();
+  bvh->beginModel();
 
-  try {
-    // Create a box BVH model for the ground plane
-    // Box extends from -size/2 to +size/2 in X and Y, centered at (center_x, center_y)
-    // and from ground_z - thickness/2 to ground_z + thickness/2 in Z
-    auto ground_bvh = std::make_shared<BVHModel>();
-    ground_bvh->beginModel();
+  double hx = size / 2.0;
+  double hy = size / 2.0;
+  // double hz = thickness / 2.0;
+  double cx = center_x, cy = center_y;
+  double zlo = ground_z - thickness;
+  double zhi = ground_z;
 
-    double half_size = size / 2.0;
-    double half_thickness = thickness / 2.0;
+  // 8 corners
+  std::vector<fcl::Vector3<FCLScalar>> verts = {
+    {cx - hx, cy - hy, zlo}, {cx + hx, cy - hy, zlo},
+    {cx + hx, cy + hy, zlo}, {cx - hx, cy + hy, zlo},
+    {cx - hx, cy - hy, zhi}, {cx + hx, cy - hy, zhi},
+    {cx + hx, cy + hy, zhi}, {cx - hx, cy + hy, zhi}
+  };
 
-    std::vector<fcl::Vector3<FCLScalar>> corners = {
-      {center_x - half_size, center_y - half_size,
-        ground_z - half_thickness},  // 0: bottom-left-bottom
-      {center_x + half_size, center_y - half_size,
-        ground_z - half_thickness},  // 1: bottom-right-bottom
-      {center_x + half_size,
-        center_y + half_size, ground_z - half_thickness},  // 2: top-right-bottom
-      {center_x - half_size, center_y + half_size,
-        ground_z - half_thickness},  // 3: top-left-bottom
-      {center_x - half_size,
-        center_y - half_size, ground_z + half_thickness},  // 4: bottom-left-top
-      {center_x + half_size,
-        center_y - half_size, ground_z + half_thickness},  // 5: bottom-right-top
-      {center_x + half_size, center_y + half_size, ground_z + half_thickness},  // 6: top-right-top
-      {center_x - half_size, center_y + half_size, ground_z + half_thickness}   // 7: top-left-top
-    };
+  // 12 triangles (2 per face)
+  std::vector<fcl::Triangle> tris = {
+    {0, 1, 2}, {0, 2, 3},  // bottom
+    {4, 6, 5}, {4, 7, 6},  // top
+    {0, 5, 1}, {0, 4, 5},  // front
+    {2, 6, 7}, {2, 7, 3},  // back
+    {0, 3, 7}, {0, 7, 4},  // left
+    {1, 5, 6}, {1, 6, 2}   // right
+  };
 
-    // Define 12 triangles forming the box (2 per face, 6 faces)
-    std::vector<fcl::Triangle> triangles = {
-      // Bottom face (z = ground_z - half_thickness)
-      {0, 1, 2}, {0, 2, 3},
-      // Top face (z = ground_z + half_thickness)
-      {4, 6, 5}, {4, 7, 6},
-      // Front face (y = center_y - half_size)
-      {0, 5, 1}, {0, 4, 5},
-      // Back face (y = center_y + half_size)
-      {2, 6, 7}, {2, 7, 3},
-      // Left face (x = center_x - half_size)
-      {0, 3, 7}, {0, 7, 4},
-      // Right face (x = center_x + half_size)
-      {1, 5, 6}, {1, 6, 2}
-    };
+  bvh->addSubModel(verts, tris);
+  bvh->endModel();
 
-    ground_bvh->addSubModel(corners, triangles);
-    ground_bvh->endModel();
+  ground_plane_bvh_ = bvh;
+  RCLCPP_DEBUG(logger_, "Ground plane BVH built: 12 triangles");
+}
 
-    ground_plane_bvh_ = ground_bvh;
-    RCLCPP_DEBUG(logger_, "Ground plane BVH created with %d triangles", ground_bvh->num_tris);
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(logger_, "Failed to create ground plane BVH: %s", e.what());
-    ground_plane_bvh_ = nullptr;
-  } catch (...) {
-    RCLCPP_WARN(logger_, "Failed to create ground plane BVH: unknown exception");
-    ground_plane_bvh_ = nullptr;
+bool FCLCollisionChecker::collides_with_primary(
+  const gp_Trsf & gripper_transform,
+  double grip_distance,
+  double tolerance) const
+{
+  if (!valid_) {return false;}
+  return check_gripper_collision(
+    gripper_transform, grip_distance, primary_bvh_, tolerance);
+}
+
+bool FCLCollisionChecker::collides_with_exclusions(
+  const gp_Trsf & gripper_transform,
+  double grip_distance,
+  double tolerance) const
+{
+  if (!valid_) {return false;}
+  for (const auto & bvh : exclusion_bvhs_) {
+    if (check_gripper_collision(gripper_transform, grip_distance, bvh, tolerance)) {
+      return true;
+    }
   }
+  return false;
+}
+
+bool FCLCollisionChecker::collides_with_secondaries(
+  const gp_Trsf & gripper_transform,
+  double grip_distance,
+  double tolerance) const
+{
+  if (!valid_) {return false;}
+
+  if (ground_plane_bvh_) {
+    if (check_gripper_collision(
+        gripper_transform, grip_distance, ground_plane_bvh_, tolerance))
+    {
+      return true;
+    }
+  }
+
+  for (const auto & bvh : secondary_bvhs_) {
+    if (check_gripper_collision(gripper_transform, grip_distance, bvh, tolerance)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+double FCLCollisionChecker::distance_to_primary(
+  const gp_Trsf & gripper_transform,
+  double grip_distance) const
+{
+  if (!valid_ || !primary_bvh_) {
+    return std::numeric_limits<double>::max();
+  }
+  return compute_gripper_distance(gripper_transform, grip_distance, primary_bvh_);
+}
+
+bool FCLCollisionChecker::ray_hits_primary(
+  const gp_Pnt & origin,
+  const gp_Dir & direction,
+  double max_distance,
+  gp_Pnt & hit_point_out) const
+{
+  if (!valid_ || !primary_bvh_) {return false;}
+
+  const fcl::Vector3<double> ro(origin.X(), origin.Y(), origin.Z());
+  const fcl::Vector3<double> rd(direction.X(), direction.Y(), direction.Z());
+
+  int hit_tri = -1;
+  double t = bvh_ray_cast(*primary_bvh_, ro, rd, max_distance, hit_tri);
+
+  if (hit_tri >= 0) {
+    hit_point_out = gp_Pnt(
+      origin.X() + direction.X() * t,
+      origin.Y() + direction.Y() * t,
+      origin.Z() + direction.Z() * t);
+    return true;
+  }
+  return false;
+}
+
+bool FCLCollisionChecker::is_valid() const
+{
+  return valid_;
+}
+
+bool FCLCollisionChecker::has_ground_plane() const
+{
+  return ground_plane_bvh_ != nullptr;
 }
 
 std::shared_ptr<FCLCollisionChecker::BVHModel> FCLCollisionChecker::shape_to_bvh(
   const TopoDS_Shape & shape) const
 {
+  if (shape.IsNull()) {
+    RCLCPP_DEBUG(logger_, "shape_to_bvh: shape is null — returning nullptr");
+    return nullptr;
+  }
+
+  BRepMesh_IncrementalMesh mesher(shape, linear_deflection_);
+
   std::vector<fcl::Vector3<FCLScalar>> vertices;
   std::vector<fcl::Triangle> triangles;
 
-  int skipped_faces = 0;
+  int face_idx = 0;
+  int faces_with_no_triangulation = 0;
 
-  try {
-    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
-      TopoDS_Face face = TopoDS::Face(exp.Current());
+  for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next(), ++face_idx) {
+    TopoDS_Face face = TopoDS::Face(exp.Current());
+    TopLoc_Location loc;
+    Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
 
-      TopLoc_Location loc;
-      Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, loc);
-
-      if (triangulation.IsNull()) {
-        skipped_faces++;
-        continue;
-      }
-
-      gp_Trsf face_transform = loc.Transformation();
-      int vertex_offset = static_cast<int>(vertices.size());
-
-      int nb_nodes = triangulation->NbNodes();
-      for (int i = 1; i <= nb_nodes; ++i) {
-        gp_Pnt p = triangulation->Node(i);
-        p.Transform(face_transform);
-        vertices.emplace_back(p.X(), p.Y(), p.Z());
-      }
-
-      int nb_triangles = triangulation->NbTriangles();
-      for (int i = 1; i <= nb_triangles; ++i) {
-        const Poly_Triangle & tri = triangulation->Triangle(i);
-
-        int n1, n2, n3;
-        tri.Get(n1, n2, n3);
-
-        // Validate indices are in valid range
-        if (n1 < 1 || n1 > nb_nodes || n2 < 1 || n2 > nb_nodes || n3 < 1 || n3 > nb_nodes) {
-          RCLCPP_DEBUG(logger_, "Invalid triangle indices: %d, %d, %d (max: %d)",
-            n1, n2, n3, nb_nodes);
-          continue;
-        }
-
-        int v1 = vertex_offset + n1 - 1;
-        int v2 = vertex_offset + n2 - 1;
-        int v3 = vertex_offset + n3 - 1;
-
-        // Swap vertices for reversed faces to maintain consistent winding order
-        if (face.Orientation() == TopAbs_REVERSED) {
-          std::swap(v2, v3);
-        }
-
-        triangles.emplace_back(v1, v2, v3);
-      }
+    if (tri.IsNull()) {
+      RCLCPP_DEBUG(logger_, "shape_to_bvh: face %d has no triangulation — skipping", face_idx);
+      ++faces_with_no_triangulation;
+      continue;
     }
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Exception during BVH conversion: %s", e.what());
-    return nullptr;
-  } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown exception during BVH conversion");
-    return nullptr;
-  }
 
-  if (skipped_faces > 0) {
-    RCLCPP_DEBUG(logger_, "Skipped %d non-triangulated faces", skipped_faces);
+    const gp_Trsf & trsf = loc.Transformation();
+
+    // Log whether this face carries a non-identity location transform.
+    // A non-identity transform here means the mesh nodes are in a local
+    // frame and need Transformed() to reach world coords — if this is
+    // unexpectedly identity the BVH will be built at the wrong position.
+    const bool is_identity = loc.IsIdentity();
+    RCLCPP_DEBUG(logger_,
+      "shape_to_bvh: face %d — %d nodes, %d triangles, location_is_identity=%s, "
+      "trsf_translation=(%.4f, %.4f, %.4f)",
+      face_idx, tri->NbNodes(), tri->NbTriangles(),
+      is_identity ? "YES" : "NO",
+      trsf.Value(1, 4), trsf.Value(2, 4), trsf.Value(3, 4));
+
+    int offset = static_cast<int>(vertices.size());
+
+    for (int i = 1; i <= tri->NbNodes(); ++i) {
+      gp_Pnt p = tri->Node(i).Transformed(trsf);
+      vertices.emplace_back(p.X(), p.Y(), p.Z());
+    }
+
+    for (int i = 1; i <= tri->NbTriangles(); ++i) {
+      int n1, n2, n3;
+      tri->Triangle(i).Get(n1, n2, n3);
+      if (face.Orientation() == TopAbs_REVERSED) {std::swap(n2, n3);}
+      triangles.emplace_back(
+        offset + n1 - 1,
+        offset + n2 - 1,
+        offset + n3 - 1);
+    }
   }
 
   if (vertices.empty() || triangles.empty()) {
-    RCLCPP_DEBUG(logger_, "Shape has no triangulation data");
+    RCLCPP_WARN(logger_,
+      "shape_to_bvh: no geometry collected (%zu vertices, %zu triangles, "
+      "%d faces skipped) — returning nullptr",
+      vertices.size(), triangles.size(), faces_with_no_triangulation);
     return nullptr;
   }
 
-  try {
-    auto bvh = std::make_shared<BVHModel>();
-    bvh->beginModel();
-    bvh->addSubModel(vertices, triangles);
-    bvh->endModel();
-
-    if (bvh->num_tris == 0) {
-      RCLCPP_DEBUG(logger_, "BVH model has no triangles after build");
-      return nullptr;
+  // Compute AABB of all collected vertices so we can verify world position.
+  fcl::Vector3<FCLScalar> vmin = vertices[0];
+  fcl::Vector3<FCLScalar> vmax = vertices[0];
+  for (const auto & v : vertices) {
+    for (int i = 0; i < 3; ++i) {
+      vmin[i] = std::min(vmin[i], v[i]);
+      vmax[i] = std::max(vmax[i], v[i]);
     }
-
-    return bvh;
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Exception during BVH build: %s", e.what());
-    return nullptr;
-  } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown exception during BVH build");
-    return nullptr;
   }
+  RCLCPP_DEBUG(logger_,
+    "shape_to_bvh: built BVH — %zu vertices, %zu triangles, %d faces skipped. "
+    "AABB x=[%.4f, %.4f] y=[%.4f, %.4f] z=[%.4f, %.4f]",
+    vertices.size(), triangles.size(), faces_with_no_triangulation,
+    vmin[0], vmax[0], vmin[1], vmax[1], vmin[2], vmax[2]);
+
+  auto model = std::make_shared<BVHModel>();
+  model->beginModel();
+  model->addSubModel(vertices, triangles);
+  model->endModel();
+
+  return model;
 }
 
-FCLCollisionChecker::Transform3 FCLCollisionChecker::to_fcl_transform(const gp_Trsf & trsf) const
+FCLCollisionChecker::Transform3 FCLCollisionChecker::to_fcl_transform(
+  const gp_Trsf & trsf) const
 {
-  // Extract rotation matrix
-  Eigen::Matrix3d rotation;
-  rotation(0, 0) = trsf.Value(1, 1);
-  rotation(0, 1) = trsf.Value(1, 2);
-  rotation(0, 2) = trsf.Value(1, 3);
-  rotation(1, 0) = trsf.Value(2, 1);
-  rotation(1, 1) = trsf.Value(2, 2);
-  rotation(1, 2) = trsf.Value(2, 3);
-  rotation(2, 0) = trsf.Value(3, 1);
-  rotation(2, 1) = trsf.Value(3, 2);
-  rotation(2, 2) = trsf.Value(3, 3);
-
-  // Extract translation
-  Eigen::Vector3d translation(
-    trsf.TranslationPart().X(),
-    trsf.TranslationPart().Y(),
-    trsf.TranslationPart().Z());
-
-  Transform3 transform = Transform3::Identity();
-  transform.linear() = rotation;
-  transform.translation() = translation;
-
-  return transform;
+  Transform3 tf;
+  tf.setIdentity();
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      tf.linear()(i, j) = trsf.Value(i + 1, j + 1);
+    }
+    tf.translation()(i) = trsf.Value(i + 1, 4);
+  }
+  return tf;
 }
 
 void FCLCollisionChecker::compute_finger_transforms(
   double grip_distance,
-  Transform3 & finger_1_transform,
-  Transform3 & finger_2_transform) const
+  Transform3 & f1_tf,
+  Transform3 & f2_tf) const
 {
-  // Each finger moves half the grip distance along its axis
-  double half_opening = grip_distance / 2.0;
-
-  Eigen::Vector3d translation_1 = finger_1_axis_ * half_opening;
-  Eigen::Vector3d translation_2 = finger_2_axis_ * half_opening;
-
-  finger_1_transform = Transform3::Identity();
-  finger_1_transform.translation() = translation_1;
-
-  finger_2_transform = Transform3::Identity();
-  finger_2_transform.translation() = translation_2;
+  f1_tf.setIdentity();
+  f2_tf.setIdentity();
+  f1_tf.translation() = finger_1_axis_ * (grip_distance / 2.0 + rest_gap_);
+  f2_tf.translation() = finger_2_axis_ * (grip_distance / 2.0 + rest_gap_);
 }
 
 bool FCLCollisionChecker::check_gripper_collision(
@@ -389,82 +491,61 @@ bool FCLCollisionChecker::check_gripper_collision(
   const std::shared_ptr<BVHModel> & target_bvh,
   double tolerance) const
 {
-  if (!target_bvh) {
-    RCLCPP_DEBUG(logger_, "Null target BVH in collision check");
-    return false;
-  }
+  if (!target_bvh) {return false;}
 
-  // Convert gripper transform to FCL
-  Transform3 base_transform = to_fcl_transform(gripper_transform);
+  Transform3 base_tf = to_fcl_transform(gripper_transform);
+  Transform3 f1_local, f2_local;
+  compute_finger_transforms(grip_distance, f1_local, f2_local);
 
-  // Compute finger offsets for grip distance
-  Transform3 finger_1_offset, finger_2_offset;
-  compute_finger_transforms(grip_distance, finger_1_offset, finger_2_offset);
+  Transform3 f1_tf = base_tf * f1_local;
+  Transform3 f2_tf = base_tf * f2_local;
 
-  // Combined transforms: gripper_transform * finger_offset
-  Transform3 finger_1_world = base_transform * finger_1_offset;
-  Transform3 finger_2_world = base_transform * finger_2_offset;
-
-  // Create collision objects
-  CollisionObject finger_1_obj(finger_1_bvh_, finger_1_world);
-  CollisionObject finger_2_obj(finger_2_bvh_, finger_2_world);
-  CollisionObject base_obj(base_bvh_, base_transform);
-  CollisionObject target_obj(target_bvh, Transform3::Identity());
-
-  // Collision request/result
   fcl::CollisionRequest<FCLScalar> request;
-  request.enable_contact = false;  // We just need yes/no
   fcl::CollisionResult<FCLScalar> result;
 
-  // If tolerance is positive, we need distance checking instead
-  if (tolerance > 0) {
-    fcl::DistanceRequest<FCLScalar> dist_request;
-    fcl::DistanceResult<FCLScalar> dist_result;
+  CollisionObject target_obj(target_bvh, Transform3::Identity());
 
-    // Check finger 1
-    dist_result.clear();
-    fcl::distance(&finger_1_obj, &target_obj, dist_request, dist_result);
-    if (dist_result.min_distance < tolerance) {
-      return true;
+  if (tolerance > 0.0) {
+    // Distance-based check
+    fcl::DistanceRequest<FCLScalar> dist_req;
+    fcl::DistanceResult<FCLScalar> dist_res;
+
+    if (base_bvh_) {
+      CollisionObject base_obj(base_bvh_, base_tf);
+      fcl::distance(&base_obj, &target_obj, dist_req, dist_res);
+      if (dist_res.min_distance < tolerance) {return true;}
     }
-
-    // Check finger 2
-    dist_result.clear();
-    fcl::distance(&finger_2_obj, &target_obj, dist_request, dist_result);
-    if (dist_result.min_distance < tolerance) {
-      return true;
+    if (finger_1_bvh_) {
+      dist_res.clear();
+      CollisionObject f1_obj(finger_1_bvh_, f1_tf);
+      fcl::distance(&f1_obj, &target_obj, dist_req, dist_res);
+      if (dist_res.min_distance < tolerance) {return true;}
     }
-
-    // Check base
-    dist_result.clear();
-    fcl::distance(&base_obj, &target_obj, dist_request, dist_result);
-    if (dist_result.min_distance < tolerance) {
-      return true;
+    if (finger_2_bvh_) {
+      dist_res.clear();
+      CollisionObject f2_obj(finger_2_bvh_, f2_tf);
+      fcl::distance(&f2_obj, &target_obj, dist_req, dist_res);
+      if (dist_res.min_distance < tolerance) {return true;}
     }
-
-    return false;
-  }
-
-  // Zero tolerance: use collision detection
-  // Check finger 1
-  result.clear();
-  fcl::collide(&finger_1_obj, &target_obj, request, result);
-  if (result.isCollision()) {
-    return true;
-  }
-
-  // Check finger 2
-  result.clear();
-  fcl::collide(&finger_2_obj, &target_obj, request, result);
-  if (result.isCollision()) {
-    return true;
-  }
-
-  // Check base
-  result.clear();
-  fcl::collide(&base_obj, &target_obj, request, result);
-  if (result.isCollision()) {
-    return true;
+  } else {
+    // Boolean collision check
+    if (base_bvh_) {
+      CollisionObject base_obj(base_bvh_, base_tf);
+      fcl::collide(&base_obj, &target_obj, request, result);
+      if (result.isCollision()) {return true;}
+    }
+    if (finger_1_bvh_) {
+      result.clear();
+      CollisionObject f1_obj(finger_1_bvh_, f1_tf);
+      fcl::collide(&f1_obj, &target_obj, request, result);
+      if (result.isCollision()) {return true;}
+    }
+    if (finger_2_bvh_) {
+      result.clear();
+      CollisionObject f2_obj(finger_2_bvh_, f2_tf);
+      fcl::collide(&f2_obj, &target_obj, request, result);
+      if (result.isCollision()) {return true;}
+    }
   }
 
   return false;
@@ -475,151 +556,40 @@ double FCLCollisionChecker::compute_gripper_distance(
   double grip_distance,
   const std::shared_ptr<BVHModel> & target_bvh) const
 {
-  if (!target_bvh) {
-    return std::numeric_limits<double>::max();
-  }
+  if (!target_bvh) {return std::numeric_limits<double>::max();}
 
-  // Convert gripper transform to FCL
-  Transform3 base_transform = to_fcl_transform(gripper_transform);
+  Transform3 base_tf = to_fcl_transform(gripper_transform);
+  Transform3 f1_local, f2_local;
+  compute_finger_transforms(grip_distance, f1_local, f2_local);
 
-  // Compute finger offsets for grip distance
-  Transform3 finger_1_offset, finger_2_offset;
-  compute_finger_transforms(grip_distance, finger_1_offset, finger_2_offset);
-
-  // Combined transforms
-  Transform3 finger_1_world = base_transform * finger_1_offset;
-  Transform3 finger_2_world = base_transform * finger_2_offset;
-
-  // Create collision objects
-  CollisionObject finger_1_obj(finger_1_bvh_, finger_1_world);
-  CollisionObject finger_2_obj(finger_2_bvh_, finger_2_world);
-  CollisionObject base_obj(base_bvh_, base_transform);
-  CollisionObject target_obj(target_bvh, Transform3::Identity());
+  Transform3 f1_tf = base_tf * f1_local;
+  Transform3 f2_tf = base_tf * f2_local;
 
   fcl::DistanceRequest<FCLScalar> request;
   fcl::DistanceResult<FCLScalar> result;
+  double min_dist = std::numeric_limits<double>::max();
 
-  double min_distance = std::numeric_limits<double>::max();
+  CollisionObject target_obj(target_bvh, Transform3::Identity());
 
-  // Check finger 1
-  result.clear();
-  fcl::distance(&finger_1_obj, &target_obj, request, result);
-  min_distance = std::min(min_distance, result.min_distance);
-
-  // Check finger 2
-  result.clear();
-  fcl::distance(&finger_2_obj, &target_obj, request, result);
-  min_distance = std::min(min_distance, result.min_distance);
-
-  // Check base
-  result.clear();
-  fcl::distance(&base_obj, &target_obj, request, result);
-  min_distance = std::min(min_distance, result.min_distance);
-
-  return min_distance;
-}
-
-bool FCLCollisionChecker::collides_with_primary(
-  const gp_Trsf & gripper_transform,
-  double grip_distance,
-  double tolerance) const
-{
-  if (!valid_) {
-    RCLCPP_WARN(logger_, "Collision checker not valid, assuming no collision");
-    return false;
+  if (base_bvh_) {
+    CollisionObject base_obj(base_bvh_, base_tf);
+    fcl::distance(&base_obj, &target_obj, request, result);
+    min_dist = std::min(min_dist, result.min_distance);
+  }
+  if (finger_1_bvh_) {
+    result.clear();
+    CollisionObject f1_obj(finger_1_bvh_, f1_tf);
+    fcl::distance(&f1_obj, &target_obj, request, result);
+    min_dist = std::min(min_dist, result.min_distance);
+  }
+  if (finger_2_bvh_) {
+    result.clear();
+    CollisionObject f2_obj(finger_2_bvh_, f2_tf);
+    fcl::distance(&f2_obj, &target_obj, request, result);
+    min_dist = std::min(min_dist, result.min_distance);
   }
 
-  try {
-    return check_gripper_collision(gripper_transform, grip_distance, primary_bvh_, tolerance);
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(logger_, "Exception in primary collision check: %s", e.what());
-    return true;
-  } catch (...) {
-    RCLCPP_WARN(logger_, "Unknown exception in primary collision check");
-    return true;
-  }
-}
-
-bool FCLCollisionChecker::collides_with_exclusions(
-  const gp_Trsf & gripper_transform,
-  double grip_distance,
-  double tolerance) const
-{
-  if (!valid_ || exclusion_bvhs_.empty()) {
-    return false;
-  }
-
-  try {
-    for (const auto & exclusion_bvh : exclusion_bvhs_) {
-      if (check_gripper_collision(gripper_transform, grip_distance, exclusion_bvh, tolerance)) {
-        return true;
-      }
-    }
-    return false;
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(logger_, "Exception in exclusion collision check: %s", e.what());
-    return true;
-  } catch (...) {
-    RCLCPP_WARN(logger_, "Unknown exception in exclusion collision check");
-    return true;
-  }
-}
-
-bool FCLCollisionChecker::collides_with_secondaries(
-  const gp_Trsf & gripper_transform,
-  double grip_distance,
-  double tolerance) const
-{
-  if (!valid_) {
-    return false;
-  }
-
-  try {
-    // Check ground plane collision if present
-    if (ground_plane_bvh_) {
-      if (check_gripper_collision(gripper_transform, grip_distance, ground_plane_bvh_, tolerance)) {
-        return true;
-      }
-    }
-
-    // Check secondary shapes
-    for (const auto & secondary_bvh : secondary_bvhs_) {
-      if (check_gripper_collision(gripper_transform, grip_distance, secondary_bvh, tolerance)) {
-        return true;
-      }
-    }
-    return false;
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(logger_, "Exception in secondary collision check: %s", e.what());
-    return true;
-  } catch (...) {
-    RCLCPP_WARN(logger_, "Unknown exception in secondary collision check");
-    return true;
-  }
-}
-
-double FCLCollisionChecker::distance_to_primary(
-  const gp_Trsf & gripper_transform,
-  double grip_distance) const
-{
-  if (!valid_) {
-    return std::numeric_limits<double>::max();
-  }
-
-  try {
-    return compute_gripper_distance(gripper_transform, grip_distance, primary_bvh_);
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(logger_, "Exception in distance computation: %s", e.what());
-    return std::numeric_limits<double>::max();
-  } catch (...) {
-    RCLCPP_WARN(logger_, "Unknown exception in distance computation");
-    return std::numeric_limits<double>::max();
-  }
-}
-
-bool FCLCollisionChecker::is_valid() const
-{
-  return valid_;
+  return min_dist;
 }
 
 }  // namespace geometry

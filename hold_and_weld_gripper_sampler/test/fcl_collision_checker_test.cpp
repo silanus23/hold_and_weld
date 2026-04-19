@@ -231,6 +231,8 @@ TEST_F(FCLCollisionCheckerTest, ExclusionVolumeCollisionDetected)
   EXPECT_TRUE(checker.collides_with_exclusions(transform, grip_distance, tolerance));
 }
 
+
+
 TEST_F(FCLCollisionCheckerTest, SecondaryShapeCollisionDetected)
 {
   FCLCollisionChecker checker(gripper_, primary_shape_);
@@ -249,6 +251,7 @@ TEST_F(FCLCollisionCheckerTest, SecondaryShapeCollisionDetected)
 
   EXPECT_TRUE(checker.collides_with_secondaries(transform, 0.02, 0.001));
 }
+
 
 TEST_F(FCLCollisionCheckerTest, MultipleExclusionVolumes)
 {
@@ -316,15 +319,15 @@ TEST_F(FCLCollisionCheckerTest, FCLCollisionMonotonicWithDistance)
   ASSERT_TRUE(checker.is_valid());
 
   const double grip_distance = 0.0;  // closed gripper
-  const double tolerance    = 0.002; // 2 mm
+  const double tolerance = 0.002;    // 2 mm
 
   struct ZCase {double z; bool expect_collision;};
   const std::vector<ZCase> cases = {
     {-0.10, true},   // deep inside cube  → collision
     {-0.05, true},   // inside cube       → collision
-    { 0.00, true},   // at cube surface   → collision (zero gap)
-    { 0.06, false},  // 10 mm gap outside → no collision (gap > 2 mm tolerance)
-    { 0.20, false},  // well outside      → no collision
+    {0.00, true},    // at cube surface   → collision (zero gap)
+    {0.06, false},   // 10 mm gap outside → no collision (gap > 2 mm tolerance)
+    {0.20, false},   // well outside      → no collision
   };
 
   for (const auto & c : cases) {
@@ -361,8 +364,8 @@ TEST_F(FCLCollisionCheckerTest, FCLDistanceMonotonicWithSeparation)
   double d3 = checker.distance_to_primary(t3, grip_distance);
 
   EXPECT_GE(d1, 0.0) << "Distance must be non-negative when outside primary";
-  EXPECT_GE(d2, d1)  << "Distance must increase as gripper moves away (t1→t2)";
-  EXPECT_GE(d3, d2)  << "Distance must increase as gripper moves away (t2→t3)";
+  EXPECT_GE(d2, d1) << "Distance must increase as gripper moves away (t1→t2)";
+  EXPECT_GE(d3, d2) << "Distance must increase as gripper moves away (t2→t3)";
 }
 
 }  // namespace test

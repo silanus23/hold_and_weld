@@ -159,19 +159,23 @@ public:
     const Eigen::Vector3d & center = Eigen::Vector3d::Zero());
 
   /**
-   * @brief Create a ground plane as a thin box at z=0
+   * @brief Create a ground plane as a thin box
    *
    * @param size_x Extent in X direction [m]
    * @param size_y Extent in Y direction [m]
-   * @param z_position Z position of the ground surface
+   * @param z_position Z position of the top surface of the ground plane
    * @param thickness Thickness of the ground box [m]
+   * @param center_x X center of the ground plane (default 0.0)
+   * @param center_y Y center of the ground plane (default 0.0)
    * @return Ground plane shape
    */
   TopoDS_Shape make_ground_plane(
     double size_x = 2.0,
     double size_y = 2.0,
     double z_position = 0.0,
-    double thickness = 0.01);
+    double thickness = 0.01,
+    double center_x = 0.0,
+    double center_y = 0.0);
 
   /**
    * @brief Triangulate a shape for collision detection

@@ -71,7 +71,6 @@ bool ResultWriter::write_to_file(
   const ResultMetadata & metadata,
   const WriterOptions & options)
 {
-  // Merge statistics from result into metadata
   ResultMetadata merged_metadata = metadata;
   merged_metadata.num_contact_pairs = result.num_contact_pairs;
   merged_metadata.num_surfaces_valid = result.num_valid_surfaces;
@@ -123,7 +122,6 @@ std::string ResultWriter::to_json_string(
           metadata.config_source << "\"," << newline;
       }
 
-    // Statistics
       if (options.include_debug) {
         json << indent << indent << "\"num_surfaces_total\":" << sep <<
           metadata.num_surfaces_total << "," << newline;
@@ -135,6 +133,11 @@ std::string ResultWriter::to_json_string(
           metadata.num_contact_pairs << "," << newline;
         json << indent << indent << "\"num_candidates\":" << sep <<
           metadata.num_candidates << "," << newline;
+
+        if (metadata.finger_length > 0.0) {
+          json << indent << indent << "\"finger_length\":" << sep <<
+            metadata.finger_length << "," << newline;
+        }
 
         if (metadata.total_time_seconds > 0) {
           json << indent << indent << "\"total_time_seconds\":" << sep <<
@@ -155,7 +158,6 @@ std::string ResultWriter::to_json_string(
       json << indent << "}," << newline;
     }
 
-  // Grasps array
     json << indent << "\"grasps\":" << sep << "[" << newline;
 
     for (size_t i = 0; i < filtered_grasps.size(); ++i) {
@@ -163,14 +165,11 @@ std::string ResultWriter::to_json_string(
 
       json << indent << indent << "{" << newline;
 
-    // ID
       json << indent << indent << indent << "\"id\":" << sep << i << "," << newline;
 
-    // Quality score
       json << indent << indent << indent << "\"quality_score\":" << sep <<
         grasp.quality_score << "," << newline;
 
-    // TCP pose
       json << indent << indent << indent << "\"tcp_pose\":" << sep << "{" << newline;
       json << indent << indent << indent << indent << "\"position\":" << sep << "[" <<
         grasp.tcp_position.x() << "," << sep <<
@@ -183,7 +182,6 @@ std::string ResultWriter::to_json_string(
         grasp.tcp_orientation.w() << "]" << newline;
       json << indent << indent << indent << "}," << newline;
 
-    // Contact 1
       json << indent << indent << indent << "\"contact_1\":" << sep << "{" << newline;
       json << indent << indent << indent << indent << "\"position\":" << sep << "[" <<
         grasp.contact_point_1.x() << "," << sep <<
@@ -193,7 +191,6 @@ std::string ResultWriter::to_json_string(
         grasp.surface_id_1 << newline;
       json << indent << indent << indent << "}," << newline;
 
-    // Contact 2
       json << indent << indent << indent << "\"contact_2\":" << sep << "{" << newline;
       json << indent << indent << indent << indent << "\"position\":" << sep << "[" <<
         grasp.contact_point_2.x() << "," << sep <<
@@ -203,7 +200,6 @@ std::string ResultWriter::to_json_string(
         grasp.surface_id_2 << newline;
       json << indent << indent << indent << "}," << newline;
 
-    // Gripper opening
       json << indent << indent << indent << "\"gripper_opening\":" << sep <<
         grasp.gripper_opening << newline;
 

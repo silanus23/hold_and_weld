@@ -75,18 +75,6 @@ gp_Vec extract_surface_normal(const TopoDS_Face & face);
 gp_Pnt extract_surface_center(const TopoDS_Face & face);
 
 
-
-/**
- * @brief Classify edge geometry type (LINE, CIRCLE, or SPLINE)
- *
- * Uses GeomAdaptor_Curve to determine the underlying curve type.
- * SPLINE covers B-spline, Bezier, ellipse, hyperbola, parabola, and other curves.
- *
- * @param edge Edge to classify
- * @return EdgeType classification
- */
-EdgeType classify_edge(const TopoDS_Edge & edge);
-
 /**
  * @brief Check if a face has inner holes (more than one wire)
  *

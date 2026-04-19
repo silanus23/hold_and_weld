@@ -26,8 +26,7 @@
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
-#include <GeomAbs_CurveType.hxx>
-#include <GeomAdaptor_Curve.hxx>
+
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomLProp_SLProps.hxx>
 #include <Geom_Surface.hxx>
@@ -89,7 +88,11 @@ TopoDS_Shape apply_transform(
   const gp_Trsf & transform)
 {
   try {
-    return BRepBuilderAPI_Transform(shape, transform, Standard_True).Shape();
+    BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
+    if (!transformer.IsDone()) {
+      throw std::runtime_error("Failed to apply transform: IsDone() returned false");
+    }
+    return transformer.Shape();
   } catch (Standard_Failure & e) {
     throw std::runtime_error(
       std::string("Failed to apply transform: ") + e.GetMessageString());
@@ -140,28 +143,6 @@ gp_Pnt extract_surface_center(const TopoDS_Face & face)
   } catch (Standard_Failure & e) {
     throw std::runtime_error(
       std::string("Failed to extract surface center: ") + e.GetMessageString());
-  }
-}
-
-
-EdgeType classify_edge(const TopoDS_Edge & edge)
-{
-  try {
-    Standard_Real first, last;
-    Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
-
-    if (curve.IsNull()) {
-      return EdgeType::LINE;
-    }
-
-    GeomAdaptor_Curve adaptor(curve);
-    switch (adaptor.GetType()) {
-      case GeomAbs_Line:   return EdgeType::LINE;
-      case GeomAbs_Circle: return EdgeType::CIRCLE;
-      default:             return EdgeType::SPLINE;
-    }
-  } catch (...) {
-    return EdgeType::LINE;
   }
 }
 
@@ -220,7 +201,7 @@ double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2)
   BRepExtrema_DistShapeShape dist(face_1, face_2);
   dist.Perform();
 
-  if (dist.IsDone() && dist.NbSolution() > 0) {
+  if (dist.NbSolution() > 0) {
     return dist.Value();
   }
 

@@ -242,6 +242,7 @@ install(PROGRAMS
   scripts/utils/add_collision_objects.py
   scripts/magic_wand.py
   scripts/visualize_grasps.py
+  scripts/finger_visualizer.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

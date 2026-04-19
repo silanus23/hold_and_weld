@@ -239,20 +239,15 @@ TopoDS_Shape ShapeLoader::load_from_stl(
     poly.Add(p3);
     poly.Close();
 
-    if (poly.IsDone()) {
-      TopoDS_Wire wire = poly.Wire();
-      BRepBuilderAPI_MakeFace face_maker(wire, Standard_True);
-      if (face_maker.IsDone()) {
-        sewing.Add(face_maker.Face());
-      }
-    }
+    TopoDS_Wire wire = poly.Wire();
+    BRepBuilderAPI_MakeFace face_maker(wire, Standard_True);
+    sewing.Add(face_maker.Face());
   }
 
   sewing.Perform();
   TopoDS_Shape shape = sewing.SewedShape();
 
   if (shape.IsNull()) {
-    // Fallback: create compound if sewing fails
     RCLCPP_WARN(logger_, "Sewing failed, creating compound of individual faces");
     BRep_Builder builder;
     TopoDS_Compound compound;
@@ -281,14 +276,10 @@ TopoDS_Shape ShapeLoader::load_from_stl(
       poly.Add(p3);
       poly.Close();
 
-      if (poly.IsDone()) {
-        TopoDS_Wire wire = poly.Wire();
-        BRepBuilderAPI_MakeFace face_maker(wire, Standard_True);
-        if (face_maker.IsDone()) {
-          builder.Add(compound, face_maker.Face());
-          faces_added++;
-        }
-      }
+      TopoDS_Wire wire = poly.Wire();
+      BRepBuilderAPI_MakeFace face_maker(wire, Standard_True);
+      builder.Add(compound, face_maker.Face());
+      faces_added++;
     }
 
     if (faces_added == 0) {
@@ -585,7 +576,9 @@ TopoDS_Shape ShapeLoader::make_ground_plane(
   double size_x,
   double size_y,
   double z_position,
-  double thickness)
+  double thickness,
+  double center_x,
+  double center_y)
 {
   validate_positive_dimension(size_x, "size_x", "make_ground_plane");
   validate_positive_dimension(size_y, "size_y", "make_ground_plane");
@@ -595,11 +588,11 @@ TopoDS_Shape ShapeLoader::make_ground_plane(
       "make_ground_plane: z_position is not finite: " + std::to_string(z_position));
   }
 
-  RCLCPP_DEBUG(logger_, "Creating ground plane: %.2f x %.2f at z=%.3f",
-    size_x, size_y, z_position);
+  RCLCPP_DEBUG(logger_, "Creating ground plane: %.2f x %.2f at z=%.3f center=(%.3f, %.3f)",
+    size_x, size_y, z_position, center_x, center_y);
 
   Eigen::Vector3d dimensions(size_x, size_y, thickness);
-  Eigen::Vector3d center(0, 0, z_position - thickness / 2.0);
+  Eigen::Vector3d center(center_x, center_y, z_position - thickness / 2.0);
 
   return make_box(dimensions, center, Eigen::Quaterniond::Identity());
 }
@@ -628,6 +621,9 @@ TopoDS_Shape ShapeLoader::apply_transform(
   try {
     gp_Trsf transform = create_transform(translation, rotation);
     BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
+    if (!transformer.IsDone()) {
+      throw std::runtime_error("Failed to apply transform: IsDone() returned false");
+    }
     return transformer.Shape();
   } catch (const Standard_Failure & e) {
     throw std::runtime_error(

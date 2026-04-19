@@ -78,38 +78,29 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
 
   size_t mesh_failures = 0;
 
-  for (size_t i = 0; i < secondary_shapes_.size(); ++i) {
-    BRepMesh_IncrementalMesh mesher(
-      secondary_shapes_[i], lin_deflection, Standard_False, ang_deflection);
-    if (!mesher.IsDone()) {
-      RCLCPP_WARN(logger_, "Failed to mesh secondary shape %zu", i);
-      mesh_failures++;
+  try {
+    if (!gripper_.finger_1.IsNull()) {
+      BRepMesh_IncrementalMesh(gripper_.finger_1, lin_deflection, Standard_False, ang_deflection);
     }
+    if (!gripper_.finger_2.IsNull()) {
+      BRepMesh_IncrementalMesh(gripper_.finger_2, lin_deflection, Standard_False, ang_deflection);
+    }
+    if (!gripper_.base.IsNull()) {
+      BRepMesh_IncrementalMesh(gripper_.base, lin_deflection, Standard_False, ang_deflection);
+    }
+  } catch (Standard_Failure & e) {
+    RCLCPP_ERROR(logger_, "Critical gripper meshing failure: %s", e.GetMessageString());
+    throw std::runtime_error("Gripper geometry is unmeshable.");
   }
 
-  BRepMesh_IncrementalMesh mesher_f1(gripper_.finger_1, lin_deflection, Standard_False,
-    ang_deflection);
-  if (!mesher_f1.IsDone()) {
-    RCLCPP_ERROR(logger_, "Failed to mesh gripper finger 1 - cannot initialize constraint");
-    throw std::runtime_error("Failed to mesh gripper finger 1");
-  }
-
-  BRepMesh_IncrementalMesh mesher_f2(gripper_.finger_2, lin_deflection, Standard_False,
-    ang_deflection);
-  if (!mesher_f2.IsDone()) {
-    RCLCPP_ERROR(logger_, "Failed to mesh gripper finger 2 - cannot initialize constraint");
-    throw std::runtime_error("Failed to mesh gripper finger 2");
-  }
-
-  BRepMesh_IncrementalMesh mesher_base(gripper_.base, lin_deflection, Standard_False,
-    ang_deflection);
-  if (!mesher_base.IsDone()) {
-    RCLCPP_ERROR(logger_, "Failed to mesh gripper base - cannot initialize constraint");
-    throw std::runtime_error("Failed to mesh gripper base");
-  }
-
-  if (mesh_failures > 0) {
-    RCLCPP_WARN(logger_, "%zu secondary shape(s) failed to mesh", mesh_failures);
+  for (size_t i = 0; i < secondary_shapes_.size(); ++i) {
+    if (secondary_shapes_[i].IsNull()) {continue;}
+    try {
+      BRepMesh_IncrementalMesh(secondary_shapes_[i], lin_deflection, Standard_False,
+            ang_deflection);
+    } catch (Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "Secondary shape %zu failed to mesh - results may be inaccurate", i);
+    }
   }
 }
 
@@ -134,7 +125,12 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
   constexpr Standard_Real mesh_lin = 0.001;
   constexpr Standard_Real mesh_ang = 0.5;
   for (const auto & surface : all_surfaces) {
-    BRepMesh_IncrementalMesh(surface.face, mesh_lin, Standard_False, mesh_ang);
+    try {
+      BRepMesh_IncrementalMesh(surface.face, mesh_lin, Standard_False, mesh_ang);
+    } catch (Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "Failed to mesh surface %d - contact ratio may be zero",
+            mapper_->find_topology_surface_id(surface.face));
+    }
   }
 
   for (size_t i = 0; i < all_surfaces.size(); i++) {
@@ -230,14 +226,16 @@ double KissingSurfaceConstraint::measure_contact_ratio(
       (p1.Z() + p2.Z() + p3.Z()) / 3.0);
 
     for (const auto & secondary : secondary_shapes_) {
+      if (secondary.IsNull()) {continue;}
       try {
-        BRepExtrema_DistShapeShape dist(
-          BRepBuilderAPI_MakeVertex(centroid).Shape(), secondary);
-        if (dist.IsDone() && dist.Value() <= contact_distance_threshold) {
+        TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(centroid);
+        BRepExtrema_DistShapeShape dist(v, secondary);
+
+        if (dist.Value() <= contact_distance_threshold) {
           contact_area += tri_area;
           break;
         }
-      } catch (...) {
+      } catch (Standard_Failure & e) {
         continue;
       }
     }
@@ -264,21 +262,18 @@ TopoDS_Wire KissingSurfaceConstraint::extract_contact_boundary(
   std::vector<TopoDS_Edge> boundary_edges;
 
   for (size_t i = 0; i < secondary_shapes_.size(); ++i) {
+    if (secondary_shapes_[i].IsNull()) {continue;}
     try {
       BRepAlgoAPI_Section section(face, secondary_shapes_[i]);
       section.Build();
 
-      if (!section.IsDone() || section.Shape().IsNull()) {
-        continue;
-      }
+      if (!section.IsDone() || section.Shape().IsNull()) {continue;}
 
       for (TopExp_Explorer exp(section.Shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
         boundary_edges.push_back(TopoDS::Edge(exp.Current()));
       }
-    } catch (...) {
-      RCLCPP_DEBUG(logger_, "Section failed for surface %d against secondary %zu",
-        surface_id, i);
-      continue;
+    } catch (Standard_Failure & e) {
+      RCLCPP_DEBUG(logger_, "Section failed for surface %d: %s", surface_id, e.GetMessageString());
     }
   }
 
@@ -292,16 +287,11 @@ TopoDS_Wire KissingSurfaceConstraint::extract_contact_boundary(
       wire_builder.Add(edge);
     }
 
-    if (!wire_builder.IsDone()) {
-      RCLCPP_DEBUG(logger_, "Surface %d: failed to build contact boundary wire (%zu edges)",
-        surface_id, boundary_edges.size());
-      return TopoDS_Wire();
-    }
-
-    return wire_builder.Wire();
+    TopoDS_Wire boundary_wire = wire_builder.Wire();
+    return boundary_wire;
   } catch (Standard_Failure & e) {
-    RCLCPP_DEBUG(logger_, "Surface %d: wire building exception - %s",
-      surface_id, e.GetMessageString());
+    RCLCPP_ERROR(logger_, "Wire building failure on surface %d: %s", surface_id,
+          e.GetMessageString());
     return TopoDS_Wire();
   }
 }
@@ -312,7 +302,7 @@ bool KissingSurfaceConstraint::intersects_secondary(
 {
   collision_stats_.total_checks++;
 
-  if (secondary_shapes_.empty()) {
+  if (secondary_shapes_.empty() && (!fcl_checker_ || !fcl_checker_->has_ground_plane())) {
     return false;
   }
 

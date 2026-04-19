@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<!--
+  Workpiece Obstacle URDF
+  =======================
+  Represents the base_link workpiece used as a collision obstacle in the
+  grasp sampler. This is a standalone plain URDF (no xacro) so ShapeLoader
+  can parse it directly without calling xacro first.
+
+  Matches workpiece.urdf.xacro in hold_and_weld_description:
+  - Length: 800 mm (0.80 m) — X axis
+  - Width:  400 mm (0.40 m) — Y axis
+  - Height: 300 mm (0.30 m) — Z axis
+
+  Origin is at the geometric center of the box.
+
+  World-frame placement (from objects.yaml):
+    center: (1.2, -0.5, 0.65)
+    The box occupies:
+      x ∈ [0.80, 1.60]
+      y ∈ [-0.70, -0.30]
+      z ∈ [0.50, 0.80]
+
+  Inertia (for completeness, not used by sampler):
+    Ixx = (1/12) * 25 * (0.40^2 + 0.30^2) = (1/12) * 25 * 0.25 = 0.5208
+    Iyy = (1/12) * 25 * (0.80^2 + 0.30^2) = (1/12) * 25 * 0.73 = 1.5208
+    Izz = (1/12) * 25 * (0.80^2 + 0.40^2) = (1/12) * 25 * 0.80 = 1.6667
+-->
+<robot name="workpiece_obstacle">
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.80 0.40 0.30"/>
+      </geometry>
+      <material name="steel">
+        <color rgba="0.7 0.7 0.75 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.80 0.40 0.30"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="25.0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.5208" ixy="0.0" ixz="0.0"
+               iyy="1.5208" iyz="0.0"
+               izz="1.6667"/>
+    </inertial>
+  </link>
+
+</robot>

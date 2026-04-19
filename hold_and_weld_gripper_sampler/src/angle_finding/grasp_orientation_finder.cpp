@@ -14,34 +14,21 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <memory>
 #include <vector>
 
-#include <BRep_Builder.hxx>
-#include <BRepBuilderAPI_MakeVertex.hxx>
-#include <BRepBuilderAPI_Transform.hxx>
-#include <BRepExtrema_DistShapeShape.hxx>
-#include <BRepExtrema_ExtPC.hxx>
-#include <BRepMesh_IncrementalMesh.hxx>
-#include <gp_Ax1.hxx>
-#include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <rclcpp/rclcpp.hpp>
-#include <Standard_Failure.hxx>
-#include <TopExp_Explorer.hxx>
-#include <TopoDS.hxx>
-#include <TopoDS_Compound.hxx>
 
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
-#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
+#include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
 namespace hold_and_weld_gripper_sampler
@@ -49,10 +36,18 @@ namespace hold_and_weld_gripper_sampler
 namespace angle_finding
 {
 
+static constexpr double kCeilingOffset = 0.010;
+
 Grasp to_grasp(const GraspCandidate & candidate)
 {
+  // TCP is the midpoint between the two contact points — not the gripper base.
+  gp_Pnt tcp(
+    (candidate.contact_1.X() + candidate.contact_2.X()) / 2.0,
+    (candidate.contact_1.Y() + candidate.contact_2.Y()) / 2.0,
+    (candidate.contact_1.Z() + candidate.contact_2.Z()) / 2.0);
+
   return Grasp::create(
-    geometry::extract_translation(candidate.gripper_transform),
+    geometry::to_eigen(tcp),
     geometry::extract_quaternion(candidate.gripper_transform),
     candidate.grip_distance,
     geometry::to_eigen(candidate.contact_1),
@@ -61,6 +56,29 @@ Grasp to_grasp(const GraspCandidate & candidate)
     candidate.surface_id_2,
     candidate.quality_score
   );
+}
+
+static bool angular_overlap(
+  double a_start, double a_end,
+  double b_start, double b_end,
+  double & out_start, double & out_end)
+{
+  constexpr double k2Pi = 2.0 * M_PI;
+
+  struct Piece { double s, e; };
+  auto pieces = [&](double s, double e) -> std::vector<Piece> {
+      if (s <= e) {return {{s, e}};}
+      return {{s, k2Pi}, {0.0, e}};
+    };
+
+  for (const auto & ap : pieces(a_start, a_end)) {
+    for (const auto & bp : pieces(b_start, b_end)) {
+      double os = std::max(ap.s, bp.s);
+      double oe = std::min(ap.e, bp.e);
+      if (os < oe) {out_start = os; out_end = oe; return true;}
+    }
+  }
+  return false;
 }
 
 GraspOrientationFinder::GraspOrientationFinder(
@@ -77,19 +95,22 @@ GraspOrientationFinder::GraspOrientationFinder(
   fcl_checker_(nullptr),
   logger_(rclcpp::get_logger("gripper_sampler"))
 {
-  Standard_Real lin_deflection = 0.0001;
-  Standard_Real ang_deflection = 0.5;
-  BRepMesh_IncrementalMesh mesher(primary_shape_, lin_deflection, Standard_False, ang_deflection);
+}
+
+void GraspOrientationFinder::set_fcl_checker(
+  std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker)
+{
+  fcl_checker_ = fcl_checker;
 }
 
 std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   const std::vector<sampling::ContactPair> & contact_pairs,
-  const geometry::Topology & topology)
+  [[maybe_unused]] const geometry::Topology & topology)
 {
   std::vector<GraspCandidate> valid_grasps;
 
   if (contact_pairs.empty()) {
-    RCLCPP_WARN(logger_, "No contact pairs provided - returning empty grasp list");
+    RCLCPP_WARN(logger_, "No contact pairs provided — returning empty grasp list");
     return valid_grasps;
   }
 
@@ -97,143 +118,224 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   size_t rejected_by_primary = 0;
   size_t rejected_by_exclusion = 0;
   size_t rejected_by_secondary = 0;
-  size_t pairs_with_no_edges = 0;
+  size_t pairs_skipped_flat = 0;
+  size_t pairs_no_seeds = 0;
 
-  RCLCPP_INFO(logger_, "Processing %zu contact pairs for orientation finding",
+  RCLCPP_INFO(logger_, "Processing %zu contact pairs (FCL radial-map orientation finding)",
     contact_pairs.size());
-  RCLCPP_DEBUG(logger_, "Config: finger_length=%.4f m, max_edge_candidates=%zu, "
-    "dedup_tolerance=%.1f deg, collision_tolerance=%.4f m",
-    config_.finger_length, config_.max_edge_candidates,
-    config_.dual_seed_dedup_tolerance_deg, config_.collision_tolerance);
+  RCLCPP_DEBUG(logger_,
+    "Config: finger_length=%.4f m, ring_step=%.4f m, angular_step=%.1f° "
+    "flat_tol=%.4f m, cliff_merge=%.1f°, min_cliff=%.1f°",
+    config_.finger_length, config_.ring_step_size, config_.angular_step_deg,
+    config_.flat_detection_tolerance_m,
+    config_.cliff_merge_tolerance_deg, config_.min_cliff_width_deg);
 
-  // Fall back to a single zero offset if none configured
-  std::vector<double> offsets_to_test = config_.angle_offsets;
-  if (offsets_to_test.empty()) {
-    offsets_to_test.push_back(0.0);
-  }
+  auto make_tangent_frame = [](const gp_Vec & n, gp_Vec & lx, gp_Vec & ly) {
+      double s = (n.Z() >= 0.0) ? 1.0 : -1.0;
+      double a = -1.0 / (s + n.Z());
+      double b = n.X() * n.Y() * a;
+      lx = gp_Vec(1.0 + s * n.X() * n.X() * a, s * b, -s * n.X());
+      ly = gp_Vec(b, s + n.Y() * n.Y() * a, -n.Y());
+    };
 
   for (const auto & pair : contact_pairs) {
-    gp_Vec grip_axis(pair.contact_1, pair.contact_2);
+    gp_Vec normal_1 = pair.normal_1;
+    gp_Vec normal_2 = pair.normal_2;
 
-    // Guard against coincident contact points
+    if (normal_1.Magnitude() < 1e-9 || normal_2.Magnitude() < 1e-9) {
+      RCLCPP_WARN(logger_, "Zero surface normal for pair [%d-%d] — skipping",
+        pair.surface_id_1, pair.surface_id_2);
+      continue;
+    }
+    normal_1.Normalize();
+    normal_2.Normalize();
+
+    gp_Vec grip_axis(pair.contact_1, pair.contact_2);
     if (grip_axis.Magnitude() < 1e-9) {
-      RCLCPP_WARN(logger_, "Contact points coincide for pair (surfaces %d-%d) - skipping",
+      RCLCPP_WARN(logger_, "Coincident contact points for surfaces [%d-%d] — skipping",
         pair.surface_id_1, pair.surface_id_2);
       continue;
     }
     grip_axis.Normalize();
 
-    auto edges_1 = find_edges_in_circle(pair.contact_1, pair.surface_id_1, topology);
-    auto edges_2 = find_edges_in_circle(pair.contact_2, pair.surface_id_2, topology);
+    gp_Vec cal_ref = normal_1 - grip_axis * grip_axis.Dot(normal_1);
+    if (cal_ref.Magnitude() < 1e-9) {
+      // normal_1 is parallel to grip_axis — use Duff et al. to get a perpendicular
+      double s = (grip_axis.Z() >= 0.0) ? 1.0 : -1.0;
+      double a = -1.0 / (s + grip_axis.Z());
+      double b = grip_axis.X() * grip_axis.Y() * a;
+      cal_ref = gp_Vec(1.0 + s * grip_axis.X() * grip_axis.X() * a, s * b, -s * grip_axis.X());
+    }
+    cal_ref.Normalize();
 
-    RCLCPP_DEBUG(logger_, "Pair [%d-%d]: contact_1=(%.4f, %.4f, %.4f) "
-      "contact_2=(%.4f, %.4f, %.4f) grip=%.4f m, edges=%zu/%zu",
+    gp_Vec lx1, ly1, lx2, ly2;
+    make_tangent_frame(normal_1, lx1, ly1);
+    make_tangent_frame(normal_2, lx2, ly2);
+
+    double offset_1 = std::atan2(cal_ref.Dot(ly1), cal_ref.Dot(lx1));
+    double offset_2 = std::atan2(cal_ref.Dot(ly2), cal_ref.Dot(lx2));
+
+    gp_Pnt lifted_1(
+      pair.contact_1.X() + normal_1.X() * kCeilingOffset,
+      pair.contact_1.Y() + normal_1.Y() * kCeilingOffset,
+      pair.contact_1.Z() + normal_1.Z() * kCeilingOffset);
+
+    gp_Pnt lifted_2(
+      pair.contact_2.X() + normal_2.X() * kCeilingOffset,
+      pair.contact_2.Y() + normal_2.Y() * kCeilingOffset,
+      pair.contact_2.Z() + normal_2.Z() * kCeilingOffset);
+
+    RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
+      "Pair [%d-%d]: normal_1=(%.3f,%.3f,%.3f) lx1=(%.3f,%.3f,%.3f) ly1=(%.3f,%.3f,%.3f) offset_1=%.1f°",
       pair.surface_id_1, pair.surface_id_2,
-      pair.contact_1.X(), pair.contact_1.Y(), pair.contact_1.Z(),
-      pair.contact_2.X(), pair.contact_2.Y(), pair.contact_2.Z(),
-      pair.grip_distance, edges_1.size(), edges_2.size());
+      normal_1.X(), normal_1.Y(), normal_1.Z(),
+      lx1.X(), lx1.Y(), lx1.Z(),
+      ly1.X(), ly1.Y(), ly1.Z(),
+      offset_1 * 180.0 / M_PI);
+    RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
+      "Pair [%d-%d]: normal_2=(%.3f,%.3f,%.3f) lx2=(%.3f,%.3f,%.3f) ly2=(%.3f,%.3f,%.3f) offset_2=%.1f°",
+      pair.surface_id_1, pair.surface_id_2,
+      normal_2.X(), normal_2.Y(), normal_2.Z(),
+      lx2.X(), lx2.Y(), lx2.Z(),
+      ly2.X(), ly2.Y(), ly2.Z(),
+      offset_2 * 180.0 / M_PI);
+    RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
+      "Pair [%d-%d]: cal_ref=(%.3f,%.3f,%.3f)",
+      pair.surface_id_1, pair.surface_id_2,
+      cal_ref.X(), cal_ref.Y(), cal_ref.Z());
 
-    // One side having no edges is valid — the dual-seed strategy uses whichever
-    // side has edges. Reject only when both sides have none.
-    if (edges_1.empty() && edges_2.empty()) {
-      pairs_with_no_edges++;
-      RCLCPP_DEBUG(logger_, "  No edges within finger_length (%.4f m) - skipping",
-        config_.finger_length);
+    auto maps_1 = create_radial_maps(
+      pair.contact_1, gp_Dir(normal_1), lx1, ly1, lifted_1, offset_1);
+
+    auto maps_2 = create_radial_maps(
+      pair.contact_2, gp_Dir(normal_2), lx2, ly2, lifted_2, offset_2);
+
+    double grippable_rad = 0.0;
+    for (const auto & seg : merge_low_segments(maps_1, maps_2)) {
+      grippable_rad += seg.end_rad - seg.start_rad;
+    }
+    double quality = std::min(grippable_rad / (2.0 * M_PI), 1.0);
+
+    if (maps_1.low.empty() && maps_2.low.empty()) {
+      pairs_skipped_flat++;
+      RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
+        "Pair [%d-%d]: outer ring fully FLAT on both contacts — skipping",
+        pair.surface_id_1, pair.surface_id_2);
       continue;
     }
 
-    auto minima_1 = find_local_minima(edges_1);
-    auto minima_2 = find_local_minima(edges_2);
+    std::vector<double> seeds;
+    if (true) {
+      auto merged = merge_low_segments(maps_1, maps_2);
+      RCLCPP_DEBUG(logger_,
+        "Pair [%d-%d]: grip=%.4f m, quality=%.3f "
+        "(flat_1=%zu high_1=%zu low_1=%zu | flat_2=%zu high_2=%zu low_2=%zu) "
+        "→ merged_low=%zu",
+        pair.surface_id_1, pair.surface_id_2,
+        pair.grip_distance, quality,
+        maps_1.flat.size(), maps_1.high.size(), maps_1.low.size(),
+        maps_2.flat.size(), maps_2.high.size(), maps_2.low.size(),
+        merged.size());
 
-    // Bearing angles must be computed before logging or deduplication
-    for (auto & edge : minima_1) {
-      edge.bearing_angle = compute_bearing_angle(pair.contact_1, edge.closest_point, grip_axis);
-    }
-    for (auto & edge : minima_2) {
-      edge.bearing_angle = compute_bearing_angle(pair.contact_2, edge.closest_point, grip_axis);
-    }
-
-    for (size_t i = 0; i < edges_1.size() && i < 5; ++i) {
-      RCLCPP_DEBUG(logger_, "    Edge_1[%zu]: dist=%.4f m, bearing=%.1f°",
-        i, minima_1[i].distance, minima_1[i].bearing_angle * 180.0 / M_PI);
-    }
-    for (size_t i = 0; i < edges_2.size() && i < 5; ++i) {
-      RCLCPP_DEBUG(logger_, "    Edge_2[%zu]: dist=%.4f m, bearing=%.1f°",
-        i, minima_2[i].distance, minima_2[i].bearing_angle * 180.0 / M_PI);
-    }
-
-    // Merge seeds from both contacts. Finger symmetry means an edge at contact_2
-    // with bearing θ is equivalent to one at contact_1 with bearing θ+π, so we
-    // shift contact_2 angles by π before deduplication.
-    std::vector<EdgeConstraint> master_seeds = minima_1;
-
-    for (auto m2 : minima_2) {  // Intentional copy — bearing_angle is modified before insert
-      m2.bearing_angle += M_PI;
-      if (m2.bearing_angle > M_PI) {
-        m2.bearing_angle -= 2.0 * M_PI;
+      for (const auto & seg : maps_1.low) {
+        RCLCPP_DEBUG(logger_, "  maps_1 LOW: [%.1f°, %.1f°]",
+          seg.start_rad * 180.0 / M_PI, seg.end_rad * 180.0 / M_PI);
+      }
+      for (const auto & seg : maps_2.low) {
+        RCLCPP_DEBUG(logger_, "  maps_2 LOW: [%.1f°, %.1f°]",
+          seg.start_rad * 180.0 / M_PI, seg.end_rad * 180.0 / M_PI);
       }
 
-      const double dedup_rad = config_.dual_seed_dedup_tolerance_deg * M_PI / 180.0;
-      bool is_duplicate = false;
-      for (const auto & m1 : master_seeds) {
-        double diff = std::abs(m1.bearing_angle - m2.bearing_angle);
-        if (diff > M_PI) {diff = 2.0 * M_PI - diff;}
-        if (diff < dedup_rad) {
-          is_duplicate = true;
-          break;
+      if (!merged.empty()) {
+        auto after_outer = filter_by_outer_ring(merged, maps_1, maps_2);
+        RCLCPP_DEBUG(logger_,
+          "  [%d-%d] after filter_by_outer_ring: %zu → %zu segment(s)",
+          pair.surface_id_1, pair.surface_id_2,
+          merged.size(), after_outer.size());
+
+        if (!after_outer.empty()) {
+          auto after_high = ban_high_angles(after_outer, maps_1, maps_2);
+          RCLCPP_DEBUG(logger_,
+            "  [%d-%d] after ban_high_angles: %zu → %zu segment(s)",
+            pair.surface_id_1, pair.surface_id_2,
+            after_outer.size(), after_high.size());
+
+          if (!after_high.empty()) {
+            auto clusters = cluster_and_filter(after_high);
+            RCLCPP_DEBUG(logger_,
+              "  [%d-%d] clusters after filter: %zu (min_cliff=%.1f°)",
+              pair.surface_id_1, pair.surface_id_2,
+              clusters.size(), config_.min_cliff_width_deg);
+
+            seeds.reserve(clusters.size());
+            for (const auto & cluster : clusters) {
+              seeds.push_back(cluster_midpoint(cluster));
+            }
+          }
         }
       }
-      if (!is_duplicate) {
-        master_seeds.push_back(m2);
-      }
+    } else {
+      seeds = build_approach_seeds(maps_1, maps_2);
     }
 
-    RCLCPP_DEBUG(logger_, "  %zu master seed(s) after dual-seed merge", master_seeds.size());
-
-    // Multiple approaches tried to see if angled approaches has cleaner sight
-    std::vector<std::pair<gp_Vec, double>> approaches_to_test;
-    for (const auto & seed : master_seeds) {
-      for (double offset : offsets_to_test) {
-        gp_Vec approach = compute_approach_direction(
-          pair.contact_1, pair.contact_2, seed, offset, grip_axis);
-        approaches_to_test.emplace_back(approach, seed.bearing_angle * 180.0 / M_PI + offset);
-      }
+    if (seeds.empty()) {
+      pairs_no_seeds++;
+      RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
+        "  [%d-%d] No grippable cliff survived filtering — skipping pair",
+        pair.surface_id_1, pair.surface_id_2);
+      continue;
     }
 
-    // Silently drops lower-priority candidates (later seeds, later offsets) when capped
     if (config_.max_orientations_per_pair > 0 &&
-      approaches_to_test.size() > config_.max_orientations_per_pair)
+      seeds.size() > config_.max_orientations_per_pair)
     {
-      approaches_to_test.resize(config_.max_orientations_per_pair);
+      seeds.resize(config_.max_orientations_per_pair);
     }
 
-    // TODO(@silanus23): Make constraints pluginizable for orientation checking
-    // Constraint validation loop
-    for (const auto & [approach, angle_for_log] : approaches_to_test) {
-      total_orientations_tested++;
+    for (double angle_rad : seeds) {
+      gp_Vec perp_to_cal = grip_axis.Crossed(cal_ref);
+      perp_to_cal.Normalize();
+      gp_Vec approach = cal_ref * std::cos(angle_rad) + perp_to_cal * std::sin(angle_rad);
 
+      gp_Pnt base_pos;
       gp_Trsf transform = compute_gripper_transform(
-        pair.contact_1, pair.contact_2, approach);
+        pair.contact_1, pair.contact_2, approach, base_pos);
+
+      total_orientations_tested++;
 
       if (collides_with_primary(transform, pair.grip_distance)) {
         rejected_by_primary++;
+        RCLCPP_DEBUG_EXPRESSION(logger_, []{
+            static size_t _n = 0; return ++_n % 3 == 1;
+              }(), "  angle=%.1f°: REJECTED primary collision",
+          angle_rad * 180.0 / M_PI);
         continue;
       }
 
       if (exclusion_constraint_ && exclusion_constraint_->intersects_exclusion_zone(
-        transform, pair.grip_distance, config_.collision_tolerance))
+          transform, pair.grip_distance, config_.collision_tolerance))
       {
         rejected_by_exclusion++;
+        RCLCPP_DEBUG_EXPRESSION(logger_, []{
+            static size_t _n = 0; return ++_n % 3 == 1;
+              }(), "  angle=%.1f°: REJECTED exclusion zone",
+          angle_rad * 180.0 / M_PI);
         continue;
       }
 
       if (kissing_constraint_) {
         Eigen::Isometry3d grasp_pose = Eigen::Isometry3d::Identity();
-        grasp_pose.translation() = geometry::extract_translation(transform);
-        grasp_pose.linear() = geometry::extract_quaternion(transform).toRotationMatrix();
+        grasp_pose.translation() = Eigen::Vector3d(
+          base_pos.X(), base_pos.Y(), base_pos.Z());
+        grasp_pose.linear() =
+          geometry::extract_quaternion(transform).toRotationMatrix();
 
         if (kissing_constraint_->intersects_secondary(pair.grip_distance, grasp_pose)) {
           rejected_by_secondary++;
+          RCLCPP_DEBUG_EXPRESSION(logger_, []{
+              static size_t _n = 0; return ++_n % 3 == 1;
+                }(), "  angle=%.1f°: REJECTED secondary collision",
+            angle_rad * 180.0 / M_PI);
           continue;
         }
       }
@@ -243,27 +345,30 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       candidate.contact_2 = pair.contact_2;
       candidate.approach_direction = approach;
       candidate.gripper_transform = transform;
+      candidate.base_position = base_pos;
       candidate.surface_id_1 = pair.surface_id_1;
       candidate.surface_id_2 = pair.surface_id_2;
       candidate.grip_distance = pair.grip_distance;
-      candidate.quality_score = compute_quality_score(
-        pair.contact_1, pair.contact_2, edges_1, edges_2);
+      candidate.quality_score = quality;
 
       valid_grasps.push_back(candidate);
-      RCLCPP_DEBUG(logger_, "  angle=%.1f°: valid (quality=%.3f)",
-        angle_for_log, candidate.quality_score);
 
-      if (config_.stop_on_first_valid) {
-        break;
-      }
+      RCLCPP_DEBUG_EXPRESSION(logger_, []{
+          static size_t _n = 0; return ++_n % 3 == 1;
+            }(), "  angle=%.1f°: valid (quality=%.3f)",
+        angle_rad * 180.0 / M_PI, quality);
+
+      if (config_.stop_on_first_valid) {break;}
     }
+
   }
 
-  RCLCPP_INFO(logger_, "Orientation finding complete: %zu valid grasps from %zu pairs "
-    "(%zu no-edge rejections, %zu orientations tested, "
+  RCLCPP_INFO(logger_,
+    "Orientation finding complete: %zu valid grasps from %zu pairs "
+    "(%zu flat-skipped, %zu no-seeds, %zu tested, "
     "rejected: %zu primary / %zu exclusion / %zu secondary)",
-    valid_grasps.size(), contact_pairs.size(), pairs_with_no_edges,
-    total_orientations_tested,
+    valid_grasps.size(), contact_pairs.size(),
+    pairs_skipped_flat, pairs_no_seeds, total_orientations_tested,
     rejected_by_primary, rejected_by_exclusion, rejected_by_secondary);
 
   if (valid_grasps.empty()) {
@@ -273,345 +378,438 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   return valid_grasps;
 }
 
-std::vector<EdgeConstraint> GraspOrientationFinder::find_edges_in_circle(
+SurfaceState GraspOrientationFinder::classify_hit(
+  bool hit_found,
+  const gp_Pnt & hit_point,
   const gp_Pnt & contact,
-  int surface_id,
-  const geometry::Topology & topology) const
+  const gp_Vec & normal_vec,
+  double tol) const
 {
-  std::vector<EdgeConstraint> all_constraints;
-
-  const auto & surface = topology.get_surface(surface_id);
-
-  for (int edge_id : surface.edge_ids) {
-    const auto & edge_data = topology.get_edge(edge_id);
-    auto minima_on_edge = find_local_minima_on_edge(contact, edge_data.edge);
-    all_constraints.insert(all_constraints.end(), minima_on_edge.begin(), minima_on_edge.end());
+  if (!hit_found) {
+    return SurfaceState::LOW;
   }
+  gp_Vec hit_vec(contact, hit_point);
+  double elevation = hit_vec.Dot(normal_vec);
 
-  // Apply max_edges_per_contact limit: sort by distance and truncate
-  if (config_.max_edges_per_contact > 0 &&
-    all_constraints.size() > config_.max_edges_per_contact)
+  if (elevation > tol) {return SurfaceState::HIGH;}
+  if (elevation < -tol) {return SurfaceState::LOW;}
+  return SurfaceState::FLAT;
+}
+
+RadialMaps GraspOrientationFinder::create_radial_maps(
+  const gp_Pnt & contact,
+  const gp_Dir & normal,
+  const gp_Vec & lx,
+  const gp_Vec & ly,
+  const gp_Pnt & lifted_center,
+  double angle_offset) const
+{
+  RadialMaps maps;
+  const double tol = config_.flat_detection_tolerance_m;
+  const double step_rad = config_.angular_step_deg * M_PI / 180.0;
+  const gp_Vec normal_vec(normal);
+  const double outer_r = config_.finger_length;
+
   {
-    std::sort(all_constraints.begin(), all_constraints.end(),
-      [](const EdgeConstraint & a, const EdgeConstraint & b) {
-        return a.distance < b.distance;
-      });
-    all_constraints.resize(config_.max_edges_per_contact);
-    RCLCPP_DEBUG(logger_, "Truncated edge constraints to %zu (closest by distance)",
-      config_.max_edges_per_contact);
-  }
+    size_t flat_start = maps.flat.size();
+    size_t high_start = maps.high.size();
+    size_t low_start = maps.low.size();
 
-  return all_constraints;
-}
+    SurfaceState first_state = SurfaceState::FLAT;
+    SurfaceState prev_state = SurfaceState::FLAT;
+    bool first = true;
 
-std::vector<EdgeConstraint> GraspOrientationFinder::find_local_minima_on_edge(
-  const gp_Pnt & contact,
-  const TopoDS_Edge & edge) const
-{
-  // TODO(@silanus23): Cache extrema results using mutable member
-  // NOTE: For straight line edges, ExtPC finds endpoints not the perpendicular projection.
+    for (double local_angle = angle_offset; local_angle < angle_offset + 2.0 * M_PI;
+      local_angle += step_rad)
+    {
+      double cos_a = std::cos(local_angle);
+      double sin_a = std::sin(local_angle);
 
-  std::vector<EdgeConstraint> minima;
+      gp_Pnt ring_point(
+        contact.X() + lx.X() * outer_r * cos_a + ly.X() * outer_r * sin_a,
+        contact.Y() + lx.Y() * outer_r * cos_a + ly.Y() * outer_r * sin_a,
+        contact.Z() + lx.Z() * outer_r * cos_a + ly.Z() * outer_r * sin_a);
 
-  const auto make_fallback_constraint = [&]() -> std::vector<EdgeConstraint> {
-    gp_Pnt closest_point;
-    double distance = compute_closest_point_on_edge(contact, edge, closest_point);
-    if (distance <= config_.finger_length && distance > 1e-6) {
-      EdgeConstraint constraint;
-      constraint.edge = edge;
-      constraint.closest_point = closest_point;
-      constraint.distance = distance;
-      return {constraint};
-    }
-    return {};
-  };
+      gp_Vec ray_vec(lifted_center, ring_point);
+      double ray_len = ray_vec.Magnitude();
+      if (ray_len < 1e-9) {continue;}
+      gp_Dir ray_dir(ray_vec);
 
-  try {
-  BRepBuilderAPI_MakeVertex vertex_maker(contact);
-  TopoDS_Vertex contact_vertex = vertex_maker.Vertex();
-    BRepExtrema_ExtPC extrema(contact_vertex, edge);
+      gp_Pnt hit_point;
+      bool hit = fcl_checker_ ?
+        fcl_checker_->ray_hits_primary(lifted_center, ray_dir, ray_len * 2.0, hit_point) :
+        false;
 
-    if (!extrema.IsDone()) {
-      return make_fallback_constraint();
-    }
+      SurfaceState state = classify_hit(hit, hit_point, contact, normal_vec, tol);
 
-    const Standard_Integer nb_extrema = extrema.NbExt();
-    for (Standard_Integer i = 1; i <= nb_extrema; ++i) {
-      if (!extrema.IsMin(i)) {
+      double shared_angle = local_angle - angle_offset;
+      if (first) {
+
+        first_state = state;
+        switch (state) {
+          case SurfaceState::FLAT: maps.flat.push_back({shared_angle, shared_angle, outer_r,
+                state}); break;
+          case SurfaceState::HIGH: maps.high.push_back({shared_angle, shared_angle, outer_r,
+                state}); break;
+          case SurfaceState::LOW:  maps.low.push_back({shared_angle, shared_angle, outer_r, state});
+            break;
+        }
+        prev_state = state;
+        first = false;
         continue;
       }
 
-      double distance = std::sqrt(extrema.SquareDistance(i));
-      if (distance > config_.finger_length || distance <= 1e-6) {
-        continue;
+      if (state != prev_state) {
+        switch (prev_state) {
+          case SurfaceState::FLAT: if (!maps.flat.empty()) {
+              maps.flat.back().end_rad = shared_angle;
+          }
+            break;
+          case SurfaceState::HIGH: if (!maps.high.empty()) {
+              maps.high.back().end_rad = shared_angle;
+          }
+            break;
+          case SurfaceState::LOW:  if (!maps.low.empty()) {
+              maps.low.back().end_rad = shared_angle;
+          }
+            break;
+        }
+        switch (state) {
+          case SurfaceState::FLAT: maps.flat.push_back({shared_angle, shared_angle, outer_r,
+                state}); break;
+          case SurfaceState::HIGH: maps.high.push_back({shared_angle, shared_angle, outer_r,
+                state}); break;
+          case SurfaceState::LOW:  maps.low.push_back({shared_angle, shared_angle, outer_r, state});
+            break;
+        }
+        prev_state = state;
+      } else {
+        switch (state) {
+          case SurfaceState::FLAT: if (!maps.flat.empty()) {
+              maps.flat.back().end_rad = shared_angle;
+          }
+            break;
+          case SurfaceState::HIGH: if (!maps.high.empty()) {
+              maps.high.back().end_rad = shared_angle;
+          }
+            break;
+          case SurfaceState::LOW:  if (!maps.low.empty()) {
+              maps.low.back().end_rad = shared_angle;
+          }
+            break;
+        }
       }
-
-      EdgeConstraint constraint;
-      constraint.edge = edge;
-      constraint.closest_point = extrema.Point(i);
-      constraint.distance = distance;
-      minima.push_back(constraint);
     }
 
-    // If no interior minima found (straight edge or monotonic curve),
-    // fall back to global closest point.
-    if (minima.empty()) {
-      return make_fallback_constraint();
+    double end_angle = 2.0 * M_PI;
+    switch (prev_state) {
+      case SurfaceState::FLAT: if (!maps.flat.empty()) {
+          maps.flat.back().end_rad = end_angle;
+      }
+        break;
+      case SurfaceState::HIGH: if (!maps.high.empty()) {
+          maps.high.back().end_rad = end_angle;
+      }
+        break;
+      case SurfaceState::LOW:  if (!maps.low.empty()) {maps.low.back().end_rad = end_angle;} break;
     }
-  } catch (Standard_Failure & f) {
-    RCLCPP_DEBUG(logger_, "ExtPC exception on edge: %s - using fallback",
-      f.GetMessageString());
-    return make_fallback_constraint();
+
+    const double wrap_tol = step_rad;
+    auto try_wrap_merge = [&](
+      std::vector<RadialSegment> & segs,
+      size_t ring_start,
+      SurfaceState state)
+      {
+        if (segs.size() < ring_start + 2) {return;}
+        auto & first_seg = segs[ring_start];
+        auto & last_seg = segs.back();
+        if (last_seg.radius != outer_r || last_seg.state != state) {return;}
+        if (first_seg.radius != outer_r || first_seg.state != state) {return;}
+        if (first_seg.start_rad < wrap_tol && first_state == state) {
+          double saved_start = last_seg.start_rad;
+          segs.pop_back();
+          segs[ring_start].start_rad = saved_start;
+        }
+      };
+
+    try_wrap_merge(maps.flat, flat_start, SurfaceState::FLAT);
+    try_wrap_merge(maps.high, high_start, SurfaceState::HIGH);
+    try_wrap_merge(maps.low, low_start, SurfaceState::LOW);
   }
 
-  return minima;
+  return maps;
 }
 
-std::vector<EdgeConstraint> GraspOrientationFinder::find_local_minima(
-  const std::vector<EdgeConstraint> & edges) const
+std::vector<RadialSegment> GraspOrientationFinder::merge_low_segments(
+  const RadialMaps & maps_1,
+  const RadialMaps & maps_2) const
 {
-  if (edges.empty()) {
-    return {};
+  std::vector<RadialSegment> result;
+  for (const auto & s1 : maps_1.low) {
+    for (const auto & s2 : maps_2.low) {
+      double os, oe;
+      if (angular_overlap(s1.start_rad, s1.end_rad, s2.start_rad, s2.end_rad, os, oe)) {
+        result.push_back({os, oe, std::min(s1.radius, s2.radius), SurfaceState::LOW});
+      }
+    }
   }
-
-  std::vector<EdgeConstraint> result = edges;
-  std::sort(result.begin(), result.end(),
-    [](const EdgeConstraint & a, const EdgeConstraint & b) {
-      return a.distance < b.distance;
-    });
-
-  if (config_.max_edge_candidates > 0 && result.size() > config_.max_edge_candidates) {
-    result.resize(config_.max_edge_candidates);
-  }
-
   return result;
 }
 
-double GraspOrientationFinder::compute_bearing_angle(
-  const gp_Pnt & contact,
-  const gp_Pnt & edge_point,
-  const gp_Vec & grip_axis) const
+std::vector<RadialSegment> GraspOrientationFinder::filter_by_outer_ring(
+  const std::vector<RadialSegment> & segments,
+  const RadialMaps & maps_1,
+  const RadialMaps & maps_2) const
 {
-  gp_Vec to_edge(contact, edge_point);
+  const double outer_r = config_.finger_length;
+  constexpr double kRadiusTol = 1e-6;
 
-  if (to_edge.Magnitude() < 1e-9) {
-    return 0.0;
+  auto is_outer_blocked = [&](const RadialMaps & maps,
+    double seg_start, double seg_end) -> bool {
+      for (const auto & seg : maps.high) {
+        if (std::abs(seg.radius - outer_r) > kRadiusTol) {continue;}
+        double os, oe;
+        if (angular_overlap(seg.start_rad, seg.end_rad, seg_start, seg_end, os, oe)) {
+          return true;
+        }
+      }
+      for (const auto & seg : maps.flat) {
+        if (std::abs(seg.radius - outer_r) > kRadiusTol) {continue;}
+        double os, oe;
+        if (angular_overlap(seg.start_rad, seg.end_rad, seg_start, seg_end, os, oe)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+  std::vector<RadialSegment> result;
+  for (const auto & seg : segments) {
+    if (!is_outer_blocked(maps_1, seg.start_rad, seg.end_rad) &&
+      !is_outer_blocked(maps_2, seg.start_rad, seg.end_rad))
+    {
+      result.push_back(seg);
+    }
   }
-
-  // Project onto plane perpendicular to grip axis
-  gp_Vec projected = to_edge - (to_edge.Dot(grip_axis)) * grip_axis;
-
-  if (projected.Magnitude() < 1e-9) {
-    return 0.0;
-  }
-
-  projected.Normalize();
-
-  // Arbitrary but consistent reference frame perpendicular to grip_axis
-  gp_Vec ref_x;
-  if (std::abs(grip_axis.Z()) < 0.9) {
-    ref_x = grip_axis.Crossed(gp_Vec(0, 0, 1));
-  } else {
-    ref_x = grip_axis.Crossed(gp_Vec(1, 0, 0));
-  }
-  ref_x.Normalize();
-
-  gp_Vec ref_y = grip_axis.Crossed(ref_x);
-  ref_y.Normalize();
-
-  return std::atan2(projected.Dot(ref_y), projected.Dot(ref_x));
+  return result;
 }
 
-gp_Vec GraspOrientationFinder::compute_approach_direction(
-  const gp_Pnt & contact_1,
-  const gp_Pnt & contact_2,
-  const EdgeConstraint & edge_constraint,
-  double angle_offset,
-  const gp_Vec & grip_axis) const
+std::vector<RadialSegment> GraspOrientationFinder::ban_high_angles(
+  const std::vector<RadialSegment> & segments,
+  const RadialMaps & maps_1,
+  const RadialMaps & maps_2) const
 {
-  gp_Pnt tcp(
-    (contact_1.X() + contact_2.X()) / 2.0,
-    (contact_1.Y() + contact_2.Y()) / 2.0,
-    (contact_1.Z() + contact_2.Z()) / 2.0
-  );
+  auto overlaps_any_high = [&](const RadialMaps & maps,
+    double seg_start, double seg_end) -> bool {
+      for (const auto & high : maps.high) {
+        double os, oe;
+        if (angular_overlap(high.start_rad, high.end_rad, seg_start, seg_end, os, oe)) {
+          return true;
+        }
+      }
+      return false;
+    };
 
-  gp_Vec away_from_edge(edge_constraint.closest_point, tcp);
+  std::vector<RadialSegment> result;
+  for (const auto & seg : segments) {
+    if (!overlaps_any_high(maps_1, seg.start_rad, seg.end_rad) &&
+      !overlaps_any_high(maps_2, seg.start_rad, seg.end_rad))
+    {
+      result.push_back(seg);
+    }
+  }
+  return result;
+}
 
-  if (away_from_edge.Magnitude() < 1e-9) {
-    if (std::abs(grip_axis.Z()) < 0.9) {
-      away_from_edge = grip_axis.Crossed(gp_Vec(0, 0, 1));
-    } else {
-      away_from_edge = grip_axis.Crossed(gp_Vec(1, 0, 0));
+std::vector<std::vector<RadialSegment>> GraspOrientationFinder::cluster_and_filter(
+  const std::vector<RadialSegment> & segments) const
+{
+  const double merge_tol = config_.cliff_merge_tolerance_deg * M_PI / 180.0;
+  const double min_width = config_.min_cliff_width_deg * M_PI / 180.0;
+  constexpr double k2Pi = 2.0 * M_PI;
+
+  std::vector<std::vector<RadialSegment>> clusters;
+  std::vector<bool> assigned(segments.size(), false);
+
+  for (size_t i = 0; i < segments.size(); ++i) {
+    if (assigned[i]) {continue;}
+
+    std::vector<RadialSegment> cluster;
+    cluster.push_back(segments[i]);
+    assigned[i] = true;
+
+    bool grew = true;
+    while (grew) {
+      grew = false;
+      for (size_t j = 0; j < segments.size(); ++j) {
+        if (assigned[j]) {continue;}
+        for (const auto & cs : cluster) {
+          auto ang_dist = [](double a, double b) {
+              double d = std::abs(a - b);
+              return std::min(d, 2.0 * M_PI - d);
+            };
+          double d = std::min({
+                ang_dist(segments[j].start_rad, cs.start_rad),
+                ang_dist(segments[j].start_rad, cs.end_rad),
+                ang_dist(segments[j].end_rad, cs.start_rad),
+                ang_dist(segments[j].end_rad, cs.end_rad)});
+          if (d <= merge_tol) {
+            cluster.push_back(segments[j]);
+            assigned[j] = true;
+            grew = true;
+            break;
+          }
+        }
+      }
+    }
+
+    clusters.push_back(std::move(cluster));
+  }
+
+  auto span_of = [&](const std::vector<RadialSegment> & segs, double offset) {
+      double s = k2Pi, e = 0.0;
+      for (const auto & seg : segs) {
+        if (seg.end_rad - seg.start_rad >= k2Pi - 1e-9) {return k2Pi;}
+        double a = std::fmod(seg.start_rad + offset, k2Pi);
+        double b = std::fmod(seg.end_rad + offset, k2Pi);
+        if (a < 0.0) {a += k2Pi;}
+        if (b < 0.0) {b += k2Pi;}
+        if (b < a) {b += k2Pi;}
+        s = std::min(s, a);
+        e = std::max(e, b);
+      }
+      return e - s;
+    };
+
+  std::vector<std::vector<RadialSegment>> result;
+  for (auto & cluster : clusters) {
+    double span = std::min(span_of(cluster, 0.0), span_of(cluster, M_PI));
+    if (span >= min_width) {
+      result.push_back(std::move(cluster));
+    }
+  }
+  return result;
+}
+
+double GraspOrientationFinder::cluster_midpoint(
+  const std::vector<RadialSegment> & cluster) const
+{
+  constexpr double k2Pi = 2.0 * M_PI;
+
+  auto seg_width = [&](const RadialSegment & seg) -> double {
+      if (seg.end_rad >= seg.start_rad) {
+        return seg.end_rad - seg.start_rad;
+      }
+      return (k2Pi - seg.start_rad) + seg.end_rad;
+    };
+
+  auto seg_mid = [&](const RadialSegment & seg) -> double {
+      if (seg.end_rad >= seg.start_rad) {
+        return (seg.start_rad + seg.end_rad) / 2.0;
+      }
+      double mid = seg.start_rad + seg_width(seg) / 2.0;
+      return std::fmod(mid, k2Pi);
+    };
+
+  const RadialSegment * widest = &cluster[0];
+  double max_width = seg_width(cluster[0]);
+
+  for (const auto & seg : cluster) {
+    double w = seg_width(seg);
+    if (w > max_width) {
+      max_width = w;
+      widest = &seg;
     }
   }
 
-  away_from_edge.Normalize();
+  return seg_mid(*widest);
+}
 
-  // Project to plane perpendicular to grip axis
-  gp_Vec projected = away_from_edge - (away_from_edge.Dot(grip_axis)) * grip_axis;
+std::vector<double> GraspOrientationFinder::build_approach_seeds(
+  const RadialMaps & maps_1,
+  const RadialMaps & maps_2) const
+{
+  auto merged = merge_low_segments(maps_1, maps_2);
+  if (merged.empty()) {return {};}
 
-  if (projected.Magnitude() < 1e-9) {
-    if (std::abs(grip_axis.Z()) < 0.9) {
-      projected = grip_axis.Crossed(gp_Vec(0, 0, 1));
-    } else {
-      projected = grip_axis.Crossed(gp_Vec(1, 0, 0));
-    }
+  auto filtered = filter_by_outer_ring(merged, maps_1, maps_2);
+  if (filtered.empty()) {return {};}
+
+  filtered = ban_high_angles(filtered, maps_1, maps_2);
+  if (filtered.empty()) {return {};}
+
+  auto clusters = cluster_and_filter(filtered);
+  if (clusters.empty()) {return {};}
+
+  std::vector<double> seeds;
+  seeds.reserve(clusters.size());
+  for (const auto & cluster : clusters) {
+    seeds.push_back(cluster_midpoint(cluster));
   }
-
-  projected.Normalize();
-
-  if (std::abs(angle_offset) > 1e-6) {
-    gp_Ax1 rotation_axis(tcp, gp_Dir(grip_axis.X(), grip_axis.Y(), grip_axis.Z()));
-    gp_Trsf rotation;
-    rotation.SetRotation(rotation_axis, angle_offset * M_PI / 180.0);
-    projected = projected.Transformed(rotation);
-  }
-
-  return projected;
+  return seeds;
 }
 
 gp_Trsf GraspOrientationFinder::compute_gripper_transform(
   const gp_Pnt & contact_1,
   const gp_Pnt & contact_2,
-  const gp_Vec & approach) const
+  const gp_Vec & approach,
+  gp_Pnt & out_base) const
 {
   gp_Pnt tcp(
     (contact_1.X() + contact_2.X()) / 2.0,
     (contact_1.Y() + contact_2.Y()) / 2.0,
-    (contact_1.Z() + contact_2.Z()) / 2.0
-  );
+    (contact_1.Z() + contact_2.Z()) / 2.0);
 
-  // URDF convention: Y = grip axis, Z = toward base, X = approach (right-hand rule)
   gp_Vec y_axis(contact_1, contact_2);
   y_axis.Normalize();
 
-  gp_Vec x_axis = approach;
-  x_axis.Normalize();
-
-  // Re-orthogonalize X against Y to remove any numerical drift
-  x_axis = x_axis - (x_axis.Dot(y_axis)) * y_axis;
-  if (x_axis.Magnitude() < 1e-6) {
-    if (std::abs(y_axis.Z()) < 0.9) {
-      x_axis = y_axis.Crossed(gp_Vec(0, 0, 1));
-    } else {
-      x_axis = y_axis.Crossed(gp_Vec(1, 0, 0));
-    }
+  gp_Vec z_axis = approach;
+  z_axis.Normalize();
+  z_axis = z_axis - (z_axis.Dot(y_axis)) * y_axis;
+  if (z_axis.Magnitude() < 1e-6) {
+    z_axis = (std::abs(y_axis.Z()) < 0.9) ?
+      y_axis.Crossed(gp_Vec(0, 0, 1)) :
+      y_axis.Crossed(gp_Vec(1, 0, 0));
   }
-  x_axis.Normalize();
-
-  gp_Vec z_axis = x_axis.Crossed(y_axis);
   z_axis.Normalize();
 
-  // Place the gripper base such that the TCP lands at the contact midpoint.
-  // base_world = tcp_world - R * tcp_offset_local
-  gp_Vec tcp_offset_local(
+  gp_Vec x_axis = y_axis.Crossed(z_axis);
+  x_axis.Normalize();
+
+  gp_Vec offset_local(
     gripper_.tcp_offset.x(),
     gripper_.tcp_offset.y(),
-    gripper_.tcp_offset.z()
-  );
+    gripper_.tcp_offset.z());
 
-  gp_Vec tcp_offset_world(
-    x_axis.X() * tcp_offset_local.X() + y_axis.X() * tcp_offset_local.Y() +
-    z_axis.X() * tcp_offset_local.Z(),
-    x_axis.Y() * tcp_offset_local.X() + y_axis.Y() * tcp_offset_local.Y() +
-    z_axis.Y() * tcp_offset_local.Z(),
-    x_axis.Z() * tcp_offset_local.X() + y_axis.Z() * tcp_offset_local.Y() +
-    z_axis.Z() * tcp_offset_local.Z()
-  );
+  gp_Vec offset_world(
+    x_axis.X() * offset_local.X() + y_axis.X() * offset_local.Y() +
+    z_axis.X() * offset_local.Z(),
+    x_axis.Y() * offset_local.X() + y_axis.Y() * offset_local.Y() +
+    z_axis.Y() * offset_local.Z(),
+    x_axis.Z() * offset_local.X() + y_axis.Z() * offset_local.Y() +
+    z_axis.Z() * offset_local.Z());
 
-  gp_Pnt base(
-    tcp.X() - tcp_offset_world.X(),
-    tcp.Y() - tcp_offset_world.Y(),
-    tcp.Z() - tcp_offset_world.Z()
-  );
+  out_base = tcp.Translated(-offset_world);
 
   gp_Ax3 gripper_frame(
-    base,
+    out_base,
     gp_Dir(z_axis.X(), z_axis.Y(), z_axis.Z()),
-    gp_Dir(x_axis.X(), x_axis.Y(), x_axis.Z())
-  );
+    gp_Dir(x_axis.X(), x_axis.Y(), x_axis.Z()));
 
   gp_Trsf transform;
   transform.SetTransformation(gripper_frame, gp_Ax3());
-  transform.Invert();
-
   return transform;
 }
 
 bool GraspOrientationFinder::collides_with_primary(
-  const gp_Trsf & gripper_transform,
+  const gp_Trsf & transform,
   double grip_distance) const
 {
   if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    RCLCPP_WARN(logger_, "FCL checker not available - rejecting grasp conservatively");
     return true;
   }
-
   return fcl_checker_->collides_with_primary(
-    gripper_transform, grip_distance, config_.collision_tolerance);
-}
-
-// TODO(@silanus23): Make this configurable and pluginized
-double GraspOrientationFinder::compute_quality_score(
-  [[maybe_unused]] const gp_Pnt & contact_1,
-  [[maybe_unused]] const gp_Pnt & contact_2,
-  const std::vector<EdgeConstraint> & edges_1,
-  const std::vector<EdgeConstraint> & edges_2) const
-{
-  // TODO(@silanus23): Use contact_1 and contact_2 for more sophisticated quality metrics
-  double min_clearance_1 = config_.finger_length;
-  double min_clearance_2 = config_.finger_length;
-
-  for (const auto & edge : edges_1) {
-    min_clearance_1 = std::min(min_clearance_1, edge.distance);
-  }
-  for (const auto & edge : edges_2) {
-    min_clearance_2 = std::min(min_clearance_2, edge.distance);
-  }
-
-  return std::min(min_clearance_1, min_clearance_2) / config_.finger_length;
-}
-
-double GraspOrientationFinder::compute_closest_point_on_edge(
-  const gp_Pnt & point,
-  const TopoDS_Edge & edge,
-  gp_Pnt & closest_point) const
-{
-  if (BRep_Tool::Degenerated(edge)) {
-    RCLCPP_DEBUG(logger_, "compute_closest_point_on_edge: degenerate edge");
-    closest_point = point;
-    return std::numeric_limits<double>::max();
-  }
-
-  try {
-    BRepExtrema_DistShapeShape dist;
-    dist.LoadS1(BRepBuilderAPI_MakeVertex(point).Vertex());
-    dist.LoadS2(edge);
-    dist.Perform();
-
-    if (dist.IsDone() && dist.NbSolution() > 0) {
-      closest_point = dist.PointOnShape2(1);
-      return dist.Value();
-    }
-
-    closest_point = point;
-    return std::numeric_limits<double>::max();
-  } catch (Standard_Failure & f) {
-    RCLCPP_DEBUG(logger_, "compute_closest_point_on_edge: OCCT exception - %s",
-      f.GetMessageString());
-    closest_point = point;
-    return std::numeric_limits<double>::max();
-  } catch (...) {
-    RCLCPP_DEBUG(logger_, "compute_closest_point_on_edge: unknown exception");
-    closest_point = point;
-    return std::numeric_limits<double>::max();
-  }
-}
-
-void GraspOrientationFinder::set_fcl_checker(
-  std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker)
-{
-  fcl_checker_ = fcl_checker;
+    transform, grip_distance, config_.collision_tolerance);
 }
 
 }  // namespace angle_finding

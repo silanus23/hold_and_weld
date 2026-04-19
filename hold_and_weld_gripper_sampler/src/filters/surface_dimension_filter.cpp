@@ -16,9 +16,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <string>
-#include <vector>
-
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -53,68 +50,53 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
     try {
       gp_Vec z_axis = surface.normal;
 
-      if (z_axis.Magnitude() < 1e-9) {
-        RCLCPP_DEBUG(logger_, "Surface %zu has invalid normal - skipping", i);
+      if (z_axis.Magnitude() < 1e-6) {
         continue;
       }
       z_axis.Normalize();
 
-      // Build orthogonal coordinate frame aligned to surface normal
-      gp_Vec reference_vec(0, 0, 1);
-      if (std::abs(z_axis.Dot(reference_vec)) > 0.9) {
-        reference_vec = gp_Vec(1, 0, 0);
+      gp_Vec ref_vec(0, 0, 1);
+      if (std::abs(z_axis.Dot(ref_vec)) > 0.9) {
+        ref_vec = gp_Vec(1, 0, 0);
       }
 
-      gp_Vec x_axis = reference_vec.Crossed(z_axis);
-      if (x_axis.Magnitude() < 1e-9) {
-        RCLCPP_DEBUG(logger_, "Surface %zu: cross product gave zero vector - skipping", i);
-        continue;
-      }
+      gp_Vec x_axis = ref_vec.Crossed(z_axis);
+      if (x_axis.Magnitude() < 1e-6) {continue;}
       x_axis.Normalize();
 
       gp_Vec y_axis = z_axis.Crossed(x_axis);
-      if (y_axis.Magnitude() < 1e-9) {
-        RCLCPP_DEBUG(logger_, "Surface %zu: failed to create Y axis - skipping", i);
-        continue;
-      }
       y_axis.Normalize();
 
       gp_Ax3 local_frame(surface.center,
-        gp_Dir(z_axis.X(), z_axis.Y(), z_axis.Z()),
-        gp_Dir(x_axis.X(), x_axis.Y(), x_axis.Z()));
+        gp_Dir(z_axis.XYZ()),
+        gp_Dir(x_axis.XYZ()));
 
       gp_Trsf world_to_local;
       world_to_local.SetTransformation(local_frame, gp_Ax3());
 
       BRepBuilderAPI_Transform transformer(surface.face, world_to_local, Standard_True);
+      if (!transformer.IsDone()) {continue;}
       TopoDS_Shape transformed_face = transformer.Shape();
 
-      if (transformed_face.IsNull()) {
-        RCLCPP_DEBUG(logger_, "Surface %zu: transformation produced null shape - skipping", i);
-        continue;
-      }
+      if (transformed_face.IsNull()) {continue;}
 
       Bnd_Box bbox;
       BRepBndLib::Add(transformed_face, bbox);
 
-      if (bbox.IsVoid()) {
-        RCLCPP_DEBUG(logger_, "Surface %zu: bounding box is void - skipping", i);
-        continue;
-      }
+      if (bbox.IsVoid()) {continue;}
 
       double xmin, ymin, zmin, xmax, ymax, zmax;
       bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
 
-      double min_dim = std::min(xmax - xmin, ymax - ymin);
+      // We only care about the planar dimensions (X and Y in the local frame)
+      double dim_x = xmax - xmin;
+      double dim_y = ymax - ymin;
 
-      if (min_dim >= min_dimension_) {
+      if (std::min(dim_x, dim_y) >= min_dimension_) {
         valid_surface_ids.push_back(static_cast<int>(i));
       }
     } catch (Standard_Failure & e) {
-      RCLCPP_WARN(logger_, "OCCT exception for surface %zu: %s - skipping",
-        i, e.GetMessageString());
-    } catch (...) {
-      RCLCPP_WARN(logger_, "Error processing surface %zu - skipping", i);
+      RCLCPP_WARN(logger_, "Filter failed for surface %zu: %s", i, e.GetMessageString());
     }
   }
 
@@ -126,5 +108,5 @@ std::string SurfaceDimensionFilter::get_name() const
   return "SurfaceDimensionFilter";
 }
 
-}  // namespace filters
-}  // namespace hold_and_weld_gripper_sampler
+} // namespace filters
+} // namespace hold_and_weld_gripper_sampler

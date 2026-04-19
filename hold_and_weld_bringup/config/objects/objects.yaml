@@ -15,12 +15,12 @@
         w: 1.0
 
     child_link:
-      urdf_path: 'urdf/environment/cube.urdf.xacro'
-      id: 'child_link'
+      urdf_path: 'urdf/environment/prism.urdf.xacro'
+      id: 'target_cube'
       spawn_name: 'secondary_prism'
       pose:
         x: 1.2
-        y: 0.3
+        y: 0.0
         z: 0.125
       end_pose:
         position:

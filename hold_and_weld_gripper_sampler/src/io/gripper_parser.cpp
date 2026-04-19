@@ -42,12 +42,6 @@ namespace hold_and_weld_gripper_sampler
 namespace io
 {
 
-namespace
-{
-
-/**
- * @brief Convert RPY (roll, pitch, yaw) to gp_Trsf rotation
- */
 gp_Trsf rpy_to_transform(double roll, double pitch, double yaw)
 {
   // ZYX Euler angles (aerospace convention)
@@ -67,17 +61,14 @@ gp_Trsf rpy_to_transform(double roll, double pitch, double yaw)
   gp_Trsf transform;
   transform.SetRotation(quat);
   return transform;
-}
+}  // rpy_to_transform
 
-/**
- * @brief Parse origin element and return combined transform
- */
 gp_Trsf parse_origin(tinyxml2::XMLElement * origin)
 {
   gp_Trsf transform;
 
   if (!origin) {
-    return transform;  // Identity
+    return transform;
   }
 
   const char * xyz_str = origin->Attribute("xyz");
@@ -100,9 +91,6 @@ gp_Trsf parse_origin(tinyxml2::XMLElement * origin)
   return transform;
 }
 
-/**
- * @brief Create OCCT shape from geometry element
- */
 TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
 {
   if (!geometry) {
@@ -169,7 +157,6 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
   }
 }
 
-}  // namespace
 
 Eigen::Vector3d GripperParser::parse_xyz(const std::string & xyz_str)
 {
@@ -231,6 +218,9 @@ TopoDS_Shape GripperParser::extract_link_shape(
       if (origin) {
         gp_Trsf transform = parse_origin(origin);
         BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
+        if (!transformer.IsDone()) {
+          throw std::runtime_error("OCCT error extracting shape for link '" + link_name + "': transform failed");
+        }
         shape = transformer.Shape();
       }
 
@@ -280,7 +270,7 @@ Eigen::Vector3d GripperParser::extract_joint_axis(
     if (!type || std::string(type) != "prismatic") {
       throw std::runtime_error(
         "Joint '" + joint_name + "' is not prismatic (type: " +
-        (type ? type : "unknown") + ")");
+              (type ? type : "unknown") + ")");
     }
 
     tinyxml2::XMLElement * axis_elem = joint->FirstChildElement("axis");
@@ -501,10 +491,17 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
   gp_Trsf finger_2_joint_origin = extract_joint_origin(urdf_string, gripper.finger_2_joint_name);
 
   try {
-    gripper.finger_1 = BRepBuilderAPI_Transform(finger_1_raw, finger_1_joint_origin,
-      Standard_True).Shape();
-    gripper.finger_2 = BRepBuilderAPI_Transform(finger_2_raw, finger_2_joint_origin,
-      Standard_True).Shape();
+    BRepBuilderAPI_Transform f1_transformer(finger_1_raw, finger_1_joint_origin, Standard_True);
+    if (!f1_transformer.IsDone()) {
+      throw std::runtime_error("BRepBuilderAPI_Transform failed for finger_1 joint origin");
+    }
+    gripper.finger_1 = f1_transformer.Shape();
+
+    BRepBuilderAPI_Transform f2_transformer(finger_2_raw, finger_2_joint_origin, Standard_True);
+    if (!f2_transformer.IsDone()) {
+      throw std::runtime_error("BRepBuilderAPI_Transform failed for finger_2 joint origin");
+    }
+    gripper.finger_2 = f2_transformer.Shape();
   } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       std::string("OCCT error transforming finger shapes: ") + e.GetMessageString());

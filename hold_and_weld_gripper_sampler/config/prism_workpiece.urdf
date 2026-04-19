@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<!--
+  Prism Workpiece URDF
+  ====================
+  A rectangular bar workpiece for testing the grasp sampling pipeline.
+  This is a standalone URDF (no xacro processing required).
+
+  Workpiece specifications (from prism.urdf.xacro):
+  - Width:  250mm (0.25m) — X axis
+  - Length: 800mm (0.80m) — Y axis
+  - Height: 250mm (0.25m) — Z axis
+
+  Origin is at the geometric center of the bar.
+
+  When placed with center at z=0.125m, the bottom face sits flush
+  on z=0.0 (ground plane).
+
+  Graspable surface pairs with test_gripper (60–360mm opening):
+  - Short ends (250×250mm): separated by 800mm → exceeds gripper range ✗
+  - Long sides (800×250mm): separated by 250mm ✓  (main grasp target)
+  - Top / bottom (800×250mm): separated by 250mm ✓  (bottom banned by ground)
+-->
+<robot name="prism_workpiece">
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.25 0.80 0.25"/>
+      </geometry>
+      <material name="steel">
+        <color rgba="0.7 0.7 0.75 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.25 0.80 0.25"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="10.0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <!-- Ixx = (1/12) * 10 * (0.80^2 + 0.25^2) = (1/12) * 10 * 0.7025 = 0.5854 -->
+      <!-- Iyy = (1/12) * 10 * (0.25^2 + 0.25^2) = (1/12) * 10 * 0.125  = 0.1042 -->
+      <!-- Izz = (1/12) * 10 * (0.25^2 + 0.80^2) = (1/12) * 10 * 0.7025 = 0.5854 -->
+      <inertia ixx="0.5854" ixy="0.0" ixz="0.0"
+               iyy="0.1042" iyz="0.0"
+               izz="0.5854"/>
+    </inertial>
+  </link>
+
+</robot>

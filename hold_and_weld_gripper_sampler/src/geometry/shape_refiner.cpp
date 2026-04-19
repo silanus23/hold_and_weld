@@ -76,7 +76,9 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
     TopTools_ListOfShape faces_to_remove;
     identify_enclave_features(current_shape, global_total_area, faces_to_remove);
 
-    RCLCPP_DEBUG(logger_, "Enclave detection: %d face(s) marked for removal",
+    RCLCPP_DEBUG_EXPRESSION(logger_, []{
+        static size_t _n = 0; return ++_n % 10 == 1;
+          }(), "Enclave detection: %d face(s) marked for removal",
       faces_to_remove.Size());
 
     if (!faces_to_remove.IsEmpty()) {
@@ -85,18 +87,23 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
         eraser.SetShape(current_shape);
         eraser.AddFacesToRemove(faces_to_remove);
         eraser.Build();
-        if (eraser.IsDone()) {
-          current_shape = eraser.Shape();
+        if (!eraser.IsDone()) {
+          RCLCPP_WARN(logger_, "Defeaturing IsDone() false - skipping enclave removal");
+        } else {
+        current_shape = eraser.Shape();
           ShapeUpgrade_UnifySameDomain mid_healer(current_shape, true, true);
           mid_healer.Build();
           current_shape = mid_healer.Shape();
-          RCLCPP_DEBUG(logger_, "Enclave removal complete");
+          RCLCPP_DEBUG_EXPRESSION(logger_, []{
+              static size_t _n = 0; return ++_n % 10 == 1;
+                }(), "Enclave removal complete");
         }
       } catch (Standard_Failure & e) {
         RCLCPP_WARN(logger_, "Defeaturing failed: %s - continuing without enclave removal",
           e.GetMessageString());
-      } catch (...) {
-        RCLCPP_WARN(logger_, "Defeaturing failed - continuing without enclave removal");
+      } catch (const std::exception & e) {
+        RCLCPP_WARN(logger_, "Defeaturing exception: %s - continuing without enclave removal",
+          e.what());
       }
     }
 
@@ -136,7 +143,8 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
                 adaptor.FirstVParameter(), adaptor.LastVParameter());
               u_arc_length = GCPnts_AbscissaPoint::Length(iso_adaptor);
             }
-          } catch (Standard_Failure &) {}
+          } catch (Standard_Failure &) {
+          }
         }
 
         if (u_arc_length > max_arc_length_) {
@@ -157,15 +165,16 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
           TopoDS_Shape divided = divider.Result();
           if (!divided.IsNull()) {
             current_shape = divided;
-            RCLCPP_DEBUG(logger_,
+            RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 10 == 1;}(),
               "Pre-split complete: %d split point(s) applied", nb_split_points);
           }
         } catch (Standard_Failure & e) {
           RCLCPP_WARN(logger_,
             "ShapeDivideClosed failed: %s - continuing without pre-split",
             e.GetMessageString());
-        } catch (...) {
-          RCLCPP_WARN(logger_, "ShapeDivideClosed failed - continuing without pre-split");
+        } catch (const std::exception & e) {
+          RCLCPP_WARN(logger_, "ShapeDivideClosed exception: %s - continuing without pre-split",
+            e.what());
         }
       }
     }
@@ -219,35 +228,37 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
         default: break;
       }
 
-      RCLCPP_DEBUG(logger_, "Splitting %s face: %zu U split(s), %zu V split(s)",
+      RCLCPP_DEBUG_EXPRESSION(logger_, []{
+          static size_t _n = 0; return ++_n % 10 == 1;
+            }(), "Splitting %s face: %zu U split(s), %zu V split(s)",
         type_str, u_splits.size(), v_splits.size());
 
       for (double u : u_splits) {
         Handle(Geom_Curve) u_iso = surf->UIso(u);
         BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
-        if (edge_maker.IsDone()) {
-          splitter.Add(edge_maker.Edge(), face);
+        splitter.Add(edge_maker.Edge(), face);
           needs_split = true;
           total_splits++;
-        }
       }
 
       for (double v : v_splits) {
         Handle(Geom_Curve) v_iso = surf->VIso(v);
         BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
-        if (edge_maker.IsDone()) {
-          splitter.Add(edge_maker.Edge(), face);
+        splitter.Add(edge_maker.Edge(), face);
           needs_split = true;
           total_splits++;
-        }
       }
     }
 
     if (needs_split) {
       splitter.Build();
-      if (splitter.IsDone()) {
+      if (!splitter.IsDone()) {
+        RCLCPP_WARN(logger_, "BRepFeat_SplitShape IsDone() false - skipping surface split");
+      } else {
         current_shape = splitter.Shape();
-        RCLCPP_DEBUG(logger_, "Surface splitting complete: %zu split(s) applied", total_splits);
+        RCLCPP_DEBUG_EXPRESSION(logger_, []{
+            static size_t _n = 0; return ++_n % 10 == 1;
+              }(), "Surface splitting complete: %zu split(s) applied", total_splits);
       }
     }
 
@@ -299,27 +310,27 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
       for (double u : u_splits) {
         Handle(Geom_Curve) u_iso = surf->UIso(u);
         BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
-        if (edge_maker.IsDone()) {
-          final_splitter.Add(edge_maker.Edge(), face);
+        final_splitter.Add(edge_maker.Edge(), face);
           needs_final_split = true;
-        }
       }
 
       for (double v : v_splits) {
         Handle(Geom_Curve) v_iso = surf->VIso(v);
         BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
-        if (edge_maker.IsDone()) {
-          final_splitter.Add(edge_maker.Edge(), face);
+        final_splitter.Add(edge_maker.Edge(), face);
           needs_final_split = true;
-        }
       }
     }
 
     if (needs_final_split) {
       final_splitter.Build();
-      if (final_splitter.IsDone()) {
+      if (!final_splitter.IsDone()) {
+        RCLCPP_WARN(logger_, "BRepFeat_SplitShape (final) IsDone() false - skipping final split");
+      } else {
         current_shape = final_splitter.Shape();
-        RCLCPP_DEBUG(logger_, "Final area ratio split complete");
+        RCLCPP_DEBUG_EXPRESSION(logger_, []{
+            static size_t _n = 0; return ++_n % 10 == 1;
+              }(), "Final area ratio split complete");
       }
     }
 
@@ -331,8 +342,9 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
     RCLCPP_ERROR(logger_, "OCCT error in shape refinement: %s - returning original shape",
       e.GetMessageString());
     return raw_shape;
-  } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown error in shape refinement - returning original shape");
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Exception in shape refinement: %s - returning original shape",
+      e.what());
     return raw_shape;
   }
 }
@@ -368,7 +380,9 @@ void ShapeRefiner::identify_enclave_features(
       collect_enclave_faces(wire, parent_face, edge_to_faces, enclave_faces);
 
       if (should_suppress_enclave(parent_face, enclave_faces, global_total_area)) {
-        RCLCPP_DEBUG(logger_, "Suppressing enclave with %d face(s)", enclave_faces.Size());
+        RCLCPP_DEBUG_EXPRESSION(logger_, []{
+            static size_t _n = 0; return ++_n % 10 == 1;
+              }(), "Suppressing enclave with %d face(s)", enclave_faces.Size());
         for (TopTools_ListIteratorOfListOfShape it(enclave_faces); it.More(); it.Next()) {
           kill_list.Append(it.Value());
           processed_faces.Add(it.Value());
@@ -472,13 +486,13 @@ void ShapeRefiner::find_inflections(
     double u = scan_u ? current_p : other_mid;
     double v = scan_u ? other_mid : current_p;
 
-    GeomLProp_SLProps props(surface.Surface().Surface(), u, v, 2, 1e-7);
+    GeomLProp_SLProps props(surface.Surface().Surface(), u, v, 2, 1e-6);
     if (props.IsCurvatureDefined()) {
       double current_k = props.GaussianCurvature();
       if (i > 0 && (prev_k * current_k) < 0.0) {
         // Curvature sign change — interpolate split position
         double denom = std::abs(prev_k) + std::abs(current_k);
-        if (denom > 1e-10) {
+        if (denom > 1e-6) {
           splits.push_back((start + (i - 1) * step) + (step * std::abs(prev_k) / denom));
         }
       }
@@ -513,8 +527,8 @@ void ShapeRefiner::check_edge_arc_lengths(
       max_v_edge_length = std::max(max_v_edge_length, length);
     } catch (Standard_Failure & e) {
       RCLCPP_DEBUG(logger_, "Failed to compute edge length: %s", e.GetMessageString());
-    } catch (...) {
-      RCLCPP_DEBUG(logger_, "Failed to compute edge length");
+    } catch (const std::exception & e) {
+      RCLCPP_DEBUG(logger_, "Exception computing edge length: %s", e.what());
     }
   }
 
@@ -566,7 +580,7 @@ bool ShapeRefiner::is_physically_planar(const TopoDS_Face & face) const
 
   for (double u : u_params) {
     for (double v : v_params) {
-      GeomLProp_SLProps props(surface.Surface().Surface(), u, v, 1, 1e-7);
+      GeomLProp_SLProps props(surface.Surface().Surface(), u, v, 1, 1e-6);
       if (props.IsNormalDefined()) {
         if (ref_normal.Angle(props.Normal()) > (M_PI / 180.0)) {return false;}
       }

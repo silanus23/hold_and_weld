@@ -15,22 +15,17 @@
         w: 1.0
 
     child_link:
-      urdf_path: 'urdf/environment/cube.urdf.xacro'
+      urdf_path: 'urdf/environment/prism.urdf.xacro'
       id: 'child_link'
       spawn_name: 'child_link'
       pose:
         x: 1.2
-        y: 0.3
+        y: 0.0
         z: 0.125
-      end_pose:
-        position:
-          x: 1.2
-          y: -0.5
-          z: 0.925
-        orientation:
-          x: 0.0
-          y: 0.0
-          z: 0.0
-          w: 1.0
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        w: 1.0
 
     frame_id: 'world'

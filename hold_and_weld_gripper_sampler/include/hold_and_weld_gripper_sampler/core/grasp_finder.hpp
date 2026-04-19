@@ -84,10 +84,10 @@ struct GraspFinderResult
 struct ShapeRefinerConfig
 {
   bool enabled = true;
-  double max_cylinder_radius = 0.100; // meters, before radial splitting
-  double max_arc_length = 0.200;      // meters, before surface splitting
-  double enclave_area_ratio = 0.005;  // fraction of total area, e.g. 0.005 = 0.5%
-  double enclave_angle_threshold = 45.0; // degrees, shallow walls below this are removed
+  double max_cylinder_radius = 0.100;
+  double max_arc_length = 0.200;
+  double enclave_area_ratio = 0.005;
+  double enclave_angle_threshold = 45.0;
 };
 
 /**
@@ -99,10 +99,19 @@ struct GraspFinderConfig
   angle_finding::OrientationConfig orientation;
   ShapeRefinerConfig shape_refiner;
 
-  double kissing_contact_threshold = 0.8; // contact ratio above which surface is banned
+  double kissing_contact_threshold = 0.8;
   double ground_normal_z_threshold = -0.9;
-  double ground_safety_margin = 0.005; // meters above ground plane
-  double ground_z = 0.0;
+  double ground_safety_margin = 0.005;
+
+  // Auto-computed from primary shape bounding box — do not set manually.
+  // ground_bottom_z  : lowest Z of the primary shape (top face of ground plane BVH)
+  // ground_center_x/y: XY center of the primary shape bounding box
+  // ground_size_x/y  : XY extent of the primary shape bounding box
+  double ground_bottom_z = 0.0;
+  double ground_center_x = 0.0;
+  double ground_center_y = 0.0;
+  double ground_size_x = 10.0;
+  double ground_size_y = 10.0;
 
   // Collision tolerance for secondary/fixture checks. Kept tight (1e-6 m) — pre-computed
   // queries against known geometry. Separate from orientation.collision_tolerance (1mm)
@@ -113,8 +122,8 @@ struct GraspFinderConfig
   bool enable_ground_plane_check = true;
   bool use_fcl_for_ground_plane = true;
 
-  double triangulation_deflection = 0.0001; // FCL BVH construction precision (meters)
-  double mesh_linear_deflection = 0.001;    // exclusion zone mesh precision (meters)
+  double triangulation_deflection = 0.0001;
+  double mesh_linear_deflection = 0.001;
   double mesh_angular_deflection = 0.1;
 };
 
@@ -151,11 +160,11 @@ public:
     const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
-      std::nullopt,
+    std::nullopt,
     const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons =
-      std::nullopt,
+    std::nullopt,
     const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines =
-      std::nullopt,
+    std::nullopt,
     const GraspFinderConfig & config = GraspFinderConfig{}
   );
 
@@ -182,11 +191,11 @@ public:
     const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
-      std::nullopt,
+    std::nullopt,
     const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons =
-      std::nullopt,
+    std::nullopt,
     const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines =
-      std::nullopt,
+    std::nullopt,
     const GraspFinderConfig & config = GraspFinderConfig{}
   );
 

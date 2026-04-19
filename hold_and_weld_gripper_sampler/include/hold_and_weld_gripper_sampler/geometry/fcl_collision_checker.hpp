@@ -21,6 +21,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <TopoDS_Shape.hxx>
 
@@ -111,10 +113,6 @@ public:
   /**
    * @brief Add ground plane as a collision object
    *
-   * Creates a large flat box at specified Z height to represent the ground.
-   * The box extends from (center_x - size/2, center_y - size/2, ground_z - thickness/2)
-   * to (center_x + size/2, center_y + size/2, ground_z + thickness/2).
-   *
    * @param ground_z Z-coordinate of ground plane surface (default 0.0)
    * @param size Lateral extent of ground plane in X and Y (default 100.0 meters)
    * @param thickness Thickness of ground plane box in Z (default 0.1 meters)
@@ -127,6 +125,11 @@ public:
     double thickness = 0.1,
     double center_x = 0.0,
     double center_y = 0.0);
+
+  /**
+   * @brief Returns true if a ground plane BVH has been added to this checker.
+   */
+  bool has_ground_plane() const;
 
   /**
    * @brief Check if gripper collides with primary shape
@@ -179,6 +182,26 @@ public:
     double grip_distance) const;
 
   /**
+   * @brief Shoot a ray against the primary shape BVH
+   *
+   * Used by GraspOrientationFinder for fast directional surface sampling.
+   * The ray is defined by an origin and direction. If the ray hits the shape
+   * within max_distance, the hit point is written to hit_point_out and the
+   * method returns true. A miss returns false (= cliff / drop-off = LOW).
+   *
+   * @param origin      Ray origin in world frame
+   * @param direction   Ray direction (need not be normalised)
+   * @param max_distance Maximum ray length to consider
+   * @param hit_point_out [out] Nearest hit point on the primary shape
+   * @return true if the ray hit the primary shape within max_distance
+   */
+  bool ray_hits_primary(
+    const gp_Pnt & origin,
+    const gp_Dir & direction,
+    double max_distance,
+    gp_Pnt & hit_point_out) const;
+
+  /**
    * @brief Check if collision checker is properly initialized
    *
    * @return true if all BVH models were built successfully
@@ -188,29 +211,16 @@ public:
 private:
   /**
    * @brief Convert OCCT shape to FCL BVH model
-   *
-   * Extracts triangles from OCCT's internal triangulation and builds
-   * an FCL BVH model for fast collision queries.
-   *
-   * @param shape OCCT shape (must be triangulated)
-   * @return Shared pointer to BVH model, or nullptr if conversion failed
    */
   std::shared_ptr<BVHModel> shape_to_bvh(const TopoDS_Shape & shape) const;
 
   /**
    * @brief Convert gp_Trsf to FCL Transform3
-   *
-   * @param trsf OCCT transformation
-   * @return FCL transformation
    */
   Transform3 to_fcl_transform(const gp_Trsf & trsf) const;
 
   /**
    * @brief Compute finger transforms for given grip distance
-   *
-   * @param grip_distance Distance between finger contact points
-   * @param finger_1_transform Output transform for finger 1
-   * @param finger_2_transform Output transform for finger 2
    */
   void compute_finger_transforms(
     double grip_distance,
@@ -219,12 +229,6 @@ private:
 
   /**
    * @brief Check collision between gripper components and a target BVH
-   *
-   * @param gripper_transform Base gripper transform
-   * @param grip_distance Finger opening distance
-   * @param target_bvh Target shape BVH model
-   * @param tolerance Collision tolerance
-   * @return true if any gripper component collides with target
    */
   bool check_gripper_collision(
     const gp_Trsf & gripper_transform,
@@ -234,11 +238,6 @@ private:
 
   /**
    * @brief Compute minimum distance between gripper components and target
-   *
-   * @param gripper_transform Base gripper transform
-   * @param grip_distance Finger opening distance
-   * @param target_bvh Target shape BVH model
-   * @return Minimum distance from any gripper component to target
    */
   double compute_gripper_distance(
     const gp_Trsf & gripper_transform,
@@ -252,15 +251,15 @@ private:
   Eigen::Vector3d finger_1_axis_;
   Eigen::Vector3d finger_2_axis_;
 
+  double rest_gap_;
+
   std::shared_ptr<BVHModel> primary_bvh_;
 
   std::vector<std::shared_ptr<BVHModel>> exclusion_bvhs_;
-
   std::vector<std::shared_ptr<BVHModel>> secondary_bvhs_;
   std::shared_ptr<BVHModel> ground_plane_bvh_;
 
   double linear_deflection_;
-
   bool valid_;
 };
 
