@@ -1,21 +1,6 @@
 <?xml version="1.0"?>
-<!--
-  Test Workpiece URDF
-  ===================
-  A simple box workpiece for testing the grasp sampling pipeline.
-  This is a standalone URDF (no xacro processing required).
-  
-  Workpiece specifications:
-  - Dimensions: 800mm x 400mm x 300mm (0.80m x 0.40m x 0.30m)
-  - Material: Steel-like appearance
-  - Origin: Center of the box
-  
-  When placed at z=0.15m, the bottom face will be at z=0.0m (ground level).
-  The grasp sampler will analyze all 6 faces for potential grasp points.
--->
 <robot name="test_workpiece">
 
-  <!-- Workpiece Base Link -->
   <link name="base_link">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -35,10 +20,6 @@
     <inertial>
       <mass value="25.0"/>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <!-- Inertia for a solid box: I = (1/12) * m * (a^2 + b^2) -->
-      <!-- Ixx = (1/12) * 25 * (0.40^2 + 0.30^2) = 0.521 -->
-      <!-- Iyy = (1/12) * 25 * (0.80^2 + 0.30^2) = 1.521 -->
-      <!-- Izz = (1/12) * 25 * (0.80^2 + 0.40^2) = 1.667 -->
       <inertia ixx="0.521" ixy="0.0" ixz="0.0" 
                iyy="1.521" iyz="0.0" 
                izz="1.667"/>

@@ -1,37 +1,8 @@
-# =============================================================================
-# GraspFinder Configuration — Small Cylinder Workpiece
-# =============================================================================
-# Workpiece: cylinder_small_workpiece.urdf — radius=150mm, height=250mm
-#   diameter = 300mm → well within gripper range (60mm–360mm)
-#
-# Start pose: center at (1.2, 0.0, 0.125)
-#   → bottom circular face flush on z = 0.0 (ground plane)
-#   → top circular face at z = 0.25
-#   → radial extent: x ∈ [1.05, 1.35], y ∈ [-0.15, 0.15]
-#
-# Graspable surface pairs (gripper opening: 60mm–360mm):
-#   Curved side vs curved side: diameter = 300mm  ✓  MAIN TARGET
-#     ShapeRefiner splits the curved surface into arc patches;
-#     opposing patches are ~300mm apart — well within range.
-#   Top flat vs bottom flat:    height   = 250mm  ✓
-#     (bottom face banned by ground plane — top-only grasp unlikely
-#      but pipeline should handle it cleanly)
-#
-# ShapeRefiner is REQUIRED here: without it the cylinder is a single
-# curved face and no opposing surface pair can be formed.
-#
-# Coordinate system: meters / quaternion. Frame: world.
-# =============================================================================
 
 /**:
   ros__parameters:
     frame_id: 'world'
 
-    # =========================================================================
-    # Primary Workpiece
-    # =========================================================================
-    # Cylinder: radius=100mm, height=250mm. URDF origin at geometric center.
-    # Translation puts center at (1.2, 0.0, 0.125) → bottom sits on z=0.
     primary:
       urdf_path: 'config/cylinder_small_workpiece.urdf'
       transform:
@@ -45,114 +16,63 @@
           z: 0.0
           w: 1.0
 
-    # =========================================================================
-    # Gripper
-    # =========================================================================
-    # Fingers: 30×40×200mm. Opening: 60mm (closed) → 360mm (fully open).
-    # 200mm diameter cylinder is comfortably within range.
     gripper:
       urdf_path: 'config/test_gripper.urdf'
-      max_opening: 0.36    # 360mm
+      max_opening: 0.36
 
-    # =========================================================================
-    # Secondary Shapes (collision obstacles)
-    # =========================================================================
     secondaries:
-      # Ground plane at z=0 — bans the bottom circular face and prevents
-      # the gripper from descending below the floor.
       - id: 'ground_plane'
         type: 'ground_plane'
         size_x: 4.0
         size_y: 4.0
         z_position: 0.0
 
-    # =========================================================================
-    # Exclusion Zones
-    # =========================================================================
-    # None defined. Add weld seams or fixture zones here if needed:
-    #
-    # exclusion_zones:
-    #   lines:
-    #     - id: 'weld_seam'
-    #       start: { x: 1.1, y: 0.0, z: 0.25 }
-    #       end:   { x: 1.3, y: 0.0, z: 0.25 }
-    #       exclusion_radius: 0.015
-    #       clearance: 0.010
-
-    # =========================================================================
-    # Sampling
-    # =========================================================================
     sampling:
-      # Opposing arc patches on a cylinder are perfectly anti-parallel.
-      min_angle_deg: 173.0   # rejects adjacent arc patches (~165°), keeps only true opposites (~180°)
+      min_angle_deg: 173.0
       max_angle_deg: 180.0
 
-      # Curved side separation = diameter = 300mm → fits in [60mm, 360mm].
-      min_gripper_opening: 0.06    # 60mm
-      max_gripper_opening: 0.36    # 360mm
+      min_gripper_opening: 0.06
+      max_gripper_opening: 0.36
 
-      # 10mm grid — fine enough for a 300mm diameter cylinder.
       sample_density: 0.01
 
       normal_sample_density: 1.0
-      max_lateral_deviation: 0.05   # 50mm
-      alignment_threshold: 0.10     # ~84° — relaxed for curved arc patches where
-                                    # chord vs local normal diverges away from patch centre
+      max_lateral_deviation: 0.05
+      alignment_threshold: 0.10
 
-    # =========================================================================
-    # Shape Refiner
-    # =========================================================================
-    # MUST be enabled for cylinders — splits the single curved face into
-    # arc patches so opposing surface pairs can be identified.
     shape_refiner:
       enabled: true
-      max_cylinder_radius: 0.200   # above our 150mm radius → triggers arc splitting
-      max_arc_length: 0.050        # 50mm arc segments — forces ~19 splits on 300mm diameter, ~8+ patches
+      max_cylinder_radius: 0.200
+      max_arc_length: 0.050
       enclave_area_ratio: 0.005
       enclave_angle_threshold: 45.0
 
-    # =========================================================================
-    # Orientation Finding
-    # =========================================================================
     orientation:
-      finger_length: 0.20           # 200mm — actual finger length, used for radial sweep and visualizer
-      finger_radius: 0.02           # 20mm (half of 40mm finger width)
+      finger_length: 0.20
+      finger_radius: 0.02
 
-      # Cylinder arc patches have curved edges — more candidates needed.
-      max_orientations_per_pair: 100
-      max_edge_candidates: 8
+      max_orientations_per_pair: 30
+      max_edge_candidates: 4
       dual_seed_dedup_tolerance_deg: 3.0
-      max_edges_per_contact: 0       # unlimited
+      max_edges_per_contact: 0
 
-      # Wider angle sweep for curved geometry.
       angle_offsets: [-15.0, 0.0, 15.0]
 
       stop_on_first_valid: false
-      collision_tolerance: 0.001     # 1mm
+      collision_tolerance: 0.001
       debug_full_sweep: true
       debug_sweep_step_deg: 5.0
 
       randomize_seeds: true
 
-    # =========================================================================
-    # Kissing Surface
-    # =========================================================================
     kissing:
-      # Bottom face in contact with ground plane → banned.
       contact_threshold: 0.8
       collision_tolerance: 0.001
 
-    # =========================================================================
-    # FCL
-    # =========================================================================
     fcl:
       enabled: true
-      # Tighter triangulation for curved geometry — 0.5mm gives a smooth mesh.
       triangulation_deflection: 0.0005
 
-    # =========================================================================
-    # Output
-    # =========================================================================
     output:
-      max_grasps: 100
+      max_grasps: 15
       min_quality: 0.0

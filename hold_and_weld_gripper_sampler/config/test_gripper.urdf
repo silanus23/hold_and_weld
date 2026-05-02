@@ -1,42 +1,17 @@
 <?xml version="1.0"?>
-<!--
-  Test Gripper URDF
-  =================
-  A parallel gripper for testing the grasp sampling pipeline.
-  This is a standalone URDF (no xacro processing required).
-
-  Gripper specifications:
-  - Base: 80mm x 120mm x 40mm
-  - Fingers: 30mm x 40mm x 200mm each
-  - Opening range: 60mm to 360mm (joint limits 0.0 to 0.15m per finger)
-  - TCP: 120mm below gripper base center
-
-  The gripper_metadata section is parsed by GripperParser.
--->
 <robot name="test_gripper">
 
-  <!-- ==================== GRIPPER METADATA ==================== -->
-  <!-- This section is parsed by GripperParser to extract gripper kinematics -->
   <gripper_metadata>
-    <!-- Base link name (static part of gripper) -->
     <base_link name="gripper_base"/>
 
-    <!-- Finger definitions: link name and controlling joint -->
-    <!-- finger_id: 1 or 2 (for two-finger parallel grippers) -->
-    <!-- The joint axis defines the opening direction -->
     <finger finger_id="1" link="left_finger" joint="left_finger_joint"/>
     <finger finger_id="2" link="right_finger" joint="right_finger_joint"/>
 
-    <!-- Gripper type: parallel, angular, vacuum, etc. -->
     <gripper_type>parallel</gripper_type>
 
-    <!-- TCP (Tool Center Point) offset from base_link origin -->
-    <!-- This is where the gripper "grasps" - typically between fingers -->
     <tcp_offset xyz="0 0 0.22" rpy="0 0 0"/>
   </gripper_metadata>
-  <!-- =========================================================== -->
 
-  <!-- Gripper Base (Palm) -->
   <link name="gripper_base">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -60,7 +35,6 @@
     </inertial>
   </link>
 
-  <!-- Left Finger -->
   <link name="left_finger">
     <visual>
       <origin xyz="0 0 0.1" rpy="0 0 0"/>
@@ -84,7 +58,6 @@
     </inertial>
   </link>
 
-  <!-- Right Finger -->
   <link name="right_finger">
     <visual>
       <origin xyz="0 0 0.1" rpy="0 0 0"/>
@@ -108,11 +81,6 @@
     </inertial>
   </link>
 
-  <!-- Left Finger Joint -->
-  <!-- When joint value = 0: finger at origin (closed position)
-       When joint value = 0.15: finger moved 0.15m in +Y direction (open position)
-       Closed opening = 2 * 0.03 = 0.06m (60mm)
-       Open opening = 0.06 + 2 * 0.15 = 0.36m (360mm) -->
   <joint name="left_finger_joint" type="prismatic">
     <parent link="gripper_base"/>
     <child link="left_finger"/>
@@ -122,8 +90,6 @@
     <dynamics damping="1.0" friction="2.0"/>
   </joint>
 
-  <!-- Right Finger Joint -->
-  <!-- Moves in -Y direction (opposite to left finger) -->
   <joint name="right_finger_joint" type="prismatic">
     <parent link="gripper_base"/>
     <child link="right_finger"/>

@@ -1,36 +1,8 @@
-# =============================================================================
-# GraspFinder Configuration — Prism Workpiece (Start Position)
-# =============================================================================
-# Workpiece: prism_workpiece.urdf — 250mm × 800mm × 250mm rectangular bar
-#   dimensions in URDF box: size="0.25 0.80 0.25" → X=250mm, Y=800mm, Z=250mm
-#
-# Assumed start pose: center at (1.2, 0.0, 0.125)
-#   → occupies x ∈ [1.075, 1.325]   (250mm wide)
-#              y ∈ [-0.40,  0.40]    (800mm long)
-#              z ∈ [0.0,    0.25]    (250mm tall, bottom on ground)
-#
-# Graspable surface pairs (gripper opening: 60mm–360mm):
-#   Long sides (800×250mm):   y = -0.40 vs y = +0.40  →  800mm apart  ✗ too wide
-#   Short sides (250×250mm):  x = 1.075 vs x = 1.325  →  250mm apart  ✓ MAIN TARGET
-#   Top vs bottom (800×250mm):z = 0.25  vs z = 0.0    →  250mm apart  ✓ (bottom banned by ground)
-#
-# Primary grasp target: the two SHORT END faces (250×250mm), 250mm apart.
-# The long sides (Y direction, 800mm separation) exceed the gripper range and
-# will be filtered out by the contact point sampler.
-#
-# Coordinate system: meters / quaternion. Frame: world.
-# =============================================================================
 
 /**:
   ros__parameters:
     frame_id: 'world'
 
-    # =========================================================================
-    # Primary Workpiece
-    # =========================================================================
-    # 250×800×250 mm rectangular bar. URDF origin is at the geometric center.
-    # Translation puts the center at (1.2, 0.0, 0.125) so the bottom face
-    # sits flush on z = 0 (ground plane).
     primary:
       urdf_path: 'config/prism_workpiece.urdf'
       transform:
@@ -44,112 +16,57 @@
           z: 0.0
           w: 1.0
 
-    # =========================================================================
-    # Gripper
-    # =========================================================================
-    # Fingers: 30×40×200mm. Opening: 60mm (closed) → 360mm (fully open).
-    # The short-end separation (250mm) is well within range.
     gripper:
       urdf_path: 'config/test_gripper.urdf'
-      max_opening: 0.36    # 360mm
+      max_opening: 0.36
 
-    # =========================================================================
-    # Secondary Shapes (collision obstacles)
-    # =========================================================================
     secondaries:
-      # Ground plane at z = 0 — bans the bottom face of the prism and prevents
-      # the gripper from descending below the floor.
       - id: 'ground_plane'
         type: 'ground_plane'
         size_x: 4.0
         size_y: 4.0
         z_position: 0.0
 
-    # =========================================================================
-    # Exclusion Zones
-    # =========================================================================
-    # None defined for the bare prism. Typical candidates to add:
-    #
-    # exclusion_zones:
-    #   lines:
-    #     - id: 'weld_seam_top'
-    #       start: { x: 1.075, y: -0.35, z: 0.25 }
-    #       end:   { x: 1.325, y: -0.35, z: 0.25 }
-    #       exclusion_radius: 0.015
-    #       clearance: 0.010
-
-    # =========================================================================
-    # Sampling
-    # =========================================================================
     sampling:
-      # Opposing flat faces on a box are perfectly anti-parallel.
       min_angle_deg: 160.0
       max_angle_deg: 180.0
 
-      # Short-end separation = 250mm → fits in [60mm, 360mm] range.
-      # Top face separation = 250mm → also fits (bottom banned, so this pair
-      # will likely yield 0 contact points after kissing surface bans bottom).
-      min_gripper_opening: 0.06    # 60mm — keeps fingers clear of face edges
-      max_gripper_opening: 0.36    # 360mm
+      min_gripper_opening: 0.06
+      max_gripper_opening: 0.36
 
-      # 10mm grid on the 250×250mm end faces → ~25×25 = 625 samples per face.
-      # Thorough coverage without being slow.
       sample_density: 0.01
 
       normal_sample_density: 1.0
-      max_lateral_deviation: 0.03   # 30mm diagonal tolerance
+      max_lateral_deviation: 0.03
       alignment_threshold: 0.95
 
-    # =========================================================================
-    # Orientation Finding
-    # =========================================================================
     orientation:
-      finger_length: 0.2            # 200mm
-      finger_radius: 0.02           # 20mm (half of 40mm finger width)
+      finger_length: 0.2
+      finger_radius: 0.02
 
-      # The 250×250mm end faces have exactly 4 edges each — 5 candidates
-      # gives full coverage with a spare for any shared/coincident edges.
       max_edge_candidates: 5
       dual_seed_dedup_tolerance_deg: 3.0
-      max_edges_per_contact: 0       # unlimited
+      max_edges_per_contact: 0
 
-      # Three offsets per edge seed — adequate for square flat faces.
       angle_offsets: [-15.0, 0.0, 15.0]
 
       stop_on_first_valid: false
-      collision_tolerance: 0.001     # 1mm
-      debug_full_sweep: false        # DIAGNOSTIC: bypass radial map, test all 360°
-      debug_sweep_step_deg: 10.0     # 36 angles per contact pair
+      collision_tolerance: 0.001
+      debug_full_sweep: false
+      debug_sweep_step_deg: 10.0
 
-      # Sample random angles within each LOW arc instead of fixed 15° grid.
       randomize_seeds: true
 
-    # =========================================================================
-    # Kissing Surface
-    # =========================================================================
     kissing:
-      # Surfaces with more than 80% area in contact with a secondary are
-      # removed from the candidate set entirely.
-      # The bottom face (z=0.0) will be ~100% in contact with the ground plane
-      # and will be fully banned — correct behaviour.
       contact_threshold: 0.8
-      # Tolerance for gripper-vs-secondary collision checks (metres).
-      # 1mm gives a small safety margin above the ground / fixtures.
       collision_tolerance: 0.001
 
-    # =========================================================================
-    # FCL
-    # =========================================================================
     fcl:
       enabled: true
-      # 1mm triangulation is sufficient for pure box geometry.
       triangulation_deflection: 0.001
 
 
 
-    # =========================================================================
-    # Output
-    # =========================================================================
     output:
-      max_grasps: 100
+      max_grasps: 50
       min_quality: 0.0

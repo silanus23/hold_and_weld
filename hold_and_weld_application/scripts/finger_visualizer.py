@@ -68,7 +68,7 @@ class FingerVisualizer(Node):
     ----------------
     1. Load objects.yaml to get start poses and URDF paths.
     2. Wait up to 5 s for a /collision_object subscriber (MoveIt).
-    3. Spawn base_link and child_link at their START poses in the planning
+    3. Spawn all objects from objects.yaml at their START poses in the planning
        scene (so the scene matches what the grasp sampler saw).
     4. Find the latest grasp JSON in grasps/ by metadata.generated_at.
     5. Publish two CUBE markers per grasp (finger_1, finger_2) on /grasp_markers.
@@ -82,9 +82,6 @@ class FingerVisualizer(Node):
         self.get_logger().info('FINGER VISUALIZER STARTING')
         self.get_logger().info('=' * 50)
 
-        # ------------------------------------------------------------------ #
-        # Configuration                                                       #
-        # ------------------------------------------------------------------ #
         app_pkg = get_package_share_directory('hold_and_weld_application')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
 
@@ -99,9 +96,6 @@ class FingerVisualizer(Node):
         self.frame_id = objects_cfg.get('frame_id', 'world')
         self._desc_pkg = desc_pkg
 
-        # ------------------------------------------------------------------ #
-        # Publishers / servers                                                #
-        # ------------------------------------------------------------------ #
         self.collision_pub = self.create_publisher(
             CollisionObject, '/collision_object', 10
         )
@@ -110,9 +104,6 @@ class FingerVisualizer(Node):
         )
         self.marker_server = InteractiveMarkerServer(self, 'grasp_poses')
 
-        # ------------------------------------------------------------------ #
-        # Wait for MoveIt planning-scene subscriber                          #
-        # ------------------------------------------------------------------ #
         self.get_logger().info(
             'Waiting for /collision_object subscriber (max 5 s)...'
         )
@@ -129,21 +120,12 @@ class FingerVisualizer(Node):
         else:
             self._spawn_objects_at_start_pose(objects_cfg)
 
-        # ------------------------------------------------------------------ #
-        # Grasp visualization                                                 #
-        # ------------------------------------------------------------------ #
         self._visualize_latest_grasps()
 
-    # ====================================================================== #
-    # Object spawning                                                         #
-    # ====================================================================== #
-
     def _spawn_objects_at_start_pose(self, objects_cfg: dict):
-        """Spawn base_link and child_link at their START poses."""
-        for key in ('base_link', 'child_link'):
-            cfg = objects_cfg.get(key)
-            if not cfg:
-                self.get_logger().warn(f"No config entry for '{key}', skipping.")
+        """Spawn all objects at their START poses."""
+        for key, cfg in objects_cfg.items():
+            if key == 'frame_id' or not isinstance(cfg, dict):
                 continue
 
             urdf_rel = cfg.get('urdf_path', '')
@@ -298,10 +280,6 @@ class FingerVisualizer(Node):
         )
         return None
 
-    # ====================================================================== #
-    # Grasp visualization                                                     #
-    # ====================================================================== #
-
     def _visualize_latest_grasps(self):
         """Find the latest grasp JSON and publish all visualization markers."""
         # Build the list of directories to search, adding the install-tree
@@ -331,7 +309,6 @@ class FingerVisualizer(Node):
             )
             return
 
-        # Pick the file with the newest metadata.generated_at timestamp.
         latest_path = None
         latest_data = None
         latest_time = None
@@ -398,10 +375,6 @@ class FingerVisualizer(Node):
             f'(2 fingers + 2 tip spheres each) for {len(grasps)} grasp(s)'
         )
 
-    # ------------------------------------------------------------------ #
-    # Per-grasp marker builders                                           #
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _quat_rotate(quat: list, v: list) -> list:
         """Rotate vector v by unit quaternion quat = [x, y, z, w]."""
@@ -445,20 +418,16 @@ class FingerVisualizer(Node):
         """
         markers = []
 
-        # -- Parse JSON fields (convention: lists for position & quaternion) #
         tcp = grasp.get('tcp_pose', {})
-        # quaternion: [x, y, z, w]
         quat = tcp.get('quaternion', [0.0, 0.0, 0.0, 1.0])
 
         # contact position arrays: [x, y, z]
         c1 = grasp.get('contact_1', {}).get('position', [0.0, 0.0, 0.0])
         c2 = grasp.get('contact_2', {}).get('position', [0.0, 0.0, 0.0])
 
-        # -- Finger dimensions from gripper_prefix.xacro ------------------- #
-        # <box size="0.03 0.04 0.20"/>  →  X=0.03, Y=0.04, Z=finger_length
-        finger_x = 0.03          # 30 mm — cross-section along approach axis
-        finger_y = 0.04          # 40 mm — cross-section along grip axis
-        finger_l = float(finger_length)  # 200 mm from metadata
+        finger_x = 0.03
+        finger_y = 0.04
+        finger_l = float(finger_length)
 
         # Tip sphere: radius = half of the smaller cross-section side (15 mm)
         tip_radius = finger_x / 2.0   # 0.015 m
@@ -470,11 +439,6 @@ class FingerVisualizer(Node):
 
         half = finger_l / 2.0
 
-        # ------------------------------------------------------------------ #
-        # Finger 1  (contact_1 side — orange)                                #
-        # ------------------------------------------------------------------ #
-
-        # Box: centre is half a finger-length inward from the contact point
         f1 = Marker()
         f1.header = Header(frame_id=frame_id)
         f1.ns = 'grasp_finger_1'
@@ -515,10 +479,6 @@ class FingerVisualizer(Node):
         s1.color = ColorRGBA(r=1.0, g=0.85, b=0.0, a=0.95)
         s1.lifetime.sec = 0
         markers.append(s1)
-
-        # ------------------------------------------------------------------ #
-        # Finger 2  (contact_2 side — cyan)                                  #
-        # ------------------------------------------------------------------ #
 
         # Box
         f2 = Marker()
@@ -612,10 +572,6 @@ class FingerVisualizer(Node):
         self.marker_server.insert(
             int_marker, feedback_callback=self._marker_feedback
         )
-
-    # ====================================================================== #
-    # Helpers                                                                 #
-    # ====================================================================== #
 
     def _quality_color(self, quality: float) -> ColorRGBA:
         """Map quality ∈ [0, 1] to a red→yellow→green color."""

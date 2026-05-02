@@ -207,6 +207,7 @@ private:
    */
   bool find_opposing_contact(
     const gp_Pnt & contact_1,
+    const TopoDS_Face & face_1,
     const TopoDS_Face & face_2,
     gp_Pnt & opposing_contact) const;
 

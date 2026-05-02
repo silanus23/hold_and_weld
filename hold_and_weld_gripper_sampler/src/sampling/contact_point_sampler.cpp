@@ -103,7 +103,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       total_samples++;
       gp_Pnt contact_2;
 
-      if (!find_opposing_contact(contact_1, pair.face_2, contact_2)) {
+      if (!find_opposing_contact(contact_1, pair.face_1, pair.face_2, contact_2)) {
         rejected_no_opposing++;
         continue;
       }
@@ -163,7 +163,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       total_samples++;
       gp_Pnt contact_1;
 
-      if (!find_opposing_contact(contact_2, pair.face_1, contact_1)) {
+      if (!find_opposing_contact(contact_2, pair.face_2, pair.face_1, contact_1)) {
         rejected_no_opposing++;
         continue;
       }
@@ -584,6 +584,7 @@ bool ContactPointSampler::is_point_in_allowed_area(
 
 bool ContactPointSampler::find_opposing_contact(
   const gp_Pnt & contact_1,
+  const TopoDS_Face & face_1,
   const TopoDS_Face & face_2,
   gp_Pnt & opposing_contact) const
 {
@@ -594,67 +595,49 @@ bool ContactPointSampler::find_opposing_contact(
     return false;
   }
 
-  // Ray cast (primary): BRepExtrema on curved faces finds the patch edge, not the
-  // true antipodal contact. Try ±normal to handle orientation ambiguity.
+  // Helper: shoot a ray from contact_1 in direction dir, return closest hit on face_2.
+  auto try_ray = [&](const gp_Dir & dir) -> bool {
+      IntCurvesFace_ShapeIntersector intersector;
+      intersector.Load(face_2, 1e-6);
+      intersector.Perform(gp_Lin(contact_1, dir), -1e10, 1e10);
+      if (intersector.NbPnt() == 0) {return false;}
+      double best_dist = std::numeric_limits<double>::max();
+      gp_Pnt best_pt;
+      for (int k = 1; k <= intersector.NbPnt(); ++k) {
+        double d = contact_1.Distance(intersector.Pnt(k));
+        if (d > 1e-6 && d < best_dist) {
+          best_dist = d;
+          best_pt = intersector.Pnt(k);
+        }
+      }
+      if (best_dist < std::numeric_limits<double>::max()) {
+        opposing_contact = best_pt;
+        return true;
+      }
+      return false;
+    };
+
   try {
+    // Primary: shoot along the surface normal at contact_1 (both directions).
+    // This guarantees the ray is perpendicular to face_1, so the resulting
+    // pair passes alignment checks regardless of where on the face contact_1 is.
+    auto normal_opt = geometry::surface_normal_at_point(contact_1, face_1);
+    if (normal_opt.has_value()) {
+      gp_Vec n = normal_opt.value();
+      n.Normalize();
+      if (try_ray(gp_Dir(n.X(), n.Y(), n.Z()))) {return true;}
+      if (try_ray(gp_Dir(-n.X(), -n.Y(), -n.Z()))) {return true;}
+    }
+
+    // Fallback: centroid-aimed ray (works for compact symmetric faces).
     GProp_GProps props;
     BRepGProp::SurfaceProperties(face_2, props);
     gp_Pnt centroid_2 = props.CentreOfMass();
-
-    // Direction from face_2 centroid toward contact_1 — this is the
-    // approach axis (contact_1 is on the opposite side of the workpiece)
     gp_Vec approach(centroid_2, contact_1);
     if (approach.Magnitude() > 1e-6) {
       approach.Normalize();
-
-      // Shoot ray from contact_1 in the OPPOSITE direction (into the workpiece
-      // toward face_2), and also forward direction as fallback
-      gp_Dir ray_dir(-approach.X(), -approach.Y(), -approach.Z());
-      gp_Lin ray(contact_1, ray_dir);
-
-      IntCurvesFace_ShapeIntersector intersector;
-      intersector.Load(face_2, 1e-6);
-      intersector.Perform(ray, -1e10, 1e10);
-
-      if (intersector.NbPnt() > 0) {
-        // Pick intersection closest to contact_1
-        double best_dist = std::numeric_limits<double>::max();
-        gp_Pnt best_pt = intersector.Pnt(1);
-        for (int k = 1; k <= intersector.NbPnt(); ++k) {
-          double dist_to_pt = contact_1.Distance(intersector.Pnt(k));
-          if (dist_to_pt < best_dist && dist_to_pt > 1e-6) {  // exclude self-intersection
-            best_dist = dist_to_pt;
-            best_pt = intersector.Pnt(k);
-          }
-        }
-        if (best_dist < std::numeric_limits<double>::max()) {
-          opposing_contact = best_pt;
-          return true;
-        }
-      }
-
-      // Try forward direction too
-      gp_Dir ray_dir_fwd(approach.X(), approach.Y(), approach.Z());
-      gp_Lin ray_fwd(contact_1, ray_dir_fwd);
-      IntCurvesFace_ShapeIntersector intersector_fwd;
-      intersector_fwd.Load(face_2, 1e-6);
-      intersector_fwd.Perform(ray_fwd, -1e10, 1e10);
-
-      if (intersector_fwd.NbPnt() > 0) {
-        double best_dist = std::numeric_limits<double>::max();
-        gp_Pnt best_pt = intersector_fwd.Pnt(1);
-        for (int k = 1; k <= intersector_fwd.NbPnt(); ++k) {
-          double dist_to_pt = contact_1.Distance(intersector_fwd.Pnt(k));
-          if (dist_to_pt < best_dist && dist_to_pt > 1e-6) {
-            best_dist = dist_to_pt;
-            best_pt = intersector_fwd.Pnt(k);
-          }
-        }
-        if (best_dist < std::numeric_limits<double>::max()) {
-          opposing_contact = best_pt;
-          return true;
-        }
-      }
+      if (try_ray(gp_Dir(-approach.X(), -approach.Y(), -approach.Z()))) {return true;}
+      if (try_ray(gp_Dir(approach.X(), approach.Y(), approach.Z()))) {return true;}
     }
   } catch (const Standard_Failure &) {
     // Fall through to BRepExtrema

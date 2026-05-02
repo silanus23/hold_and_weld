@@ -1,25 +1,26 @@
 <?xml version="1.0"?>
-<robot name="cylinder_small_workpiece">
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="cylinder_small_workpiece">
+  <xacro:property name="cyl_radius" value="0.150"/>
+  <xacro:property name="cyl_height" value="0.250"/>
 
   <link name="child_link">
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.150" length="0.250"/>
+        <cylinder radius="${cyl_radius}" length="${cyl_height}"/>
       </geometry>
       <material name="steel">
         <color rgba="0.7 0.7 0.75 1.0"/>
       </material>
     </visual>
+
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.150" length="0.250"/>
+        <cylinder radius="${cyl_radius}" length="${cyl_height}"/>
       </geometry>
     </collision>
+
     <inertial>
       <mass value="9.0"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
       <inertia ixx="0.09750" ixy="0.0" ixz="0.0"
                iyy="0.09750" iyz="0.0"
                izz="0.10125"/>
