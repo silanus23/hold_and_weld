@@ -93,7 +93,7 @@ TopoDS_Shape apply_transform(
       throw std::runtime_error("Failed to apply transform: IsDone() returned false");
     }
     return transformer.Shape();
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       std::string("Failed to apply transform: ") + e.GetMessageString());
   }
@@ -128,7 +128,7 @@ gp_Vec extract_surface_normal(const TopoDS_Face & face)
     normal.Normalize();
 
     return normal;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       std::string("Failed to extract surface normal: ") + e.GetMessageString());
   }
@@ -140,7 +140,7 @@ gp_Pnt extract_surface_center(const TopoDS_Face & face)
     GProp_GProps props;
     BRepGProp::SurfaceProperties(face, props);
     return props.CentreOfMass();
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       std::string("Failed to extract surface center: ") + e.GetMessageString());
   }
@@ -170,7 +170,7 @@ std::vector<Eigen::Vector3d> extract_corners_from_wire(const TopoDS_Wire & wire)
     }
 
     return corners;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       std::string("Failed to extract corners from wire: ") + e.GetMessageString());
   }
@@ -185,6 +185,8 @@ Eigen::Vector3d extract_translation(const gp_Trsf & transform)
 Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform)
 {
   gp_Mat r = transform.VectorialPart();
+  // Matrix is built directly via SetValues (gripper→world, no Invert()), so
+  // Value(row, col) is already the correct R — read straight, no transpose needed.
   Eigen::Matrix3d eigen_rot;
   eigen_rot(0, 0) = r.Value(1, 1); eigen_rot(0, 1) = r.Value(1, 2); eigen_rot(0, 2) = r.Value(1, 3);
   eigen_rot(1, 0) = r.Value(2, 1); eigen_rot(1, 1) = r.Value(2, 2); eigen_rot(1, 2) = r.Value(2, 3);

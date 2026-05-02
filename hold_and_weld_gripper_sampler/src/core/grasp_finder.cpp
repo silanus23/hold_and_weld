@@ -12,30 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
+#include <fcl/fcl.h>
 
 #include <algorithm>
-#include <iomanip>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
+
 #include <rclcpp/rclcpp.hpp>
+
+#include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
+#include "hold_and_weld_gripper_sampler/collision/embree_mesh_query.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
 namespace core
 {
-
-static std::string vec_to_string(const Eigen::Vector3d & v)
-{
-  std::ostringstream oss;
-  oss << "(" << std::fixed << std::setprecision(4)
-      << v.x() << ", " << v.y() << ", " << v.z() << ")";
-  return oss.str();
-}
 
 GraspFinder::GraspFinder(
   std::shared_ptr<const geometry::GeometryMapper> mapper,
@@ -46,8 +40,10 @@ GraspFinder::GraspFinder(
   const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles,
   const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons,
   const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines,
-  const GraspFinderConfig & config)
+  const GraspFinderConfig & config,
+  const TopoDS_Shape & fcl_primary_shape)
 : primary_shape_(primary_shape),
+  fcl_primary_shape_(fcl_primary_shape.IsNull() ? primary_shape : fcl_primary_shape),
   primary_topology_(primary_topology),
   gripper_(gripper),
   secondary_shapes_(secondary_shapes),
@@ -95,31 +91,39 @@ std::string GraspFinder::initialize()
       mapper_, gripper_, circles_opt, polygons_opt, lines_opt,
       config_.mesh_linear_deflection, config_.mesh_angular_deflection);
 
+    // Merge ground shapes into the secondary list for kissing surface contact analysis.
+    // Ground shapes must be included here so the bottom face of the workpiece is
+    // correctly banned. They are kept separate for FCL (routed to ground_halfspace_).
+    std::vector<TopoDS_Shape> all_contact_shapes = secondary_shapes_;
+    for (const auto & gs : config_.ground_shapes) {
+      all_contact_shapes.push_back(gs);
+    }
+
     kissing_constraint_ = std::make_shared<constraints::KissingSurfaceConstraint>(
-      mapper_, gripper_, secondary_shapes_,
+      mapper_, gripper_, all_contact_shapes,
       config_.kissing_contact_threshold, config_.collision_tolerance);
 
-    // Analyze geometry
     exclusion_constraint_->analyze_constraints(primary_shape_, primary_topology_);
     kissing_constraint_->analyze_constraints(primary_topology_);
 
     if (!config_.use_fcl) {return "FCL is required for grasp sampling";}
 
+    // Only pass the non-ground secondary shapes to add_secondary_shapes() so they
+    // land in secondary_bvhs_ and show up correctly in FCL stats.
+    // Ground shapes go through add_ground_plane_z() → ground_halfspace_ separately.
     fcl_checker_ = std::make_shared<geometry::FCLCollisionChecker>(
       gripper_,
-      primary_shape_,
+      fcl_primary_shape_,
       exclusion_constraint_->get_collision_volumes(),
-      kissing_constraint_->get_secondary_shapes(),
+      secondary_shapes_,
       false, 0.0,
       config_.triangulation_deflection);
 
-    if (config_.enable_ground_plane_check && config_.use_fcl_for_ground_plane) {
-      fcl_checker_->add_ground_plane(
-        config_.ground_bottom_z,
-        std::max(config_.ground_size_x, config_.ground_size_y),
-        0.1,
-        config_.ground_center_x,
-        config_.ground_center_y);
+    if (config_.use_fcl_for_ground_plane &&
+      (!config_.ground_shapes.empty() || config_.enable_ground_plane_check))
+    {
+      fcl_checker_->add_ground_plane(Eigen::Vector3d(0.0, 0.0, 1.0), config_.ground_bottom_z);
+      RCLCPP_DEBUG(logger_, "Ground halfspace added to FCL (z=%.4f)", config_.ground_bottom_z);
     }
 
     if (!fcl_checker_->is_valid()) {return "FCL checker initialization failed";}
@@ -129,7 +133,7 @@ std::string GraspFinder::initialize()
 
     initialized_ = true;
     return "";
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "OCCT Failure during GraspFinder init: %s", e.GetMessageString());
     return std::string("OCCT Failure: ") + e.GetMessageString();
   } catch (const std::exception & e) {
@@ -149,7 +153,6 @@ GraspFinderResult GraspFinder::find()
   }
 
   try {
-    // Phase 1: Topology Filtering
     auto banned_ids = kissing_constraint_->get_banned_surface_ids();
     auto valid_ids = compute_valid_surface_ids(banned_ids);
     auto exclusion_areas = merge_sample_areas();
@@ -167,7 +170,6 @@ GraspFinderResult GraspFinder::find()
       return result;
     }
 
-    // Phase 2: Contact Point Sampling
     sampling::ContactPointSampler sampler(config_.sampling);
     auto contact_pairs = sampler.generate_contact_pairs(primary_topology_, valid_ids,
           exclusion_areas);
@@ -181,16 +183,19 @@ GraspFinderResult GraspFinder::find()
       return result;
     }
 
-    // Phase 3: Orientation & Collision Finding
     angle_finding::GraspOrientationFinder finder(
       primary_shape_, gripper_,
       exclusion_constraint_, kissing_constraint_,
       config_.orientation);
 
     finder.set_fcl_checker(fcl_checker_);
+    auto embree_checker = std::make_shared<geometry::EmbreeMeshQuery>(fcl_primary_shape_);
+    finder.set_embree_checker(embree_checker);
 
     auto candidates = finder.find_valid_grasps(contact_pairs, primary_topology_);
     result.num_candidates = candidates.size();
+
+    fcl_checker_->log_collision_stats();
 
     RCLCPP_INFO(logger_, "Phase 3: %zu collision-free candidate(s)", result.num_candidates);
 
@@ -262,5 +267,5 @@ std::vector<core::SampleArea> GraspFinder::merge_sample_areas() const
   return merged;
 }
 
-} // namespace core
-} // namespace hold_and_weld_gripper_sampler
+}  // namespace core
+}  // namespace hold_and_weld_gripper_sampler

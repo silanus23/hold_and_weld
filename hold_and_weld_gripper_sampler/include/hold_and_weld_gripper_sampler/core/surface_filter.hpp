@@ -31,11 +31,6 @@ namespace core
  * Surface filters evaluate surfaces in a topology and return a list of
  * surface IDs that pass the filter criteria. This is used during pre-filtering
  * to eliminate unsuitable surfaces before grasp generation.
- *
- * Example filters:
- * - SurfaceDimensionFilter: Removes surfaces smaller than gripper fingers
- * - SurfaceGeometryFilter: Removes non-planar or curved surfaces
- * - OrientationFilter: Removes surfaces with unsuitable normals
  */
 class SurfaceFilter
 {

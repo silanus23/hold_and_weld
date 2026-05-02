@@ -1,22 +1,24 @@
 # =============================================================================
-# GraspFinder Configuration — Prism Workpiece (Start Position)
+# GraspFinder Configuration — Small Cylinder Workpiece
 # =============================================================================
-# Workpiece: prism_workpiece.urdf — 250mm × 800mm × 250mm rectangular bar
-#   dimensions in URDF box: size="0.25 0.80 0.25" → X=250mm, Y=800mm, Z=250mm
+# Workpiece: cylinder_small_workpiece.urdf — radius=150mm, height=250mm
+#   diameter = 300mm → well within gripper range (60mm–360mm)
 #
-# Assumed start pose: center at (1.2, 0.0, 0.125)
-#   → occupies x ∈ [1.075, 1.325]   (250mm wide)
-#              y ∈ [-0.40,  0.40]    (800mm long)
-#              z ∈ [0.0,    0.25]    (250mm tall, bottom on ground)
+# Start pose: center at (1.2, 0.0, 0.125)
+#   → bottom circular face flush on z = 0.0 (ground plane)
+#   → top circular face at z = 0.25
+#   → radial extent: x ∈ [1.05, 1.35], y ∈ [-0.15, 0.15]
 #
 # Graspable surface pairs (gripper opening: 60mm–360mm):
-#   Long sides (800×250mm):   y = -0.40 vs y = +0.40  →  800mm apart  ✗ too wide
-#   Short sides (250×250mm):  x = 1.075 vs x = 1.325  →  250mm apart  ✓ MAIN TARGET
-#   Top vs bottom (800×250mm):z = 0.25  vs z = 0.0    →  250mm apart  ✓ (bottom banned by ground)
+#   Curved side vs curved side: diameter = 300mm  ✓  MAIN TARGET
+#     ShapeRefiner splits the curved surface into arc patches;
+#     opposing patches are ~300mm apart — well within range.
+#   Top flat vs bottom flat:    height   = 250mm  ✓
+#     (bottom face banned by ground plane — top-only grasp unlikely
+#      but pipeline should handle it cleanly)
 #
-# Primary grasp target: the two SHORT END faces (250×250mm), 250mm apart.
-# The long sides (Y direction, 800mm separation) exceed the gripper range and
-# will be filtered out by the contact point sampler.
+# ShapeRefiner is REQUIRED here: without it the cylinder is a single
+# curved face and no opposing surface pair can be formed.
 #
 # Coordinate system: meters / quaternion. Frame: world.
 # =============================================================================
@@ -28,11 +30,10 @@
     # =========================================================================
     # Primary Workpiece
     # =========================================================================
-    # 250×800×250 mm rectangular bar. URDF origin is at the geometric center.
-    # Translation puts the center at (1.2, 0.0, 0.125) so the bottom face
-    # sits flush on z = 0 (ground plane).
+    # Cylinder: radius=100mm, height=250mm. URDF origin at geometric center.
+    # Translation puts center at (1.2, 0.0, 0.125) → bottom sits on z=0.
     primary:
-      urdf_path: 'config/prism_workpiece.urdf'
+      urdf_path: 'config/cylinder_small_workpiece.urdf'
       transform:
         translation:
           x: 1.2
@@ -48,7 +49,7 @@
     # Gripper
     # =========================================================================
     # Fingers: 30×40×200mm. Opening: 60mm (closed) → 360mm (fully open).
-    # The short-end separation (250mm) is well within range.
+    # 200mm diameter cylinder is comfortably within range.
     gripper:
       urdf_path: 'config/test_gripper.urdf'
       max_opening: 0.36    # 360mm
@@ -57,7 +58,7 @@
     # Secondary Shapes (collision obstacles)
     # =========================================================================
     secondaries:
-      # Ground plane at z = 0 — bans the bottom face of the prism and prevents
+      # Ground plane at z=0 — bans the bottom circular face and prevents
       # the gripper from descending below the floor.
       - id: 'ground_plane'
         type: 'ground_plane'
@@ -68,13 +69,13 @@
     # =========================================================================
     # Exclusion Zones
     # =========================================================================
-    # None defined for the bare prism. Typical candidates to add:
+    # None defined. Add weld seams or fixture zones here if needed:
     #
     # exclusion_zones:
     #   lines:
-    #     - id: 'weld_seam_top'
-    #       start: { x: 1.075, y: -0.35, z: 0.25 }
-    #       end:   { x: 1.325, y: -0.35, z: 0.25 }
+    #     - id: 'weld_seam'
+    #       start: { x: 1.1, y: 0.0, z: 0.25 }
+    #       end:   { x: 1.3, y: 0.0, z: 0.25 }
     #       exclusion_radius: 0.015
     #       clearance: 0.010
 
@@ -82,59 +83,63 @@
     # Sampling
     # =========================================================================
     sampling:
-      # Opposing flat faces on a box are perfectly anti-parallel.
-      min_angle_deg: 160.0
+      # Opposing arc patches on a cylinder are perfectly anti-parallel.
+      min_angle_deg: 173.0   # rejects adjacent arc patches (~165°), keeps only true opposites (~180°)
       max_angle_deg: 180.0
 
-      # Short-end separation = 250mm → fits in [60mm, 360mm] range.
-      # Top face separation = 250mm → also fits (bottom banned, so this pair
-      # will likely yield 0 contact points after kissing surface bans bottom).
-      min_gripper_opening: 0.06    # 60mm — keeps fingers clear of face edges
+      # Curved side separation = diameter = 300mm → fits in [60mm, 360mm].
+      min_gripper_opening: 0.06    # 60mm
       max_gripper_opening: 0.36    # 360mm
 
-      # 10mm grid on the 250×250mm end faces → ~25×25 = 625 samples per face.
-      # Thorough coverage without being slow.
+      # 10mm grid — fine enough for a 300mm diameter cylinder.
       sample_density: 0.01
 
       normal_sample_density: 1.0
-      max_lateral_deviation: 0.03   # 30mm diagonal tolerance
-      alignment_threshold: 0.95
+      max_lateral_deviation: 0.05   # 50mm
+      alignment_threshold: 0.10     # ~84° — relaxed for curved arc patches where
+                                    # chord vs local normal diverges away from patch centre
+
+    # =========================================================================
+    # Shape Refiner
+    # =========================================================================
+    # MUST be enabled for cylinders — splits the single curved face into
+    # arc patches so opposing surface pairs can be identified.
+    shape_refiner:
+      enabled: true
+      max_cylinder_radius: 0.200   # above our 150mm radius → triggers arc splitting
+      max_arc_length: 0.050        # 50mm arc segments — forces ~19 splits on 300mm diameter, ~8+ patches
+      enclave_area_ratio: 0.005
+      enclave_angle_threshold: 45.0
 
     # =========================================================================
     # Orientation Finding
     # =========================================================================
     orientation:
-      finger_length: 0.2            # 200mm
+      finger_length: 0.20           # 200mm — actual finger length, used for radial sweep and visualizer
       finger_radius: 0.02           # 20mm (half of 40mm finger width)
 
-      # The 250×250mm end faces have exactly 4 edges each — 5 candidates
-      # gives full coverage with a spare for any shared/coincident edges.
-      max_edge_candidates: 5
+      # Cylinder arc patches have curved edges — more candidates needed.
+      max_orientations_per_pair: 100
+      max_edge_candidates: 8
       dual_seed_dedup_tolerance_deg: 3.0
       max_edges_per_contact: 0       # unlimited
 
-      # Three offsets per edge seed — adequate for square flat faces.
+      # Wider angle sweep for curved geometry.
       angle_offsets: [-15.0, 0.0, 15.0]
 
       stop_on_first_valid: false
       collision_tolerance: 0.001     # 1mm
-      debug_full_sweep: false        # DIAGNOSTIC: bypass radial map, test all 360°
-      debug_sweep_step_deg: 10.0     # 36 angles per contact pair
+      debug_full_sweep: true
+      debug_sweep_step_deg: 5.0
 
-      # Sample random angles within each LOW arc instead of fixed 15° grid.
       randomize_seeds: true
 
     # =========================================================================
     # Kissing Surface
     # =========================================================================
     kissing:
-      # Surfaces with more than 80% area in contact with a secondary are
-      # removed from the candidate set entirely.
-      # The bottom face (z=0.0) will be ~100% in contact with the ground plane
-      # and will be fully banned — correct behaviour.
+      # Bottom face in contact with ground plane → banned.
       contact_threshold: 0.8
-      # Tolerance for gripper-vs-secondary collision checks (metres).
-      # 1mm gives a small safety margin above the ground / fixtures.
       collision_tolerance: 0.001
 
     # =========================================================================
@@ -142,10 +147,8 @@
     # =========================================================================
     fcl:
       enabled: true
-      # 1mm triangulation is sufficient for pure box geometry.
-      triangulation_deflection: 0.001
-
-
+      # Tighter triangulation for curved geometry — 0.5mm gives a smooth mesh.
+      triangulation_deflection: 0.0005
 
     # =========================================================================
     # Output

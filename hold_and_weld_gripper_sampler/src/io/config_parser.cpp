@@ -31,7 +31,6 @@ std::optional<ParsedConfig> ConfigParser::parse_file(
   const std::string & yaml_path,
   const std::string & package_share_dir)
 {
-  // Set base directory for relative path resolution
   if (!package_share_dir.empty()) {
     base_dir_ = package_share_dir;
   } else {
@@ -306,7 +305,6 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
     return false;
   }
 
-  // Parse transform (optional for all types)
   if (node["transform"]) {
     parse_transform(node["transform"], config.translation, config.rotation);
   }
@@ -456,6 +454,9 @@ bool ConfigParser::parse_orientation(
   if (node["max_edge_candidates"]) {
     config.max_edge_candidates = node["max_edge_candidates"].as<size_t>();
   }
+  if (node["max_orientations_per_pair"]) {
+    config.max_orientations_per_pair = node["max_orientations_per_pair"].as<size_t>();
+  }
   if (node["dual_seed_dedup_tolerance_deg"]) {
     config.dual_seed_dedup_tolerance_deg = node["dual_seed_dedup_tolerance_deg"].as<double>();
   }
@@ -474,6 +475,15 @@ bool ConfigParser::parse_orientation(
   if (node["collision_tolerance"]) {
     config.collision_tolerance = node["collision_tolerance"].as<double>();
   }
+  if (node["randomize_seeds"]) {
+    config.randomize_seeds = node["randomize_seeds"].as<bool>();
+  }
+  if (node["debug_full_sweep"]) {
+    config.debug_full_sweep = node["debug_full_sweep"].as<bool>();
+  }
+  if (node["debug_sweep_step_deg"]) {
+    config.debug_sweep_step_deg = node["debug_sweep_step_deg"].as<double>();
+  }
 
   return true;
 }
@@ -488,9 +498,6 @@ bool ConfigParser::parse_output(const YAML::Node & node, OutputConfig & config)
   }
   if (node["min_quality"]) {
     config.min_quality = node["min_quality"].as<double>();
-  }
-  if (node["include_debug"]) {
-    config.include_debug = node["include_debug"].as<bool>();
   }
 
   return true;

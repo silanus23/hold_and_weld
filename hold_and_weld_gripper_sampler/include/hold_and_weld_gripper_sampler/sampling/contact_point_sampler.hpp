@@ -39,14 +39,14 @@ namespace sampling
  */
 struct SamplingConfig
 {
-  double sample_density = 0.01;          // Grid spacing on surfaces [m]
-  double min_gripper_opening = 0.02;     // Minimum grip distance [m]
-  double max_gripper_opening = 0.15;     // Maximum grip distance [m]
-  double min_angle_deg = 160.0;          // Minimum angle between opposing normals [deg]
-  double max_angle_deg = 180.0;          // Maximum angle between opposing normals [deg]
-  double normal_sample_density = 1.0;    // Samples per cm² for normal validation
-  double alignment_threshold = 0.95;     // Minimum dot product for grip axis / normal alignment
-  double max_lateral_deviation = 0.02;   // Maximum allowed lateral offset between contact pair [m]
+  double sample_density = 0.01;
+  double min_gripper_opening = 0.02;
+  double max_gripper_opening = 0.15;
+  double min_angle_deg = 160.0;
+  double max_angle_deg = 180.0;
+  double normal_sample_density = 1.0;
+  double alignment_threshold = 0.95;
+  double max_lateral_deviation = 0.02;
 };
 
 /**
@@ -104,7 +104,7 @@ public:
   std::vector<ContactPair> generate_contact_pairs(
     const geometry::Topology & topology,
     const std::vector<int> & valid_surface_ids,
-    const std::vector<core::SampleArea> & exclusion_areas);
+    const std::vector<core::SampleArea> & exclusion_areas) const;
 
 private:
   /**
@@ -257,18 +257,14 @@ private:
    * @param face Face to sample
    * @param surf Geometric surface handle
    * @param wires Inclusion/exclusion wires defining allowed region
-   * @param min_samples Minimum number of samples
-   * @param max_samples Maximum number of samples
-   * @param samples_per_cm2 Target sample density
+   * @param target_samples Number of grid points to place (caller is responsible for sizing)
    * @return Sampled normal vectors
    */
   std::vector<gp_Vec> sample_normals_from_allowed_region(
     const TopoDS_Face & face,
     const Handle(Geom_Surface) & surf,
     const std::vector<TopoDS_Wire> & wires,
-    int min_samples,
-    int max_samples,
-    double samples_per_cm2) const;
+    int target_samples) const;
 
   /**
    * @brief Remove spatially duplicate contact pairs using grid-based bucketing.

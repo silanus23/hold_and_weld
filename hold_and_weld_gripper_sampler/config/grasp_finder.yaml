@@ -183,4 +183,3 @@
       json_path: 'grasps/grasps.json'
       max_grasps: 100              # Return up to 100 grasps
       min_quality: 0.0             # Return all grasps regardless of quality
-      include_debug: true          # Include debug info in JSON output

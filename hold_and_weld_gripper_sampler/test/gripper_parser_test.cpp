@@ -24,7 +24,7 @@
 #include <BRepBndLib.hxx>
 
 using hold_and_weld_gripper_sampler::ParsedGripper;
-using hold_and_weld_gripper_sampler::configure_gripper;
+using hold_and_weld_gripper_sampler::core::configure_gripper;
 using hold_and_weld_gripper_sampler::io::GripperParser;
 
 namespace test_constants
@@ -279,6 +279,42 @@ protected:
   GripperParser parser_;
 };
 
+class GripperParserThrowTest : public ::testing::TestWithParam<const char *>
+{
+protected:
+  GripperParser parser_;
+};
+
+TEST_P(GripperParserThrowTest, ParseFromUrdfString_WithInvalidInput_ThrowsRuntimeError)
+{
+  EXPECT_THROW(
+    parser_.parse_from_urdf_string(GetParam()),
+    std::runtime_error
+  );
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  InvalidInputs,
+  GripperParserThrowTest,
+  ::testing::Values(
+    NO_METADATA_URDF,
+    MISSING_FINGER_URDF,
+    REVOLUTE_JOINT_URDF,
+    "not valid xml at all <><>",
+    "<?xml version=\"1.0\"?><something></something>",
+    R"(
+<?xml version="1.0"?>
+<robot name="test">
+  <gripper_metadata>
+    <base_link name="nonexistent_base"/>
+    <finger finger_id="1" link="finger_1" joint="joint_1"/>
+    <finger finger_id="2" link="finger_2" joint="joint_2"/>
+  </gripper_metadata>
+</robot>
+)"
+  )
+);
+
 TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_ExtractsAllFieldsCorrectly)
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
@@ -449,69 +485,6 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithCylinderGripper_ParsesCorrectl
   // Max opening should be 2 * 0.05 = 0.10
   EXPECT_NEAR(gripper.max_opening, test_constants::kCylinderGripperMaxOpening,
     test_constants::kPositionTolerance);
-}
-
-TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingMetadata_ThrowsRuntimeError)
-{
-  EXPECT_THROW(
-    parser_.parse_from_urdf_string(NO_METADATA_URDF),
-    std::runtime_error
-  );
-}
-
-TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingFinger_ThrowsRuntimeError)
-{
-  EXPECT_THROW(
-    parser_.parse_from_urdf_string(MISSING_FINGER_URDF),
-    std::runtime_error
-  );
-}
-
-TEST_F(GripperParserTest, ParseFromUrdfString_WithNonPrismaticJoint_ThrowsRuntimeError)
-{
-  // Revolute joints are not supported for finger 1
-  EXPECT_THROW(
-    parser_.parse_from_urdf_string(REVOLUTE_JOINT_URDF),
-    std::runtime_error
-  );
-}
-
-TEST_F(GripperParserTest, ParseFromUrdfString_WithInvalidXml_ThrowsRuntimeError)
-{
-  const char invalid_xml[] = "not valid xml at all <><>";
-  EXPECT_THROW(
-    parser_.parse_from_urdf_string(invalid_xml),
-    std::runtime_error
-  );
-}
-
-TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingRobotElement_ThrowsRuntimeError)
-{
-  const char no_robot[] = "<?xml version=\"1.0\"?><something></something>";
-  EXPECT_THROW(
-    parser_.parse_from_urdf_string(no_robot),
-    std::runtime_error
-  );
-}
-
-TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingLink_ThrowsRuntimeError)
-{
-  const char missing_link_urdf[] =
-    R"(
-<?xml version="1.0"?>
-<robot name="test">
-  <gripper_metadata>
-    <base_link name="nonexistent_base"/>
-    <finger finger_id="1" link="finger_1" joint="joint_1"/>
-    <finger finger_id="2" link="finger_2" joint="joint_2"/>
-  </gripper_metadata>
-</robot>
-)";
-
-  EXPECT_THROW(
-    parser_.parse_from_urdf_string(missing_link_urdf),
-    std::runtime_error
-  );
 }
 
 TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingOptionalFields_UsesDefaults)

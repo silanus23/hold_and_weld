@@ -66,7 +66,7 @@ static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 GeometryMapper::GeometryMapper() {}
 GeometryMapper::~GeometryMapper() {}
 
-// Helper for orientation math to declutter the URDF parser
+// URDF uses intrinsic XYZ RPY; OCCT has no direct RPY constructor.
 static gp_Quaternion rpy_to_quat(double r, double p, double y)
 {
   double cy = std::cos(y * 0.5);
@@ -162,6 +162,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
         if (x <= 1e-6 || y <= 1e-6 || z <= 1e-6) {
           throw std::runtime_error("Box dimensions too small");
         }
+        // URDF centers box at origin; MakeBox takes a corner, so shift by -half.
         BRepPrimAPI_MakeBox maker(gp_Pnt(-x / 2.0, -y / 2.0, -z / 2.0), x, y, z);
         shape = maker.Shape();
 
@@ -173,6 +174,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
           throw std::runtime_error("Invalid cylinder attributes");
         }
         if (r <= 1e-6 || l <= 1e-6) {throw std::runtime_error("Cylinder dimensions too small");}
+        // OCCT builds cylinder from z=0 up; URDF centers it, so drop axis origin by half-length.
         BRepPrimAPI_MakeCylinder maker(gp_Ax2(gp_Pnt(0, 0, -l / 2.0), gp_Dir(0, 0, 1)), r, l);
         shape = maker.Shape();
 
@@ -193,7 +195,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
         }
         shape = transformer.Shape();
       }
-    } catch (Standard_Failure & e) {
+    } catch (const Standard_Failure & e) {
       RCLCPP_ERROR(logger_, "OCCT Geometric Error for link '%s': %s", link_name_str.c_str(),
             e.GetMessageString());
       continue;
@@ -252,6 +254,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_step(
     gp_Trsf trans_trsf;
     trans_trsf.SetTranslation(gp_Vec(translation.x(), translation.y(), translation.z()));
 
+    // OCCT applies right-to-left: rotate in local frame first, then translate.
     BRepBuilderAPI_Transform transformer(shape, trans_trsf * rot_trsf, Standard_True);
 
     if (!transformer.IsDone()) {
@@ -265,8 +268,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_step(
 
     RCLCPP_INFO(logger_, "STEP file loaded successfully");
     return result;
-
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(std::string("OCCT STEP Error: ") + e.GetMessageString());
   }
 }
@@ -275,7 +277,7 @@ Topology GeometryMapper::create_topology_from_shape(
   const TopoDS_Shape & shape,
   const std::string & link_name)
 {
-  (void)link_name;  // Reserved for future use (naming/tagging)
+  (void)link_name;
 
   RCLCPP_DEBUG(logger_, "Extracting topology from shape");
 
@@ -292,7 +294,7 @@ Topology GeometryMapper::create_topology_from_shape(
   try {
     TopTools_IndexedMapOfShape vertex_map;
     TopTools_IndexedMapOfShape edge_map;
-    face_map_.Clear();
+    face_map_.Clear();  // member — reset so find_topology_surface_id stays valid on re-use
 
     TopExp::MapShapes(shape, TopAbs_VERTEX, vertex_map);
     TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
@@ -383,7 +385,6 @@ Topology GeometryMapper::create_topology_from_shape(
         Standard_Real u_min, u_max, v_min, v_max;
         BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
-        // Standard: Sampling at midpoint with standard epsilon
         GeomLProp_SLProps props_normal(surf_geom, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1,
           1e-6);
 
@@ -412,7 +413,7 @@ Topology GeometryMapper::create_topology_from_shape(
       corners.size(), edges.size(), surfaces.size());
 
     return topology;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "OCCT exception during topology extraction: %s", e.GetMessageString());
     throw std::runtime_error(
       std::string("Topology extraction failed: ") + e.GetMessageString());
@@ -456,12 +457,12 @@ int GeometryMapper::find_topology_surface_id(const TopoDS_Face & occt_face) cons
   if (occt_index == 0) {
     throw std::runtime_error("Face not found in topology");
   }
-  return occt_index - 1;
+  return occt_index - 1;  // OCCT maps are 1-based; topology IDs are 0-based
 }
 
 TopoDS_Face GeometryMapper::get_occt_face(int surface_id) const
 {
-  int occt_index = surface_id + 1;
+  int occt_index = surface_id + 1;  // 0-based → 1-based
   if (occt_index < 1 || occt_index > face_map_.Extent()) {
     throw std::out_of_range(
       "Surface ID " + std::to_string(surface_id) +

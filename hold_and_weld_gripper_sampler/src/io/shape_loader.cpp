@@ -23,7 +23,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
@@ -32,7 +32,6 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
-#include <BRep_Builder.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
@@ -40,13 +39,17 @@
 #include <IFSelect_ReturnStatus.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Precision.hxx>
-#include <rclcpp/rclcpp.hpp>
 #include <RWStl.hxx>
-#include <STEPControl_Reader.hxx>
 #include <Standard_Failure.hxx>
+#include <STEPControl_Reader.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shell.hxx>
+
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <rclcpp/rclcpp.hpp>
+
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -666,19 +669,8 @@ gp_Trsf ShapeLoader::create_transform(
   const Eigen::Vector3d & translation,
   const Eigen::Quaterniond & rotation) const
 {
-  Eigen::Quaterniond normalized_rotation =
-    validate_and_normalize_quaternion(rotation, "create_transform");
-
-  gp_Quaternion quat(
-    normalized_rotation.x(), normalized_rotation.y(),
-    normalized_rotation.z(), normalized_rotation.w());
-  gp_Trsf rot_transform;
-  rot_transform.SetRotation(quat);
-
-  gp_Trsf trans_transform;
-  trans_transform.SetTranslation(gp_Vec(translation.x(), translation.y(), translation.z()));
-
-  return trans_transform * rot_transform;
+  validate_and_normalize_quaternion(rotation, "create_transform");
+  return geometry::create_transform(translation, rotation);
 }
 
 }  // namespace io

@@ -55,6 +55,7 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       }
       z_axis.Normalize();
 
+      // Fallback to X when normal is nearly parallel to Z — avoids degenerate cross product.
       gp_Vec ref_vec(0, 0, 1);
       if (std::abs(z_axis.Dot(ref_vec)) > 0.9) {
         ref_vec = gp_Vec(1, 0, 0);
@@ -64,9 +65,8 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       if (x_axis.Magnitude() < 1e-6) {continue;}
       x_axis.Normalize();
 
-      gp_Vec y_axis = z_axis.Crossed(x_axis);
-      y_axis.Normalize();
-
+      // Build a local frame aligned with the surface normal so the bounding box
+      // measures true planar extents rather than world-axis projections.
       gp_Ax3 local_frame(surface.center,
         gp_Dir(z_axis.XYZ()),
         gp_Dir(x_axis.XYZ()));
@@ -88,14 +88,14 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       double xmin, ymin, zmin, xmax, ymax, zmax;
       bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
 
-      // We only care about the planar dimensions (X and Y in the local frame)
       double dim_x = xmax - xmin;
       double dim_y = ymax - ymin;
 
+      // Both planar dimensions must meet the threshold — smallest side determines graspability.
       if (std::min(dim_x, dim_y) >= min_dimension_) {
         valid_surface_ids.push_back(static_cast<int>(i));
       }
-    } catch (Standard_Failure & e) {
+    } catch (const Standard_Failure & e) {
       RCLCPP_WARN(logger_, "Filter failed for surface %zu: %s", i, e.GetMessageString());
     }
   }
@@ -108,5 +108,5 @@ std::string SurfaceDimensionFilter::get_name() const
   return "SurfaceDimensionFilter";
 }
 
-} // namespace filters
-} // namespace hold_and_weld_gripper_sampler
+}  // namespace filters
+}  // namespace hold_and_weld_gripper_sampler

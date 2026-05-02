@@ -40,6 +40,10 @@ void IKCostFunctor::set_target_seed(const std::vector<double> & seed)
   q_target_seed_ = seed;
 }
 
+// NOTE: This templated operator is intentionally only ever instantiated with T = double.
+// It is used via ceres::NumericDiffCostFunction which calls it with plain doubles only.
+// If you ever switch to ceres::AutoDiffCostFunction, this function must be moved to
+// the header so Ceres can instantiate it with T = ceres::Jet for automatic differentiation.
 template<typename T>
 bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
 {

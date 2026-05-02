@@ -76,8 +76,6 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
   constexpr Standard_Real lin_deflection = 0.0001;
   constexpr Standard_Real ang_deflection = 0.5;
 
-  size_t mesh_failures = 0;
-
   try {
     if (!gripper_.finger_1.IsNull()) {
       BRepMesh_IncrementalMesh(gripper_.finger_1, lin_deflection, Standard_False, ang_deflection);
@@ -88,7 +86,7 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
     if (!gripper_.base.IsNull()) {
       BRepMesh_IncrementalMesh(gripper_.base, lin_deflection, Standard_False, ang_deflection);
     }
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Critical gripper meshing failure: %s", e.GetMessageString());
     throw std::runtime_error("Gripper geometry is unmeshable.");
   }
@@ -98,8 +96,9 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
     try {
       BRepMesh_IncrementalMesh(secondary_shapes_[i], lin_deflection, Standard_False,
             ang_deflection);
-    } catch (Standard_Failure & e) {
-      RCLCPP_WARN(logger_, "Secondary shape %zu failed to mesh - results may be inaccurate", i);
+    } catch (const Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "Secondary shape %zu failed to mesh: %s — results may be inaccurate",
+        i, e.GetMessageString());
     }
   }
 }
@@ -127,7 +126,7 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
   for (const auto & surface : all_surfaces) {
     try {
       BRepMesh_IncrementalMesh(surface.face, mesh_lin, Standard_False, mesh_ang);
-    } catch (Standard_Failure & e) {
+    } catch (const Standard_Failure & e) {
       RCLCPP_WARN(logger_, "Failed to mesh surface %d - contact ratio may be zero",
             mapper_->find_topology_surface_id(surface.face));
     }
@@ -169,7 +168,6 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
     banned_surface_ids_.size(), partial_exclusions_.size());
 
   if (!banned_surface_ids_.empty()) {
-    // Build banned surface ID list for summary log
     std::string banned_str;
     for (size_t i = 0; i < banned_surface_ids_.size(); i++) {
       if (i > 0) {banned_str += ", ";}
@@ -235,7 +233,7 @@ double KissingSurfaceConstraint::measure_contact_ratio(
           contact_area += tri_area;
           break;
         }
-      } catch (Standard_Failure & e) {
+      } catch (const Standard_Failure & e) {
         continue;
       }
     }
@@ -272,7 +270,7 @@ TopoDS_Wire KissingSurfaceConstraint::extract_contact_boundary(
       for (TopExp_Explorer exp(section.Shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
         boundary_edges.push_back(TopoDS::Edge(exp.Current()));
       }
-    } catch (Standard_Failure & e) {
+    } catch (const Standard_Failure & e) {
       RCLCPP_DEBUG(logger_, "Section failed for surface %d: %s", surface_id, e.GetMessageString());
     }
   }
@@ -289,7 +287,7 @@ TopoDS_Wire KissingSurfaceConstraint::extract_contact_boundary(
 
     TopoDS_Wire boundary_wire = wire_builder.Wire();
     return boundary_wire;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Wire building failure on surface %d: %s", surface_id,
           e.GetMessageString());
     return TopoDS_Wire();
@@ -298,7 +296,7 @@ TopoDS_Wire KissingSurfaceConstraint::extract_contact_boundary(
 
 bool KissingSurfaceConstraint::intersects_secondary(
   double grip_distance,
-  const Eigen::Isometry3d & grasp_pose) const
+  const gp_Trsf & grasp_transform) const
 {
   collision_stats_.total_checks++;
 
@@ -307,19 +305,14 @@ bool KissingSurfaceConstraint::intersects_secondary(
   }
 
   if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    RCLCPP_ERROR(logger_, "FCL checker not available - cannot check secondary collision");
-    throw std::runtime_error("FCL checker not available in intersects_secondary");
+    RCLCPP_ERROR(logger_, "FCL checker not available — rejecting grasp conservatively");
+    return true;
   }
 
-  // Convert Eigen isometry to OCCT transform — SetValues takes the 3x4 matrix
-  // (rotation + translation) row by row, fourth column is translation
-  gp_Trsf grasp_transform;
-  grasp_transform.SetValues(
-    grasp_pose(0, 0), grasp_pose(0, 1), grasp_pose(0, 2), grasp_pose(0, 3),
-    grasp_pose(1, 0), grasp_pose(1, 1), grasp_pose(1, 2), grasp_pose(1, 3),
-    grasp_pose(2, 0), grasp_pose(2, 1), grasp_pose(2, 2), grasp_pose(2, 3)
-  );
-
+  if (fcl_checker_->collides_with_ground(grasp_transform, grip_distance, collision_tolerance_)) {
+    collision_stats_.fcl_rejections++;
+    return true;
+  }
   bool collision = fcl_checker_->collides_with_secondaries(
     grasp_transform, grip_distance, collision_tolerance_);
 
@@ -352,7 +345,7 @@ const std::vector<TopoDS_Shape> & KissingSurfaceConstraint::get_secondary_shapes
   return secondary_shapes_;
 }
 
-CollisionStats KissingSurfaceConstraint::get_collision_stats() const
+GraspCollisionStats KissingSurfaceConstraint::get_collision_stats() const
 {
   return collision_stats_;
 }

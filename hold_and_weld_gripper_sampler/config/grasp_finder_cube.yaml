@@ -111,4 +111,3 @@
     output:
       max_grasps: 50
       min_quality: 0.0
-      include_debug: true

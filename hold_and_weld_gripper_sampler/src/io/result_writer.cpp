@@ -98,7 +98,6 @@ std::string ResultWriter::to_json_string(
 
     json << "{" << newline;
 
-  // Metadata section
     if (options.include_metadata) {
       json << indent << "\"metadata\":" << sep << "{" << newline;
 
@@ -122,35 +121,33 @@ std::string ResultWriter::to_json_string(
           metadata.config_source << "\"," << newline;
       }
 
-      if (options.include_debug) {
-        json << indent << indent << "\"num_surfaces_total\":" << sep <<
-          metadata.num_surfaces_total << "," << newline;
-        json << indent << indent << "\"num_surfaces_valid\":" << sep <<
-          metadata.num_surfaces_valid << "," << newline;
-        json << indent << indent << "\"num_surfaces_banned\":" << sep <<
-          metadata.num_surfaces_banned << "," << newline;
-        json << indent << indent << "\"num_contact_pairs\":" << sep <<
-          metadata.num_contact_pairs << "," << newline;
-        json << indent << indent << "\"num_candidates\":" << sep <<
-          metadata.num_candidates << "," << newline;
+      json << indent << indent << "\"num_surfaces_total\":" << sep <<
+        metadata.num_surfaces_total << "," << newline;
+      json << indent << indent << "\"num_surfaces_valid\":" << sep <<
+        metadata.num_surfaces_valid << "," << newline;
+      json << indent << indent << "\"num_surfaces_banned\":" << sep <<
+        metadata.num_surfaces_banned << "," << newline;
+      json << indent << indent << "\"num_contact_pairs\":" << sep <<
+        metadata.num_contact_pairs << "," << newline;
+      json << indent << indent << "\"num_candidates\":" << sep <<
+        metadata.num_candidates << "," << newline;
 
-        if (metadata.finger_length > 0.0) {
-          json << indent << indent << "\"finger_length\":" << sep <<
-            metadata.finger_length << "," << newline;
-        }
+      if (metadata.finger_length > 0.0) {
+        json << indent << indent << "\"finger_length\":" << sep <<
+          metadata.finger_length << "," << newline;
+      }
 
-        if (metadata.total_time_seconds > 0) {
-          json << indent << indent << "\"total_time_seconds\":" << sep <<
-            metadata.total_time_seconds << "," << newline;
-        }
-        if (metadata.sampling_time_seconds > 0) {
-          json << indent << indent << "\"sampling_time_seconds\":" << sep <<
-            metadata.sampling_time_seconds << "," << newline;
-        }
-        if (metadata.orientation_time_seconds > 0) {
-          json << indent << indent << "\"orientation_time_seconds\":" << sep <<
-            metadata.orientation_time_seconds << "," << newline;
-        }
+      if (metadata.total_time_seconds > 0) {
+        json << indent << indent << "\"total_time_seconds\":" << sep <<
+          metadata.total_time_seconds << "," << newline;
+      }
+      if (metadata.sampling_time_seconds > 0) {
+        json << indent << indent << "\"sampling_time_seconds\":" << sep <<
+          metadata.sampling_time_seconds << "," << newline;
+      }
+      if (metadata.orientation_time_seconds > 0) {
+        json << indent << indent << "\"orientation_time_seconds\":" << sep <<
+          metadata.orientation_time_seconds << "," << newline;
       }
 
       json << indent << indent << "\"num_grasps_output\":" << sep << filtered_grasps.size() <<
@@ -229,7 +226,6 @@ std::string ResultWriter::to_json_string(
   const ResultMetadata & metadata,
   const WriterOptions & options)
 {
-  // Merge statistics from result into metadata
   ResultMetadata merged_metadata = metadata;
   merged_metadata.num_contact_pairs = result.num_contact_pairs;
   merged_metadata.num_surfaces_valid = result.num_valid_surfaces;
@@ -269,14 +265,12 @@ std::vector<Grasp> ResultWriter::filter_grasps(
   filtered.reserve(grasps.size());
 
   for (const auto & grasp : grasps) {
-    // Filter by quality
     if (grasp.quality_score < options.min_quality) {
       continue;
     }
 
     filtered.push_back(grasp);
 
-    // Limit count
     if (options.max_grasps > 0 && filtered.size() >= options.max_grasps) {
       break;
     }

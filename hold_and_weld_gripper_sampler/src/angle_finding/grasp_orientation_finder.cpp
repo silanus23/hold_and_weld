@@ -13,8 +13,11 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
+#include <random>
+#include <stdexcept>
 #include <vector>
 
 #include <gp_Ax3.hxx>
@@ -36,49 +39,88 @@ namespace hold_and_weld_gripper_sampler
 namespace angle_finding
 {
 
+// ray origin lifted above surface to avoid self-intersection
 static constexpr double kCeilingOffset = 0.010;
+static constexpr double kSeedStepRad = 15.0 * M_PI / 180.0;  // seed spacing within a graspable arc
 
-Grasp to_grasp(const GraspCandidate & candidate)
-{
-  // TCP is the midpoint between the two contact points — not the gripper base.
-  gp_Pnt tcp(
-    (candidate.contact_1.X() + candidate.contact_2.X()) / 2.0,
-    (candidate.contact_1.Y() + candidate.contact_2.Y()) / 2.0,
-    (candidate.contact_1.Z() + candidate.contact_2.Z()) / 2.0);
-
-  return Grasp::create(
-    geometry::to_eigen(tcp),
-    geometry::extract_quaternion(candidate.gripper_transform),
-    candidate.grip_distance,
-    geometry::to_eigen(candidate.contact_1),
-    geometry::to_eigen(candidate.contact_2),
-    candidate.surface_id_1,
-    candidate.surface_id_2,
-    candidate.quality_score
-  );
-}
-
+// Finds all overlapping pieces between two arcs, each of which may wrap the 0/2pi seam.
 static bool angular_overlap(
   double a_start, double a_end,
   double b_start, double b_end,
-  double & out_start, double & out_end)
+  std::vector<std::pair<double, double>> & out_overlaps)
 {
-  constexpr double k2Pi = 2.0 * M_PI;
-
-  struct Piece { double s, e; };
-  auto pieces = [&](double s, double e) -> std::vector<Piece> {
-      if (s <= e) {return {{s, e}};}
-      return {{s, k2Pi}, {0.0, e}};
+  auto split = [](double s, double e) -> std::array<std::pair<double, double>, 2> {
+      if (s <= e) {return {{{s, e}, {e, e}}};}
+      return {{{s, 2.0 * M_PI}, {0.0, e}}};
     };
 
-  for (const auto & ap : pieces(a_start, a_end)) {
-    for (const auto & bp : pieces(b_start, b_end)) {
-      double os = std::max(ap.s, bp.s);
-      double oe = std::min(ap.e, bp.e);
-      if (os < oe) {out_start = os; out_end = oe; return true;}
+  bool found = false;
+  for (const auto & [a_piece_start, a_piece_end] : split(a_start, a_end)) {
+    if (a_piece_start >= a_piece_end) {break;}
+    for (const auto & [b_piece_start, b_piece_end] : split(b_start, b_end)) {
+      if (b_piece_start >= b_piece_end) {break;}
+      const double overlap_start = std::max(a_piece_start, b_piece_start);
+      const double overlap_end = std::min(a_piece_end, b_piece_end);
+      if (overlap_start < overlap_end) {
+        out_overlaps.emplace_back(overlap_start, overlap_end);
+        found = true;
+      }
     }
   }
-  return false;
+  return found;
+}
+
+// Orthonormal basis — stable for all normal orientations including +-Z.
+static void build_tangent_frame(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec & out_ly)
+{
+  const double sign = (normal.Z() >= 0.0) ? 1.0 : -1.0;
+  const double inv_denom = -1.0 / (sign + normal.Z());
+  const double xy_cross_term = normal.X() * normal.Y() * inv_denom;
+  out_lx = gp_Vec(
+    1.0 + sign * normal.X() * normal.X() * inv_denom,
+    sign * xy_cross_term,
+    -sign * normal.X());
+  out_ly = gp_Vec(
+    xy_cross_term,
+    sign + normal.Y() * normal.Y() * inv_denom,
+    -normal.Y());
+}
+
+static gp_Pnt compute_ring_point(
+  const gp_Pnt & contact,
+  const gp_Vec & tangent_axis_x,
+  const gp_Vec & tangent_axis_y,
+  double radius,
+  double angle)
+{
+  const double cos_angle = std::cos(angle);
+  const double sin_angle = std::sin(angle);
+  return gp_Pnt(
+    contact.X() + tangent_axis_x.X() * radius * cos_angle + tangent_axis_y.X() * radius * sin_angle,
+    contact.Y() + tangent_axis_x.Y() * radius * cos_angle + tangent_axis_y.Y() * radius * sin_angle,
+    contact.Z() + tangent_axis_x.Z() * radius * cos_angle + tangent_axis_y.Z() * radius *
+        sin_angle);
+}
+
+// Merges a seam-split arc: if the first and last segments in a state share the
+static void rejoin_wraparound_arc(
+  RadialMaps & maps,
+  SurfaceState first_state,
+  double wrap_tol)
+{
+  for (const SurfaceState state : kAllSurfaceStates) {
+    auto & segs = maps.segs_for(state);
+    if (segs.size() < 2) {continue;}
+    const SurfaceState front_state = segs.front().state;
+    const SurfaceState back_state = segs.back().state;
+    const double       front_start = segs.front().start_rad;
+    const double       back_start = segs.back().start_rad;
+    if (back_state != state || front_state != state) {continue;}
+    if (front_start < wrap_tol && first_state == state) {
+      segs.pop_back();
+      segs.front().start_rad = back_start;
+    }
+  }
 }
 
 GraspOrientationFinder::GraspOrientationFinder(
@@ -103,279 +145,10 @@ void GraspOrientationFinder::set_fcl_checker(
   fcl_checker_ = fcl_checker;
 }
 
-std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
-  const std::vector<sampling::ContactPair> & contact_pairs,
-  [[maybe_unused]] const geometry::Topology & topology)
+void GraspOrientationFinder::set_embree_checker(
+  std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker)
 {
-  std::vector<GraspCandidate> valid_grasps;
-
-  if (contact_pairs.empty()) {
-    RCLCPP_WARN(logger_, "No contact pairs provided — returning empty grasp list");
-    return valid_grasps;
-  }
-
-  size_t total_orientations_tested = 0;
-  size_t rejected_by_primary = 0;
-  size_t rejected_by_exclusion = 0;
-  size_t rejected_by_secondary = 0;
-  size_t pairs_skipped_flat = 0;
-  size_t pairs_no_seeds = 0;
-
-  RCLCPP_INFO(logger_, "Processing %zu contact pairs (FCL radial-map orientation finding)",
-    contact_pairs.size());
-  RCLCPP_DEBUG(logger_,
-    "Config: finger_length=%.4f m, ring_step=%.4f m, angular_step=%.1f° "
-    "flat_tol=%.4f m, cliff_merge=%.1f°, min_cliff=%.1f°",
-    config_.finger_length, config_.ring_step_size, config_.angular_step_deg,
-    config_.flat_detection_tolerance_m,
-    config_.cliff_merge_tolerance_deg, config_.min_cliff_width_deg);
-
-  auto make_tangent_frame = [](const gp_Vec & n, gp_Vec & lx, gp_Vec & ly) {
-      double s = (n.Z() >= 0.0) ? 1.0 : -1.0;
-      double a = -1.0 / (s + n.Z());
-      double b = n.X() * n.Y() * a;
-      lx = gp_Vec(1.0 + s * n.X() * n.X() * a, s * b, -s * n.X());
-      ly = gp_Vec(b, s + n.Y() * n.Y() * a, -n.Y());
-    };
-
-  for (const auto & pair : contact_pairs) {
-    gp_Vec normal_1 = pair.normal_1;
-    gp_Vec normal_2 = pair.normal_2;
-
-    if (normal_1.Magnitude() < 1e-9 || normal_2.Magnitude() < 1e-9) {
-      RCLCPP_WARN(logger_, "Zero surface normal for pair [%d-%d] — skipping",
-        pair.surface_id_1, pair.surface_id_2);
-      continue;
-    }
-    normal_1.Normalize();
-    normal_2.Normalize();
-
-    gp_Vec grip_axis(pair.contact_1, pair.contact_2);
-    if (grip_axis.Magnitude() < 1e-9) {
-      RCLCPP_WARN(logger_, "Coincident contact points for surfaces [%d-%d] — skipping",
-        pair.surface_id_1, pair.surface_id_2);
-      continue;
-    }
-    grip_axis.Normalize();
-
-    gp_Vec cal_ref = normal_1 - grip_axis * grip_axis.Dot(normal_1);
-    if (cal_ref.Magnitude() < 1e-9) {
-      // normal_1 is parallel to grip_axis — use Duff et al. to get a perpendicular
-      double s = (grip_axis.Z() >= 0.0) ? 1.0 : -1.0;
-      double a = -1.0 / (s + grip_axis.Z());
-      double b = grip_axis.X() * grip_axis.Y() * a;
-      cal_ref = gp_Vec(1.0 + s * grip_axis.X() * grip_axis.X() * a, s * b, -s * grip_axis.X());
-    }
-    cal_ref.Normalize();
-
-    gp_Vec lx1, ly1, lx2, ly2;
-    make_tangent_frame(normal_1, lx1, ly1);
-    make_tangent_frame(normal_2, lx2, ly2);
-
-    double offset_1 = std::atan2(cal_ref.Dot(ly1), cal_ref.Dot(lx1));
-    double offset_2 = std::atan2(cal_ref.Dot(ly2), cal_ref.Dot(lx2));
-
-    gp_Pnt lifted_1(
-      pair.contact_1.X() + normal_1.X() * kCeilingOffset,
-      pair.contact_1.Y() + normal_1.Y() * kCeilingOffset,
-      pair.contact_1.Z() + normal_1.Z() * kCeilingOffset);
-
-    gp_Pnt lifted_2(
-      pair.contact_2.X() + normal_2.X() * kCeilingOffset,
-      pair.contact_2.Y() + normal_2.Y() * kCeilingOffset,
-      pair.contact_2.Z() + normal_2.Z() * kCeilingOffset);
-
-    RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
-      "Pair [%d-%d]: normal_1=(%.3f,%.3f,%.3f) lx1=(%.3f,%.3f,%.3f) ly1=(%.3f,%.3f,%.3f) offset_1=%.1f°",
-      pair.surface_id_1, pair.surface_id_2,
-      normal_1.X(), normal_1.Y(), normal_1.Z(),
-      lx1.X(), lx1.Y(), lx1.Z(),
-      ly1.X(), ly1.Y(), ly1.Z(),
-      offset_1 * 180.0 / M_PI);
-    RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
-      "Pair [%d-%d]: normal_2=(%.3f,%.3f,%.3f) lx2=(%.3f,%.3f,%.3f) ly2=(%.3f,%.3f,%.3f) offset_2=%.1f°",
-      pair.surface_id_1, pair.surface_id_2,
-      normal_2.X(), normal_2.Y(), normal_2.Z(),
-      lx2.X(), lx2.Y(), lx2.Z(),
-      ly2.X(), ly2.Y(), ly2.Z(),
-      offset_2 * 180.0 / M_PI);
-    RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
-      "Pair [%d-%d]: cal_ref=(%.3f,%.3f,%.3f)",
-      pair.surface_id_1, pair.surface_id_2,
-      cal_ref.X(), cal_ref.Y(), cal_ref.Z());
-
-    auto maps_1 = create_radial_maps(
-      pair.contact_1, gp_Dir(normal_1), lx1, ly1, lifted_1, offset_1);
-
-    auto maps_2 = create_radial_maps(
-      pair.contact_2, gp_Dir(normal_2), lx2, ly2, lifted_2, offset_2);
-
-    double grippable_rad = 0.0;
-    for (const auto & seg : merge_low_segments(maps_1, maps_2)) {
-      grippable_rad += seg.end_rad - seg.start_rad;
-    }
-    double quality = std::min(grippable_rad / (2.0 * M_PI), 1.0);
-
-    if (maps_1.low.empty() && maps_2.low.empty()) {
-      pairs_skipped_flat++;
-      RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
-        "Pair [%d-%d]: outer ring fully FLAT on both contacts — skipping",
-        pair.surface_id_1, pair.surface_id_2);
-      continue;
-    }
-
-    std::vector<double> seeds;
-    if (true) {
-      auto merged = merge_low_segments(maps_1, maps_2);
-      RCLCPP_DEBUG(logger_,
-        "Pair [%d-%d]: grip=%.4f m, quality=%.3f "
-        "(flat_1=%zu high_1=%zu low_1=%zu | flat_2=%zu high_2=%zu low_2=%zu) "
-        "→ merged_low=%zu",
-        pair.surface_id_1, pair.surface_id_2,
-        pair.grip_distance, quality,
-        maps_1.flat.size(), maps_1.high.size(), maps_1.low.size(),
-        maps_2.flat.size(), maps_2.high.size(), maps_2.low.size(),
-        merged.size());
-
-      for (const auto & seg : maps_1.low) {
-        RCLCPP_DEBUG(logger_, "  maps_1 LOW: [%.1f°, %.1f°]",
-          seg.start_rad * 180.0 / M_PI, seg.end_rad * 180.0 / M_PI);
-      }
-      for (const auto & seg : maps_2.low) {
-        RCLCPP_DEBUG(logger_, "  maps_2 LOW: [%.1f°, %.1f°]",
-          seg.start_rad * 180.0 / M_PI, seg.end_rad * 180.0 / M_PI);
-      }
-
-      if (!merged.empty()) {
-        auto after_outer = filter_by_outer_ring(merged, maps_1, maps_2);
-        RCLCPP_DEBUG(logger_,
-          "  [%d-%d] after filter_by_outer_ring: %zu → %zu segment(s)",
-          pair.surface_id_1, pair.surface_id_2,
-          merged.size(), after_outer.size());
-
-        if (!after_outer.empty()) {
-          auto after_high = ban_high_angles(after_outer, maps_1, maps_2);
-          RCLCPP_DEBUG(logger_,
-            "  [%d-%d] after ban_high_angles: %zu → %zu segment(s)",
-            pair.surface_id_1, pair.surface_id_2,
-            after_outer.size(), after_high.size());
-
-          if (!after_high.empty()) {
-            auto clusters = cluster_and_filter(after_high);
-            RCLCPP_DEBUG(logger_,
-              "  [%d-%d] clusters after filter: %zu (min_cliff=%.1f°)",
-              pair.surface_id_1, pair.surface_id_2,
-              clusters.size(), config_.min_cliff_width_deg);
-
-            seeds.reserve(clusters.size());
-            for (const auto & cluster : clusters) {
-              seeds.push_back(cluster_midpoint(cluster));
-            }
-          }
-        }
-      }
-    } else {
-      seeds = build_approach_seeds(maps_1, maps_2);
-    }
-
-    if (seeds.empty()) {
-      pairs_no_seeds++;
-      RCLCPP_DEBUG_EXPRESSION(logger_, []{static size_t _n = 0; return ++_n % 3 == 1;}(),
-        "  [%d-%d] No grippable cliff survived filtering — skipping pair",
-        pair.surface_id_1, pair.surface_id_2);
-      continue;
-    }
-
-    if (config_.max_orientations_per_pair > 0 &&
-      seeds.size() > config_.max_orientations_per_pair)
-    {
-      seeds.resize(config_.max_orientations_per_pair);
-    }
-
-    for (double angle_rad : seeds) {
-      gp_Vec perp_to_cal = grip_axis.Crossed(cal_ref);
-      perp_to_cal.Normalize();
-      gp_Vec approach = cal_ref * std::cos(angle_rad) + perp_to_cal * std::sin(angle_rad);
-
-      gp_Pnt base_pos;
-      gp_Trsf transform = compute_gripper_transform(
-        pair.contact_1, pair.contact_2, approach, base_pos);
-
-      total_orientations_tested++;
-
-      if (collides_with_primary(transform, pair.grip_distance)) {
-        rejected_by_primary++;
-        RCLCPP_DEBUG_EXPRESSION(logger_, []{
-            static size_t _n = 0; return ++_n % 3 == 1;
-              }(), "  angle=%.1f°: REJECTED primary collision",
-          angle_rad * 180.0 / M_PI);
-        continue;
-      }
-
-      if (exclusion_constraint_ && exclusion_constraint_->intersects_exclusion_zone(
-          transform, pair.grip_distance, config_.collision_tolerance))
-      {
-        rejected_by_exclusion++;
-        RCLCPP_DEBUG_EXPRESSION(logger_, []{
-            static size_t _n = 0; return ++_n % 3 == 1;
-              }(), "  angle=%.1f°: REJECTED exclusion zone",
-          angle_rad * 180.0 / M_PI);
-        continue;
-      }
-
-      if (kissing_constraint_) {
-        Eigen::Isometry3d grasp_pose = Eigen::Isometry3d::Identity();
-        grasp_pose.translation() = Eigen::Vector3d(
-          base_pos.X(), base_pos.Y(), base_pos.Z());
-        grasp_pose.linear() =
-          geometry::extract_quaternion(transform).toRotationMatrix();
-
-        if (kissing_constraint_->intersects_secondary(pair.grip_distance, grasp_pose)) {
-          rejected_by_secondary++;
-          RCLCPP_DEBUG_EXPRESSION(logger_, []{
-              static size_t _n = 0; return ++_n % 3 == 1;
-                }(), "  angle=%.1f°: REJECTED secondary collision",
-            angle_rad * 180.0 / M_PI);
-          continue;
-        }
-      }
-
-      GraspCandidate candidate;
-      candidate.contact_1 = pair.contact_1;
-      candidate.contact_2 = pair.contact_2;
-      candidate.approach_direction = approach;
-      candidate.gripper_transform = transform;
-      candidate.base_position = base_pos;
-      candidate.surface_id_1 = pair.surface_id_1;
-      candidate.surface_id_2 = pair.surface_id_2;
-      candidate.grip_distance = pair.grip_distance;
-      candidate.quality_score = quality;
-
-      valid_grasps.push_back(candidate);
-
-      RCLCPP_DEBUG_EXPRESSION(logger_, []{
-          static size_t _n = 0; return ++_n % 3 == 1;
-            }(), "  angle=%.1f°: valid (quality=%.3f)",
-        angle_rad * 180.0 / M_PI, quality);
-
-      if (config_.stop_on_first_valid) {break;}
-    }
-
-  }
-
-  RCLCPP_INFO(logger_,
-    "Orientation finding complete: %zu valid grasps from %zu pairs "
-    "(%zu flat-skipped, %zu no-seeds, %zu tested, "
-    "rejected: %zu primary / %zu exclusion / %zu secondary)",
-    valid_grasps.size(), contact_pairs.size(),
-    pairs_skipped_flat, pairs_no_seeds, total_orientations_tested,
-    rejected_by_primary, rejected_by_exclusion, rejected_by_secondary);
-
-  if (valid_grasps.empty()) {
-    RCLCPP_WARN(logger_, "No valid grasps found");
-  }
-
-  return valid_grasps;
+  embree_checker_ = embree_checker;
 }
 
 SurfaceState GraspOrientationFinder::classify_hit(
@@ -385,156 +158,150 @@ SurfaceState GraspOrientationFinder::classify_hit(
   const gp_Vec & normal_vec,
   double tol) const
 {
-  if (!hit_found) {
-    return SurfaceState::LOW;
-  }
+  if (!hit_found) {return SurfaceState::LOW;}
   gp_Vec hit_vec(contact, hit_point);
   double elevation = hit_vec.Dot(normal_vec);
-
   if (elevation > tol) {return SurfaceState::HIGH;}
   if (elevation < -tol) {return SurfaceState::LOW;}
   return SurfaceState::FLAT;
 }
 
+Grasp to_grasp(const GraspCandidate & candidate)
+{
+  gp_Pnt tcp(
+    (candidate.contact_1.X() + candidate.contact_2.X()) / 2.0,
+    (candidate.contact_1.Y() + candidate.contact_2.Y()) / 2.0,
+    (candidate.contact_1.Z() + candidate.contact_2.Z()) / 2.0);
+
+  return Grasp::create(
+    geometry::to_eigen(tcp),
+    geometry::extract_quaternion(candidate.gripper_transform),
+    candidate.grip_distance,
+    geometry::to_eigen(candidate.contact_1),
+    geometry::to_eigen(candidate.contact_2),
+    candidate.surface_id_1,
+    candidate.surface_id_2,
+    candidate.quality_score
+  );
+}
+
 RadialMaps GraspOrientationFinder::create_radial_maps(
   const gp_Pnt & contact,
   const gp_Dir & normal,
-  const gp_Vec & lx,
-  const gp_Vec & ly,
+  const gp_Vec & tangent_axis_x,
+  const gp_Vec & tangent_axis_y,
   const gp_Pnt & lifted_center,
   double angle_offset) const
 {
   RadialMaps maps;
-  const double tol = config_.flat_detection_tolerance_m;
+  const double flat_tol = config_.flat_detection_tolerance_m;
   const double step_rad = config_.angular_step_deg * M_PI / 180.0;
+  const double min_arc_width = config_.min_cliff_width_deg * M_PI / 180.0;
   const gp_Vec normal_vec(normal);
-  const double outer_r = config_.finger_length;
+  const double outer_radius = config_.finger_length;
+  const double inner_radius = config_.finger_radius;
+  const double ring_step = config_.ring_step_size;
 
+  SurfaceState first_state = SurfaceState::FLAT;
+  SurfaceState prev_state = SurfaceState::FLAT;
+  bool first = true;
+
+  for (double local_angle = angle_offset;
+    local_angle < angle_offset + 2.0 * M_PI;
+    local_angle += step_rad)
   {
-    size_t flat_start = maps.flat.size();
-    size_t high_start = maps.high.size();
-    size_t low_start = maps.low.size();
+    const gp_Pnt ring_point = compute_ring_point(
+      contact, tangent_axis_x, tangent_axis_y, outer_radius, local_angle);
 
-    SurfaceState first_state = SurfaceState::FLAT;
-    SurfaceState prev_state = SurfaceState::FLAT;
-    bool first = true;
+    const gp_Vec ray_vec(lifted_center, ring_point);
+    const double ray_length = ray_vec.Magnitude();
+    if (ray_length < 1e-6) {continue;}
 
-    for (double local_angle = angle_offset; local_angle < angle_offset + 2.0 * M_PI;
-      local_angle += step_rad)
-    {
-      double cos_a = std::cos(local_angle);
-      double sin_a = std::sin(local_angle);
-
-      gp_Pnt ring_point(
-        contact.X() + lx.X() * outer_r * cos_a + ly.X() * outer_r * sin_a,
-        contact.Y() + lx.Y() * outer_r * cos_a + ly.Y() * outer_r * sin_a,
-        contact.Z() + lx.Z() * outer_r * cos_a + ly.Z() * outer_r * sin_a);
-
-      gp_Vec ray_vec(lifted_center, ring_point);
-      double ray_len = ray_vec.Magnitude();
-      if (ray_len < 1e-9) {continue;}
-      gp_Dir ray_dir(ray_vec);
-
-      gp_Pnt hit_point;
-      bool hit = fcl_checker_ ?
-        fcl_checker_->ray_hits_primary(lifted_center, ray_dir, ray_len * 2.0, hit_point) :
-        false;
-
-      SurfaceState state = classify_hit(hit, hit_point, contact, normal_vec, tol);
-
-      double shared_angle = local_angle - angle_offset;
-      if (first) {
-
-        first_state = state;
-        switch (state) {
-          case SurfaceState::FLAT: maps.flat.push_back({shared_angle, shared_angle, outer_r,
-                state}); break;
-          case SurfaceState::HIGH: maps.high.push_back({shared_angle, shared_angle, outer_r,
-                state}); break;
-          case SurfaceState::LOW:  maps.low.push_back({shared_angle, shared_angle, outer_r, state});
-            break;
-        }
-        prev_state = state;
-        first = false;
-        continue;
-      }
-
-      if (state != prev_state) {
-        switch (prev_state) {
-          case SurfaceState::FLAT: if (!maps.flat.empty()) {
-              maps.flat.back().end_rad = shared_angle;
-          }
-            break;
-          case SurfaceState::HIGH: if (!maps.high.empty()) {
-              maps.high.back().end_rad = shared_angle;
-          }
-            break;
-          case SurfaceState::LOW:  if (!maps.low.empty()) {
-              maps.low.back().end_rad = shared_angle;
-          }
-            break;
-        }
-        switch (state) {
-          case SurfaceState::FLAT: maps.flat.push_back({shared_angle, shared_angle, outer_r,
-                state}); break;
-          case SurfaceState::HIGH: maps.high.push_back({shared_angle, shared_angle, outer_r,
-                state}); break;
-          case SurfaceState::LOW:  maps.low.push_back({shared_angle, shared_angle, outer_r, state});
-            break;
-        }
-        prev_state = state;
-      } else {
-        switch (state) {
-          case SurfaceState::FLAT: if (!maps.flat.empty()) {
-              maps.flat.back().end_rad = shared_angle;
-          }
-            break;
-          case SurfaceState::HIGH: if (!maps.high.empty()) {
-              maps.high.back().end_rad = shared_angle;
-          }
-            break;
-          case SurfaceState::LOW:  if (!maps.low.empty()) {
-              maps.low.back().end_rad = shared_angle;
-          }
-            break;
-        }
-      }
+    // Avoids spurious LOW classifications from rays falling short at grazing angles.
+    gp_Pnt hit_point;
+    bool hit = false;
+    if (embree_checker_ && embree_checker_->is_valid()) {
+      auto embree_hit = embree_checker_->ray_intersect(lifted_center, gp_Dir(ray_vec), ray_length);
+      if (embree_hit.has_value()) {hit_point = embree_hit.value(); hit = true;}
     }
 
-    double end_angle = 2.0 * M_PI;
-    switch (prev_state) {
-      case SurfaceState::FLAT: if (!maps.flat.empty()) {
-          maps.flat.back().end_rad = end_angle;
-      }
-        break;
-      case SurfaceState::HIGH: if (!maps.high.empty()) {
-          maps.high.back().end_rad = end_angle;
-      }
-        break;
-      case SurfaceState::LOW:  if (!maps.low.empty()) {maps.low.back().end_rad = end_angle;} break;
+    const SurfaceState state = classify_hit(hit, hit_point, contact, normal_vec, flat_tol);
+    const double shared_angle = local_angle - angle_offset;
+
+    if (first) {
+      first_state = state;
+      maps.segs_for(state).push_back({shared_angle, shared_angle, outer_radius, state});
+      prev_state = state;
+      first = false;
+      continue;
     }
 
-    const double wrap_tol = step_rad;
-    auto try_wrap_merge = [&](
-      std::vector<RadialSegment> & segs,
-      size_t ring_start,
-      SurfaceState state)
+    if (state != prev_state) {
+      auto & prev_segs = maps.segs_for(prev_state);
+      if (!prev_segs.empty()) {prev_segs.back().end_rad = shared_angle;}
+      maps.segs_for(state).push_back({shared_angle, shared_angle, outer_radius, state});
+      prev_state = state;
+    } else {
+      auto & cur_segs = maps.segs_for(state);
+      if (!cur_segs.empty()) {cur_segs.back().end_rad = shared_angle;}
+    }
+  }
+
+  // Close the last open segment at exactly 2pi.
+  auto & prev_segs = maps.segs_for(prev_state);
+  if (!prev_segs.empty()) {prev_segs.back().end_rad = 2.0 * M_PI;}
+
+  rejoin_wraparound_arc(maps, first_state, step_rad);
+
+  for (double current_radius = outer_radius - ring_step;
+    current_radius >= inner_radius - 1e-9;
+    current_radius -= ring_step)
+  {
+    std::vector<RadialSegment> new_low;
+
+    for (const RadialSegment & seg : maps.low) {
+      SurfaceState last_state = SurfaceState::FLAT;
+      double piece_start = seg.start_rad;
+
+      for (double sweep_angle = seg.start_rad;
+        sweep_angle <= seg.end_rad + 1e-9;
+        sweep_angle += step_rad)
       {
-        if (segs.size() < ring_start + 2) {return;}
-        auto & first_seg = segs[ring_start];
-        auto & last_seg = segs.back();
-        if (last_seg.radius != outer_r || last_seg.state != state) {return;}
-        if (first_seg.radius != outer_r || first_seg.state != state) {return;}
-        if (first_seg.start_rad < wrap_tol && first_state == state) {
-          double saved_start = last_seg.start_rad;
-          segs.pop_back();
-          segs[ring_start].start_rad = saved_start;
-        }
-      };
+        const double angle = std::min(sweep_angle, seg.end_rad);
+        const double local_angle = angle + angle_offset;
+        const gp_Pnt ring_point = compute_ring_point(
+          contact, tangent_axis_x, tangent_axis_y, current_radius, local_angle);
 
-    try_wrap_merge(maps.flat, flat_start, SurfaceState::FLAT);
-    try_wrap_merge(maps.high, high_start, SurfaceState::HIGH);
-    try_wrap_merge(maps.low, low_start, SurfaceState::LOW);
+        const gp_Vec ray_vec(lifted_center, ring_point);
+        const double ray_length = ray_vec.Magnitude();
+        if (ray_length < 1e-6) {continue;}
+
+        gp_Pnt hit_point;
+        bool hit = false;
+        if (embree_checker_ && embree_checker_->is_valid()) {
+          auto embree_hit = embree_checker_->ray_intersect(
+            lifted_center, gp_Dir(ray_vec), ray_length);
+          if (embree_hit.has_value()) {hit_point = embree_hit.value(); hit = true;}
+        }
+        const SurfaceState current_state = classify_hit(
+          hit, hit_point, contact, normal_vec, flat_tol);
+
+        if (current_state != last_state) {
+          if (last_state != SurfaceState::HIGH && (angle - piece_start) >= min_arc_width) {
+            new_low.push_back({piece_start, angle, current_radius, SurfaceState::LOW});
+          }
+          piece_start = angle;
+          last_state = current_state;
+        }
+      }
+
+      if (last_state != SurfaceState::HIGH && (seg.end_rad - piece_start) >= min_arc_width) {
+        new_low.push_back({piece_start, seg.end_rad, current_radius, SurfaceState::LOW});
+      }
+    }
+
+    maps.low = new_low;
+    if (maps.low.empty()) {break;}
   }
 
   return maps;
@@ -545,77 +312,18 @@ std::vector<RadialSegment> GraspOrientationFinder::merge_low_segments(
   const RadialMaps & maps_2) const
 {
   std::vector<RadialSegment> result;
-  for (const auto & s1 : maps_1.low) {
-    for (const auto & s2 : maps_2.low) {
-      double os, oe;
-      if (angular_overlap(s1.start_rad, s1.end_rad, s2.start_rad, s2.end_rad, os, oe)) {
-        result.push_back({os, oe, std::min(s1.radius, s2.radius), SurfaceState::LOW});
-      }
-    }
-  }
-  return result;
-}
-
-std::vector<RadialSegment> GraspOrientationFinder::filter_by_outer_ring(
-  const std::vector<RadialSegment> & segments,
-  const RadialMaps & maps_1,
-  const RadialMaps & maps_2) const
-{
-  const double outer_r = config_.finger_length;
-  constexpr double kRadiusTol = 1e-6;
-
-  auto is_outer_blocked = [&](const RadialMaps & maps,
-    double seg_start, double seg_end) -> bool {
-      for (const auto & seg : maps.high) {
-        if (std::abs(seg.radius - outer_r) > kRadiusTol) {continue;}
-        double os, oe;
-        if (angular_overlap(seg.start_rad, seg.end_rad, seg_start, seg_end, os, oe)) {
-          return true;
+  for (const auto & seg_1 : maps_1.low) {
+    for (const auto & seg_2 : maps_2.low) {
+      std::vector<std::pair<double, double>> overlaps;
+      if (angular_overlap(
+          seg_1.start_rad, seg_1.end_rad,
+          seg_2.start_rad, seg_2.end_rad, overlaps))
+      {
+        for (const auto & [ov_start, ov_end] : overlaps) {
+          result.push_back(
+            {ov_start, ov_end, std::min(seg_1.radius, seg_2.radius), SurfaceState::LOW});
         }
       }
-      for (const auto & seg : maps.flat) {
-        if (std::abs(seg.radius - outer_r) > kRadiusTol) {continue;}
-        double os, oe;
-        if (angular_overlap(seg.start_rad, seg.end_rad, seg_start, seg_end, os, oe)) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-  std::vector<RadialSegment> result;
-  for (const auto & seg : segments) {
-    if (!is_outer_blocked(maps_1, seg.start_rad, seg.end_rad) &&
-      !is_outer_blocked(maps_2, seg.start_rad, seg.end_rad))
-    {
-      result.push_back(seg);
-    }
-  }
-  return result;
-}
-
-std::vector<RadialSegment> GraspOrientationFinder::ban_high_angles(
-  const std::vector<RadialSegment> & segments,
-  const RadialMaps & maps_1,
-  const RadialMaps & maps_2) const
-{
-  auto overlaps_any_high = [&](const RadialMaps & maps,
-    double seg_start, double seg_end) -> bool {
-      for (const auto & high : maps.high) {
-        double os, oe;
-        if (angular_overlap(high.start_rad, high.end_rad, seg_start, seg_end, os, oe)) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-  std::vector<RadialSegment> result;
-  for (const auto & seg : segments) {
-    if (!overlaps_any_high(maps_1, seg.start_rad, seg.end_rad) &&
-      !overlaps_any_high(maps_2, seg.start_rad, seg.end_rad))
-    {
-      result.push_back(seg);
     }
   }
   return result;
@@ -624,129 +332,51 @@ std::vector<RadialSegment> GraspOrientationFinder::ban_high_angles(
 std::vector<std::vector<RadialSegment>> GraspOrientationFinder::cluster_and_filter(
   const std::vector<RadialSegment> & segments) const
 {
+  if (segments.empty()) {return {};}
+
   const double merge_tol = config_.cliff_merge_tolerance_deg * M_PI / 180.0;
   const double min_width = config_.min_cliff_width_deg * M_PI / 180.0;
-  constexpr double k2Pi = 2.0 * M_PI;
 
   std::vector<std::vector<RadialSegment>> clusters;
-  std::vector<bool> assigned(segments.size(), false);
+  clusters.push_back({segments.front()});
+  double cluster_end = segments.front().end_rad;
 
-  for (size_t i = 0; i < segments.size(); ++i) {
-    if (assigned[i]) {continue;}
-
-    std::vector<RadialSegment> cluster;
-    cluster.push_back(segments[i]);
-    assigned[i] = true;
-
-    bool grew = true;
-    while (grew) {
-      grew = false;
-      for (size_t j = 0; j < segments.size(); ++j) {
-        if (assigned[j]) {continue;}
-        for (const auto & cs : cluster) {
-          auto ang_dist = [](double a, double b) {
-              double d = std::abs(a - b);
-              return std::min(d, 2.0 * M_PI - d);
-            };
-          double d = std::min({
-                ang_dist(segments[j].start_rad, cs.start_rad),
-                ang_dist(segments[j].start_rad, cs.end_rad),
-                ang_dist(segments[j].end_rad, cs.start_rad),
-                ang_dist(segments[j].end_rad, cs.end_rad)});
-          if (d <= merge_tol) {
-            cluster.push_back(segments[j]);
-            assigned[j] = true;
-            grew = true;
-            break;
-          }
-        }
-      }
+  // assumes segments are sorted by start_rad — guaranteed by the sweep order in create_radial_maps
+  for (size_t seg_idx = 1; seg_idx < segments.size(); ++seg_idx) {
+    const RadialSegment & seg = segments[seg_idx];
+    if (seg.start_rad - cluster_end <= merge_tol) {
+      clusters.back().push_back(seg);
+      cluster_end = std::max(cluster_end, seg.end_rad);
+    } else {
+      clusters.push_back({seg});
+      cluster_end = seg.end_rad;
     }
-
-    clusters.push_back(std::move(cluster));
   }
 
-  auto span_of = [&](const std::vector<RadialSegment> & segs, double offset) {
-      double s = k2Pi, e = 0.0;
-      for (const auto & seg : segs) {
-        if (seg.end_rad - seg.start_rad >= k2Pi - 1e-9) {return k2Pi;}
-        double a = std::fmod(seg.start_rad + offset, k2Pi);
-        double b = std::fmod(seg.end_rad + offset, k2Pi);
-        if (a < 0.0) {a += k2Pi;}
-        if (b < 0.0) {b += k2Pi;}
-        if (b < a) {b += k2Pi;}
-        s = std::min(s, a);
-        e = std::max(e, b);
+  // Check wrap-around: join last and first cluster if they touch across 2pi.
+  if (clusters.size() > 1) {
+    const double last_end = clusters.back().back().end_rad;
+    const double first_start = clusters.front().front().start_rad;
+    if ((2.0 * M_PI - last_end) + first_start <= merge_tol) {
+      auto & first_cluster = clusters.front();
+      for (auto & seg : clusters.back()) {
+        first_cluster.push_back(seg);
       }
-      return e - s;
-    };
+      clusters.pop_back();
+    }
+  }
 
   std::vector<std::vector<RadialSegment>> result;
   for (auto & cluster : clusters) {
-    double span = std::min(span_of(cluster, 0.0), span_of(cluster, M_PI));
-    if (span >= min_width) {
+    double total_arc = 0.0;
+    for (const auto & seg : cluster) {
+      total_arc += seg.end_rad - seg.start_rad;
+    }
+    if (std::min(total_arc, 2.0 * M_PI) >= min_width) {
       result.push_back(std::move(cluster));
     }
   }
   return result;
-}
-
-double GraspOrientationFinder::cluster_midpoint(
-  const std::vector<RadialSegment> & cluster) const
-{
-  constexpr double k2Pi = 2.0 * M_PI;
-
-  auto seg_width = [&](const RadialSegment & seg) -> double {
-      if (seg.end_rad >= seg.start_rad) {
-        return seg.end_rad - seg.start_rad;
-      }
-      return (k2Pi - seg.start_rad) + seg.end_rad;
-    };
-
-  auto seg_mid = [&](const RadialSegment & seg) -> double {
-      if (seg.end_rad >= seg.start_rad) {
-        return (seg.start_rad + seg.end_rad) / 2.0;
-      }
-      double mid = seg.start_rad + seg_width(seg) / 2.0;
-      return std::fmod(mid, k2Pi);
-    };
-
-  const RadialSegment * widest = &cluster[0];
-  double max_width = seg_width(cluster[0]);
-
-  for (const auto & seg : cluster) {
-    double w = seg_width(seg);
-    if (w > max_width) {
-      max_width = w;
-      widest = &seg;
-    }
-  }
-
-  return seg_mid(*widest);
-}
-
-std::vector<double> GraspOrientationFinder::build_approach_seeds(
-  const RadialMaps & maps_1,
-  const RadialMaps & maps_2) const
-{
-  auto merged = merge_low_segments(maps_1, maps_2);
-  if (merged.empty()) {return {};}
-
-  auto filtered = filter_by_outer_ring(merged, maps_1, maps_2);
-  if (filtered.empty()) {return {};}
-
-  filtered = ban_high_angles(filtered, maps_1, maps_2);
-  if (filtered.empty()) {return {};}
-
-  auto clusters = cluster_and_filter(filtered);
-  if (clusters.empty()) {return {};}
-
-  std::vector<double> seeds;
-  seeds.reserve(clusters.size());
-  for (const auto & cluster : clusters) {
-    seeds.push_back(cluster_midpoint(cluster));
-  }
-  return seeds;
 }
 
 gp_Trsf GraspOrientationFinder::compute_gripper_transform(
@@ -761,6 +391,9 @@ gp_Trsf GraspOrientationFinder::compute_gripper_transform(
     (contact_1.Z() + contact_2.Z()) / 2.0);
 
   gp_Vec y_axis(contact_1, contact_2);
+  if (y_axis.Magnitude() < 1e-6) {
+    throw std::invalid_argument("compute_gripper_transform: coincident contact points");
+  }
   y_axis.Normalize();
 
   gp_Vec z_axis = approach;
@@ -782,22 +415,21 @@ gp_Trsf GraspOrientationFinder::compute_gripper_transform(
     gripper_.tcp_offset.z());
 
   gp_Vec offset_world(
-    x_axis.X() * offset_local.X() + y_axis.X() * offset_local.Y() +
-    z_axis.X() * offset_local.Z(),
-    x_axis.Y() * offset_local.X() + y_axis.Y() * offset_local.Y() +
-    z_axis.Y() * offset_local.Z(),
-    x_axis.Z() * offset_local.X() + y_axis.Z() * offset_local.Y() +
-    z_axis.Z() * offset_local.Z());
+    x_axis.X() * offset_local.X() + y_axis.X() * offset_local.Y() + z_axis.X() * offset_local.Z(),
+    x_axis.Y() * offset_local.X() + y_axis.Y() * offset_local.Y() + z_axis.Y() * offset_local.Z(),
+    x_axis.Z() * offset_local.X() + y_axis.Z() * offset_local.Y() + z_axis.Z() * offset_local.Z());
 
   out_base = tcp.Translated(-offset_world);
 
-  gp_Ax3 gripper_frame(
-    out_base,
-    gp_Dir(z_axis.X(), z_axis.Y(), z_axis.Z()),
-    gp_Dir(x_axis.X(), x_axis.Y(), x_axis.Z()));
-
+  gp_Mat rot(
+    x_axis.X(), y_axis.X(), z_axis.X(),
+    x_axis.Y(), y_axis.Y(), z_axis.Y(),
+    x_axis.Z(), y_axis.Z(), z_axis.Z());
   gp_Trsf transform;
-  transform.SetTransformation(gripper_frame, gp_Ax3());
+  transform.SetValues(
+    rot.Value(1, 1), rot.Value(1, 2), rot.Value(1, 3), out_base.X(),
+    rot.Value(2, 1), rot.Value(2, 2), rot.Value(2, 3), out_base.Y(),
+    rot.Value(3, 1), rot.Value(3, 2), rot.Value(3, 3), out_base.Z());
   return transform;
 }
 
@@ -805,11 +437,269 @@ bool GraspOrientationFinder::collides_with_primary(
   const gp_Trsf & transform,
   double grip_distance) const
 {
-  if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    return true;
-  }
+  if (!fcl_checker_ || !fcl_checker_->is_valid()) {return true;}
   return fcl_checker_->collides_with_primary(
     transform, grip_distance, config_.collision_tolerance);
+}
+
+std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
+  const std::vector<sampling::ContactPair> & contact_pairs,
+  [[maybe_unused]] const geometry::Topology & topology)
+{
+  thread_local std::mt19937 rng(
+    static_cast<uint32_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count()));
+
+  std::vector<GraspCandidate> valid_grasps;
+  const size_t max_orientations = config_.max_orientations_per_pair > 0 ?
+    config_.max_orientations_per_pair : 16;
+  valid_grasps.reserve(contact_pairs.size() * max_orientations);
+
+  if (contact_pairs.empty()) {
+    RCLCPP_WARN(logger_, "No contact pairs provided — returning empty grasp list");
+    return valid_grasps;
+  }
+
+  size_t total_orientations_tested = 0;
+  size_t rejected_by_primary = 0;
+  size_t rejected_by_exclusion = 0;
+  size_t rejected_by_secondary = 0;
+  size_t pairs_skipped_flat = 0;
+  size_t pairs_no_seeds = 0;
+  size_t pairs_merged_empty = 0;
+  size_t pairs_killed_cluster = 0;
+  size_t total_seeds_before_cap = 0;
+  size_t total_seeds_after_cap = 0;
+
+  RCLCPP_INFO(logger_, "Processing %zu contact pairs (radial-map orientation finding)",
+    contact_pairs.size());
+
+  for (const auto & pair : contact_pairs) {
+    try {
+      gp_Vec normal_1 = pair.normal_1;
+      gp_Vec normal_2 = pair.normal_2;
+
+      if (normal_1.Magnitude() < 1e-6 || normal_2.Magnitude() < 1e-6) {
+        RCLCPP_WARN(logger_, "Zero surface normal for pair [%d-%d] — skipping",
+        pair.surface_id_1, pair.surface_id_2);
+        continue;
+      }
+      normal_1.Normalize();
+      normal_2.Normalize();
+
+      gp_Vec grip_axis(pair.contact_1, pair.contact_2);
+      if (grip_axis.Magnitude() < 1e-6) {
+        RCLCPP_WARN(logger_, "Coincident contact points for surfaces [%d-%d] — skipping",
+        pair.surface_id_1, pair.surface_id_2);
+        continue;
+      }
+      grip_axis.Normalize();
+
+      gp_Vec cal_ref = normal_1 - grip_axis * grip_axis.Dot(normal_1);
+
+      if (cal_ref.Magnitude() < 1e-6) {
+      // normal_1 is parallel to grip_axis — fall back to an arbitrary perpendicular
+        gp_Vec unused_ly;
+        build_tangent_frame(grip_axis, cal_ref, unused_ly);
+      }
+      cal_ref.Normalize();
+
+      gp_Vec tangent_x_1, tangent_y_1, tangent_x_2, tangent_y_2;
+      build_tangent_frame(normal_1, tangent_x_1, tangent_y_1);
+      build_tangent_frame(normal_2, tangent_x_2, tangent_y_2);
+
+    // Angle of cal_ref in each tangent frame — aligns both radial maps to a common reference.
+      double offset_1 = std::atan2(cal_ref.Dot(tangent_y_1), cal_ref.Dot(tangent_x_1));
+      double offset_2 = std::atan2(cal_ref.Dot(tangent_y_2), cal_ref.Dot(tangent_x_2));
+
+      gp_Pnt lifted_1(
+        pair.contact_1.X() + normal_1.X() * kCeilingOffset,
+        pair.contact_1.Y() + normal_1.Y() * kCeilingOffset,
+        pair.contact_1.Z() + normal_1.Z() * kCeilingOffset);
+
+      gp_Pnt lifted_2(
+        pair.contact_2.X() + normal_2.X() * kCeilingOffset,
+        pair.contact_2.Y() + normal_2.Y() * kCeilingOffset,
+        pair.contact_2.Z() + normal_2.Z() * kCeilingOffset);
+
+      auto maps_1 = create_radial_maps(
+      pair.contact_1, gp_Dir(normal_1), tangent_x_1, tangent_y_1, lifted_1, offset_1);
+
+      auto maps_2 = create_radial_maps(
+      pair.contact_2, gp_Dir(normal_2), tangent_x_2, tangent_y_2, lifted_2, offset_2);
+
+      if (maps_1.low.empty() && maps_2.low.empty()) {
+        pairs_skipped_flat++;
+        continue;
+      }
+
+    // Reused for both quality scoring and seed generation.
+      auto merged = merge_low_segments(maps_1, maps_2);
+
+      double grippable_rad = 0.0;
+      for (const auto & seg : merged) {
+        grippable_rad += seg.end_rad - seg.start_rad;
+      }
+      double quality = std::min(grippable_rad / (2.0 * M_PI), 1.0);
+
+      std::vector<double> seeds;
+      if (config_.debug_full_sweep) {
+        const double sweep_step_rad = config_.debug_sweep_step_deg * M_PI / 180.0;
+        const int    num_sweep_steps = static_cast<int>(std::round(2.0 * M_PI / sweep_step_rad));
+        seeds.reserve(num_sweep_steps);
+        for (int step_idx = 0; step_idx < num_sweep_steps; ++step_idx) {
+          seeds.push_back(step_idx * sweep_step_rad);
+        }
+      } else {
+        if (merged.empty()) {
+          pairs_merged_empty++;
+          continue;
+        } else {
+          auto clusters = cluster_and_filter(merged);
+          if (clusters.empty()) {
+            pairs_killed_cluster++;
+            continue;
+          } else {
+            for (const auto & cluster : clusters) {
+              double span_start = cluster.front().start_rad;
+              double span_end = cluster.front().end_rad;
+              for (const auto & seg : cluster) {
+                span_start = std::min(span_start, seg.start_rad);
+                span_end = std::max(span_end, seg.end_rad);
+              }
+              const double cluster_arc_span = span_end - span_start;
+
+              if (config_.randomize_seeds) {
+                const size_t n_clusters = clusters.size();
+                const size_t n_samples = (config_.max_orientations_per_pair > 0) ?
+                  std::max(size_t{1}, config_.max_orientations_per_pair / n_clusters) :
+                  1;
+                std::uniform_real_distribution<double> dist(0.0, cluster_arc_span);
+                for (size_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
+                  seeds.push_back(span_start + dist(rng));
+                }
+              } else {
+                if (cluster_arc_span <= kSeedStepRad) {
+                  seeds.push_back(span_start + cluster_arc_span * 0.5);
+                } else {
+                  const int    num_steps = static_cast<int>(std::floor(cluster_arc_span /
+                      kSeedStepRad));
+                  const double actual_step = cluster_arc_span / num_steps;
+                  for (int step_idx = 0; step_idx < num_steps; ++step_idx) {
+                    seeds.push_back(span_start + (step_idx + 0.5) * actual_step);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (seeds.empty()) {
+        pairs_no_seeds++;
+        continue;
+      }
+
+      total_seeds_before_cap += seeds.size();
+      if (config_.max_orientations_per_pair > 0 &&
+        seeds.size() > config_.max_orientations_per_pair)
+      {
+        seeds.resize(config_.max_orientations_per_pair);
+      }
+      total_seeds_after_cap += seeds.size();
+
+      gp_Vec perp_to_cal = grip_axis.Crossed(cal_ref);
+      perp_to_cal.Normalize();
+
+      for (double angle_rad : seeds) {
+        gp_Vec approach = -(cal_ref * std::cos(angle_rad) + perp_to_cal * std::sin(angle_rad));
+
+        gp_Pnt base_pos;
+        gp_Trsf transform = compute_gripper_transform(
+        pair.contact_1, pair.contact_2, approach, base_pos);
+
+        total_orientations_tested++;
+
+        if (collides_with_primary(transform, pair.grip_distance)) {
+          rejected_by_primary++;
+          continue;
+        }
+
+        if (exclusion_constraint_ && exclusion_constraint_->intersects_exclusion_zone(
+          transform, pair.grip_distance, config_.collision_tolerance))
+        {
+          rejected_by_exclusion++;
+          continue;
+        }
+
+        if (kissing_constraint_ &&
+          kissing_constraint_->intersects_secondary(pair.grip_distance, transform))
+        {
+          rejected_by_secondary++;
+          continue;
+        }
+
+        GraspCandidate candidate;
+        candidate.contact_1 = pair.contact_1;
+        candidate.contact_2 = pair.contact_2;
+        candidate.approach_direction = approach;
+        candidate.gripper_transform = transform;
+        candidate.base_position = base_pos;
+        candidate.surface_id_1 = pair.surface_id_1;
+        candidate.surface_id_2 = pair.surface_id_2;
+        candidate.grip_distance = pair.grip_distance;
+        candidate.quality_score = quality;
+
+        valid_grasps.push_back(candidate);
+
+        if (config_.stop_on_first_valid) {break;}
+      }
+    } catch (const Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "OCCT error on pair [%d-%d]: %s — skipping",
+        pair.surface_id_1, pair.surface_id_2, e.GetMessageString());
+      continue;
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(logger_, "Error on pair [%d-%d]: %s — skipping",
+        pair.surface_id_1, pair.surface_id_2, e.what());
+      continue;
+    }
+  }
+
+  const size_t total_pairs = contact_pairs.size();
+  const size_t pairs_with_seeds = total_pairs -
+    pairs_skipped_flat - pairs_merged_empty - pairs_killed_cluster - pairs_no_seeds;
+
+  // Pipeline stage breakdown as percentage of total pairs.
+  auto pct = [&](size_t n) {
+      return total_pairs > 0 ? 100.0 * n / static_cast<double>(total_pairs) : 0.0;
+    };
+
+  const double avg_seeds = pairs_with_seeds > 0 ?
+    static_cast<double>(total_seeds_before_cap) / static_cast<double>(pairs_with_seeds) : 0.0;
+  const double avg_seeds_capped = pairs_with_seeds > 0 ?
+    static_cast<double>(total_seeds_after_cap) / static_cast<double>(pairs_with_seeds) : 0.0;
+
+  RCLCPP_INFO(logger_,
+    "Orientation finding complete: %zu valid grasps from %zu pairs "
+    "(%zu flat-skipped, %zu no-seeds, %zu tested, "
+    "rejected: %zu primary / %zu exclusion / %zu secondary)",
+    valid_grasps.size(), total_pairs,
+    pairs_skipped_flat, pairs_no_seeds, total_orientations_tested,
+    rejected_by_primary, rejected_by_exclusion, rejected_by_secondary);
+
+  RCLCPP_INFO(logger_,
+    "[Radial pipeline] flat=%.1f%%  merged_empty=%.1f%%  "
+    "killed_cluster=%.1f%%  no_seeds=%.1f%%  with_seeds=%.1f%%  "
+    "avg_seeds=%.2f (capped=%.2f)",
+    pct(pairs_skipped_flat), pct(pairs_merged_empty),
+    pct(pairs_killed_cluster), pct(pairs_no_seeds), pct(pairs_with_seeds),
+    avg_seeds, avg_seeds_capped);
+
+  if (valid_grasps.empty()) {
+    RCLCPP_WARN(logger_, "No valid grasps found");
+  }
+
+  return valid_grasps;
 }
 
 }  // namespace angle_finding

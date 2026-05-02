@@ -26,7 +26,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"

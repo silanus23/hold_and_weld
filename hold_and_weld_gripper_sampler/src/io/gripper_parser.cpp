@@ -14,6 +14,7 @@
 
 #include "hold_and_weld_gripper_sampler/io/gripper_parser.hpp"
 
+#include <Eigen/Dense>
 #include <tinyxml2.h>
 
 #include <array>
@@ -24,7 +25,6 @@
 #include <sstream>
 #include <stdexcept>
 
-#include <Eigen/Dense>
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -61,7 +61,7 @@ gp_Trsf rpy_to_transform(double roll, double pitch, double yaw)
   gp_Trsf transform;
   transform.SetRotation(quat);
   return transform;
-}  // rpy_to_transform
+}
 
 gp_Trsf parse_origin(tinyxml2::XMLElement * origin)
 {
@@ -157,7 +157,6 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
   }
 }
 
-
 Eigen::Vector3d GripperParser::parse_xyz(const std::string & xyz_str)
 {
   double x, y, z;
@@ -177,21 +176,9 @@ Eigen::Vector3d GripperParser::parse_rpy(const std::string & rpy_str)
 }
 
 TopoDS_Shape GripperParser::extract_link_shape(
-  const std::string & urdf_string,
+  tinyxml2::XMLElement * robot,
   const std::string & link_name)
 {
-  tinyxml2::XMLDocument doc;
-  doc.Parse(urdf_string.c_str());
-
-  if (doc.Error()) {
-    throw std::runtime_error("Failed to parse URDF: " + std::string(doc.ErrorStr()));
-  }
-
-  tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
-  if (!robot) {
-    throw std::runtime_error("No <robot> element found");
-  }
-
   for (tinyxml2::XMLElement * link = robot->FirstChildElement("link");
     link != nullptr;
     link = link->NextSiblingElement("link"))
@@ -201,62 +188,76 @@ TopoDS_Shape GripperParser::extract_link_shape(
       continue;
     }
 
-    tinyxml2::XMLElement * collision = link->FirstChildElement("collision");
-    if (!collision) {
-      throw std::runtime_error("Link '" + link_name + "' has no collision geometry");
-    }
+    // Collect all <collision> elements into a compound shape.
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    bool found_any = false;
 
-    tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
-    if (!geometry) {
-      throw std::runtime_error("Link '" + link_name + "' collision has no geometry element");
-    }
+    for (tinyxml2::XMLElement * collision = link->FirstChildElement("collision");
+      collision != nullptr;
+      collision = collision->NextSiblingElement("collision"))
+    {
+      tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
+      if (!geometry) {continue;}
 
-    try {
-      TopoDS_Shape shape = create_shape_from_geometry(geometry);
+      try {
+        TopoDS_Shape shape = create_shape_from_geometry(geometry);
 
-      tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
-      if (origin) {
-        gp_Trsf transform = parse_origin(origin);
-        BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
-        if (!transformer.IsDone()) {
-          throw std::runtime_error("OCCT error extracting shape for link '" + link_name + "': transform failed");
+        tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
+        if (origin) {
+          gp_Trsf transform = parse_origin(origin);
+          BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
+          if (!transformer.IsDone()) {
+            throw std::runtime_error(
+              "Transform failed for collision element in link '" + link_name + "'");
+          }
+          shape = transformer.Shape();
         }
-        shape = transformer.Shape();
-      }
 
-      return shape;
-    } catch (const Standard_Failure & e) {
-      throw std::runtime_error(
-        "OCCT error extracting shape for link '" + link_name + "': " +
-        std::string(e.GetMessageString()));
-    } catch (const std::exception & e) {
-      throw std::runtime_error(
-        "Error extracting shape for link '" + link_name + "': " + std::string(e.what()));
-    } catch (...) {
-      throw std::runtime_error(
-        "Unknown error extracting shape for link '" + link_name + "'");
+        builder.Add(compound, shape);
+        found_any = true;
+      } catch (const Standard_Failure & e) {
+        throw std::runtime_error(
+          "OCCT error extracting shape for link '" + link_name + "': " +
+          std::string(e.GetMessageString()));
+      } catch (const std::exception & e) {
+        throw std::runtime_error(
+          "Error extracting shape for link '" + link_name + "': " + std::string(e.what()));
+      } catch (...) {
+        throw std::runtime_error(
+          "Unknown error extracting shape for link '" + link_name + "'");
+      }
     }
+
+    if (!found_any) {
+      throw std::runtime_error("Link '" + link_name + "' has no valid collision geometry");
+    }
+
+    return compound;
   }
 
   throw std::runtime_error("Link not found: " + link_name);
 }
 
-Eigen::Vector3d GripperParser::extract_joint_axis(
+TopoDS_Shape GripperParser::extract_link_shape(
   const std::string & urdf_string,
-  const std::string & joint_name)
+  const std::string & link_name)
 {
   tinyxml2::XMLDocument doc;
   doc.Parse(urdf_string.c_str());
-
   if (doc.Error()) {
     throw std::runtime_error("Failed to parse URDF: " + std::string(doc.ErrorStr()));
   }
-
   tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
-  if (!robot) {
-    throw std::runtime_error("No <robot> element found");
-  }
+  if (!robot) {throw std::runtime_error("No <robot> element found");}
+  return extract_link_shape(robot, link_name);
+}
 
+Eigen::Vector3d GripperParser::extract_joint_axis(
+  tinyxml2::XMLElement * robot,
+  const std::string & joint_name)
+{
   for (tinyxml2::XMLElement * joint = robot->FirstChildElement("joint");
     joint != nullptr;
     joint = joint->NextSiblingElement("joint"))
@@ -283,28 +284,51 @@ Eigen::Vector3d GripperParser::extract_joint_axis(
       return Eigen::Vector3d(0.0, 0.0, 1.0);
     }
 
-    return parse_xyz(xyz_str).normalized();
+    // The <axis xyz> is expressed in the joint's local frame.
+    // If the joint <origin> has a non-zero rpy, we must rotate the axis
+    // into the gripper root frame so it matches the BVH vertex frame.
+    Eigen::Vector3d axis_local = parse_xyz(xyz_str).normalized();
+
+    tinyxml2::XMLElement * origin_elem = joint->FirstChildElement("origin");
+    if (origin_elem) {
+      const char * rpy_str = origin_elem->Attribute("rpy");
+      if (rpy_str) {
+        double roll, pitch, yaw;
+        if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
+          // Build rotation matrix from ZYX Euler angles (URDF convention)
+          Eigen::Matrix3d rot =
+            (Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+            Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
+            Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX())).toRotationMatrix();
+          return (rot * axis_local).normalized();
+        }
+      }
+    }
+
+    return axis_local;
   }
 
   throw std::runtime_error("Joint not found: " + joint_name);
 }
 
-gp_Trsf GripperParser::extract_joint_origin(
+Eigen::Vector3d GripperParser::extract_joint_axis(
   const std::string & urdf_string,
   const std::string & joint_name)
 {
   tinyxml2::XMLDocument doc;
   doc.Parse(urdf_string.c_str());
-
   if (doc.Error()) {
     throw std::runtime_error("Failed to parse URDF: " + std::string(doc.ErrorStr()));
   }
-
   tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
-  if (!robot) {
-    throw std::runtime_error("No <robot> element found");
-  }
+  if (!robot) {throw std::runtime_error("No <robot> element found");}
+  return extract_joint_axis(robot, joint_name);
+}
 
+gp_Trsf GripperParser::extract_joint_origin(
+  tinyxml2::XMLElement * robot,
+  const std::string & joint_name)
+{
   for (tinyxml2::XMLElement * joint = robot->FirstChildElement("joint");
     joint != nullptr;
     joint = joint->NextSiblingElement("joint"))
@@ -321,22 +345,24 @@ gp_Trsf GripperParser::extract_joint_origin(
   throw std::runtime_error("Joint not found: " + joint_name);
 }
 
-std::pair<double, double> GripperParser::extract_joint_limits(
+gp_Trsf GripperParser::extract_joint_origin(
   const std::string & urdf_string,
   const std::string & joint_name)
 {
   tinyxml2::XMLDocument doc;
   doc.Parse(urdf_string.c_str());
-
   if (doc.Error()) {
     throw std::runtime_error("Failed to parse URDF: " + std::string(doc.ErrorStr()));
   }
-
   tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
-  if (!robot) {
-    throw std::runtime_error("No <robot> element found");
-  }
+  if (!robot) {throw std::runtime_error("No <robot> element found");}
+  return extract_joint_origin(robot, joint_name);
+}
 
+std::pair<double, double> GripperParser::extract_joint_limits(
+  tinyxml2::XMLElement * robot,
+  const std::string & joint_name)
+{
   for (tinyxml2::XMLElement * joint = robot->FirstChildElement("joint");
     joint != nullptr;
     joint = joint->NextSiblingElement("joint"))
@@ -371,6 +397,20 @@ std::pair<double, double> GripperParser::extract_joint_limits(
   throw std::runtime_error("Joint not found: " + joint_name);
 }
 
+std::pair<double, double> GripperParser::extract_joint_limits(
+  const std::string & urdf_string,
+  const std::string & joint_name)
+{
+  tinyxml2::XMLDocument doc;
+  doc.Parse(urdf_string.c_str());
+  if (doc.Error()) {
+    throw std::runtime_error("Failed to parse URDF: " + std::string(doc.ErrorStr()));
+  }
+  tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
+  if (!robot) {throw std::runtime_error("No <robot> element found");}
+  return extract_joint_limits(robot, joint_name);
+}
+
 ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_string)
 {
   ParsedGripper gripper;
@@ -387,9 +427,7 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
     throw std::runtime_error("No <robot> element found");
   }
 
-  tinyxml2::XMLElement * metadata = nullptr;
-
-  metadata = robot->FirstChildElement("gripper_metadata");
+  tinyxml2::XMLElement * metadata = robot->FirstChildElement("gripper_metadata");
 
   if (!metadata) {
     for (tinyxml2::XMLElement * macro = robot->FirstChildElement("xacro:macro");
@@ -482,13 +520,15 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
     gripper.tcp_rpy = Eigen::Vector3d::Zero();
   }
 
-  gripper.base = extract_link_shape(urdf_string, gripper.base_link_name);
+  // Re-use the already-parsed robot element for all subsequent extractions
+  // — avoids re-parsing the URDF string 8+ times.
+  gripper.base = extract_link_shape(robot, gripper.base_link_name);
 
-  TopoDS_Shape finger_1_raw = extract_link_shape(urdf_string, gripper.finger_1_link_name);
-  TopoDS_Shape finger_2_raw = extract_link_shape(urdf_string, gripper.finger_2_link_name);
+  TopoDS_Shape finger_1_raw = extract_link_shape(robot, gripper.finger_1_link_name);
+  TopoDS_Shape finger_2_raw = extract_link_shape(robot, gripper.finger_2_link_name);
 
-  gp_Trsf finger_1_joint_origin = extract_joint_origin(urdf_string, gripper.finger_1_joint_name);
-  gp_Trsf finger_2_joint_origin = extract_joint_origin(urdf_string, gripper.finger_2_joint_name);
+  gp_Trsf finger_1_joint_origin = extract_joint_origin(robot, gripper.finger_1_joint_name);
+  gp_Trsf finger_2_joint_origin = extract_joint_origin(robot, gripper.finger_2_joint_name);
 
   try {
     BRepBuilderAPI_Transform f1_transformer(finger_1_raw, finger_1_joint_origin, Standard_True);
@@ -507,11 +547,11 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
       std::string("OCCT error transforming finger shapes: ") + e.GetMessageString());
   }
 
-  gripper.finger_1_axis = extract_joint_axis(urdf_string, gripper.finger_1_joint_name);
-  gripper.finger_2_axis = extract_joint_axis(urdf_string, gripper.finger_2_joint_name);
+  gripper.finger_1_axis = extract_joint_axis(robot, gripper.finger_1_joint_name);
+  gripper.finger_2_axis = extract_joint_axis(robot, gripper.finger_2_joint_name);
 
-  auto [f1_lower, f1_upper] = extract_joint_limits(urdf_string, gripper.finger_1_joint_name);
-  auto [f2_lower, f2_upper] = extract_joint_limits(urdf_string, gripper.finger_2_joint_name);
+  auto [f1_lower, f1_upper] = extract_joint_limits(robot, gripper.finger_1_joint_name);
+  auto [f2_lower, f2_upper] = extract_joint_limits(robot, gripper.finger_2_joint_name);
 
   double max_single_travel = std::max(f1_upper, f2_upper);
   gripper.max_opening = 2.0 * max_single_travel;

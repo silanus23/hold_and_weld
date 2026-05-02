@@ -151,4 +151,3 @@
     output:
       max_grasps: 100               # More grasps — large part has many valid candidates
       min_quality: 0.0
-      include_debug: true

@@ -24,6 +24,12 @@ if(fcl_FOUND)
   message(STATUS "Found FCL version ${fcl_VERSION}")
 endif()
 
+# Find Embree 4
+find_package(embree 4.0 REQUIRED)
+if(embree_FOUND)
+  message(STATUS "Found Embree version ${embree_VERSION}")
+endif()
+
 # Find OpenCASCADE
 find_package(OpenCASCADE REQUIRED)
 if(OpenCASCADE_FOUND)
@@ -38,10 +44,11 @@ add_library(${PROJECT_NAME}_core SHARED
   src/geometry/topology.cpp
   src/geometry/occt_utils.cpp
   src/geometry/shape_refiner.cpp
-  src/geometry/fcl_collision_checker.cpp
+  src/collision/fcl_collision_checker.cpp
+  src/collision/embree_mesh_query.cpp
   src/filters/surface_dimension_filter.cpp
   src/filters/surface_geometry_filter.cpp
-  src/filters/edge_avoidance_filter.cpp
+
   src/constraints/exclusion_zone_constraint.cpp
   src/constraints/kissing_surface_constraint.cpp
   src/sampling/contact_point_sampler.cpp
@@ -65,6 +72,7 @@ target_link_libraries(${PROJECT_NAME}_core
     Eigen3::Eigen
     ${OpenCASCADE_LIBRARIES}
     fcl
+    embree4
     yaml-cpp
     tinyxml2::tinyxml2
 )
@@ -123,6 +131,7 @@ ament_export_dependencies(
   pluginlib
   tinyxml2
   fcl
+  embree
 )
 
 ament_export_include_directories(
@@ -168,7 +177,7 @@ if(BUILD_TESTING)
   add_sampler_test(contact_point_sampler_test test/contact_point_sampler_test.cpp)
   add_sampler_test(grasp_orientation_finder_test test/grasp_orientation_finder_test.cpp)
   add_sampler_test(shape_loader_test test/shape_loader_test.cpp)
-  add_sampler_test(fcl_collision_checker_test test/fcl_collision_checker_test.cpp)
+  add_sampler_test(collision_checker_test test/collision_checker_test.cpp)
 
 endif()
 

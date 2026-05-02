@@ -27,8 +27,8 @@ namespace io
 {
 
 /**
-+ * @brief Metadata for grasp result output
-+ */
+ * @brief Metadata for grasp result output
+ */
 struct ResultMetadata
 {
   std::string generated_at;
@@ -62,7 +62,6 @@ struct WriterOptions
   bool pretty_print = true;
   int indent_size = 2;
   bool include_metadata = true;
-  bool include_debug = false;
   size_t max_grasps = 0;
   double min_quality = 0.0;
 };

@@ -59,11 +59,6 @@ struct SampleArea
  * Region filters take a list of valid surface IDs (from surface filters)
  * and return a list of SampleArea objects defining where on each surface
  * grasps can be generated.
- *
- * Example filters:
- * - ExclusionZoneFilter: Removes user-defined forbidden zones
- * - EdgeAvoidanceFilter: Shrinks sampling area away from surface edges
- * - CustomRegionFilter: Only samples within user-defined regions
  */
 class RegionFilter
 {

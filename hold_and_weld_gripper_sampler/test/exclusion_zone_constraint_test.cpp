@@ -30,7 +30,7 @@
 
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 
 using namespace hold_and_weld_gripper_sampler;  // NOLINT
@@ -106,6 +106,7 @@ protected:
   ParsedGripper gripper_;
 };
 
+// Constraint constructed with no exclusion inputs reports empty sample areas.
 TEST_F(ExclusionZoneConstraintTest, ConstructWithNoConstraints)
 {
   ExclusionZoneConstraint constraint(mapper_, gripper_);
@@ -114,6 +115,7 @@ TEST_F(ExclusionZoneConstraintTest, ConstructWithNoConstraints)
   EXPECT_TRUE(constraint.get_sample_areas().empty());
 }
 
+// Constraint accepts a polygon exclusion zone at construction.
 TEST_F(ExclusionZoneConstraintTest, ConstructWithPolygonConstraint)
 {
   exclusion_polygon polygon;
@@ -134,6 +136,7 @@ TEST_F(ExclusionZoneConstraintTest, ConstructWithPolygonConstraint)
   EXPECT_EQ(constraint.get_name(), "ExclusionZoneConstraint");
 }
 
+// Constraint accepts circle, polygon, and line exclusion zones simultaneously.
 TEST_F(ExclusionZoneConstraintTest, ConstructWithMultipleConstraints)
 {
   exclusion_circle circle;
@@ -166,9 +169,9 @@ TEST_F(ExclusionZoneConstraintTest, ConstructWithMultipleConstraints)
   EXPECT_EQ(constraint.get_name(), "ExclusionZoneConstraint");
 }
 
+// Gripper placed 1 m away from a circle exclusion zone must not collide.
 TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
 {
-  // Create exclusion circle at origin
   exclusion_circle circle;
   circle.center = Eigen::Vector3d(0.0, 0.0, 0.0);
   circle.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
@@ -185,7 +188,6 @@ TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
   constraint.analyze_constraints(test_box, topology);
   wire_fcl(constraint, gripper_, test_box);
 
-  // Place gripper far away (at 1 meter away)
   gp_Trsf far_transform;
   far_transform.SetTranslation(gp_Vec(1.0, 1.0, 1.0));
 
@@ -224,9 +226,9 @@ TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
 //   EXPECT_TRUE(collision);
 // }
 
+// Gripper inside a line exclusion tube collides; gripper 0.5 m away does not.
 TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
 {
-  // Create exclusion line along X axis
   exclusion_line line;
   line.start = Eigen::Vector3d(-0.1, 0.0, 0.0);
   line.end = Eigen::Vector3d(0.1, 0.0, 0.0);
@@ -238,20 +240,17 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
   ExclusionZoneConstraint constraint(
     mapper_, gripper_, std::nullopt, std::nullopt, lines);
 
-  // Create a test shape and analyze
   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
   wire_fcl(constraint, gripper_, test_box);
 
-  // Place gripper at origin (inside the tube)
   gp_Trsf origin_transform;
   origin_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
 
   bool collision = constraint.intersects_exclusion_zone(origin_transform, 0.03);
   EXPECT_TRUE(collision);
 
-  // Place gripper far away
   gp_Trsf far_transform;
   far_transform.SetTranslation(gp_Vec(0.5, 0.5, 0.5));
 
@@ -294,46 +293,9 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
 //   EXPECT_TRUE(collision);
 // }
 
-// TODO(@silanus23): Fix mock gripper geometry to match URDF convention (fingers at Y=0 rest pos)
-// TEST_F(ExclusionZoneConstraintTest, GripperOpensCorrectly)
-#if 0
-TEST_F(ExclusionZoneConstraintTest, GripperOpensCorrectly)
-{
-  exclusion_circle circle;
-  circle.center = Eigen::Vector3d(0.0, 0.0, 0.0);
-  circle.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
-  circle.radius = 0.03;  // 3cm radius
-  circle.projection_depth = 0.02;
-  circle.clearance = 0.005;
-
-  std::vector<exclusion_circle> circles = {circle};
-
-  ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
-
-  // Create a test shape and analyze
-  TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
-  Topology topology = mapper_->load_from_shape(test_box);
-  constraint.analyze_constraints(test_box, topology);
-  wire_fcl(constraint, gripper_, test_box);
-
-  // Position gripper near the exclusion zone at origin
-  gp_Trsf near_transform;
-  near_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
-
-  // With small opening (0.02m), finger_travel=0.01m → fingers still within 3cm radius → collides
-  bool collision_small = constraint.intersects_exclusion_zone(near_transform, 0.02, 0.001);
-  EXPECT_TRUE(collision_small);
-
-  // With large opening (0.08m), finger_travel=0.04m → fingers splay to y≈±0.055m, outside 3cm
-  // radius + 5mm clearance. Base is at z=0.05 above the exclusion cylinder → no collision
-  bool collision_large = constraint.intersects_exclusion_zone(near_transform, 0.08, 0.001);
-  EXPECT_FALSE(collision_large);
-}
-#endif
-
+// Degenerate zero-length line exclusion must not crash or trigger a fatal failure.
 TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
 {
-  // Degenerate line (zero length)
   exclusion_line line;
   line.start = Eigen::Vector3d(0.0, 0.0, 0.0);
   line.end = Eigen::Vector3d(0.0, 0.0, 0.0);
@@ -342,11 +304,7 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
 
   std::vector<exclusion_line> lines = {line};
 
-  // Should not crash — degenerate geometry may throw std::exception or OCCT
-  // Standard_Failure, but must never trigger a GTest fatal failure (ASSERT/abort).
-  // The inner catch is intentionally absent: if an unhandled exception escapes,
-  // EXPECT_NO_FATAL_FAILURE will catch the resulting fatal signal; if it throws a
-  // handled C++ exception the test runner reports it as an error, not a silent pass.
+  // Degenerate geometry — must not crash.
   EXPECT_NO_FATAL_FAILURE({
     ExclusionZoneConstraint constraint(
       mapper_, gripper_, std::nullopt, std::nullopt, lines);
@@ -358,6 +316,7 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
   });
 }
 
+// Sub-millimetre exclusion geometry must not crash during collision query.
 TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
 {
   exclusion_circle circle;
@@ -376,7 +335,6 @@ TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
   constraint.analyze_constraints(test_box, topology);
   wire_fcl(constraint, gripper_, test_box);
 
-  // Should not crash with very small geometry
   gp_Trsf transform;
   transform.SetTranslation(gp_Vec(0.1, 0.1, 0.1));
 
@@ -385,48 +343,7 @@ TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
   });
 }
 
-// TODO(@silanus23): Fix mock gripper geometry to match URDF convention (fingers at Y=0 rest pos)
-// TEST_F(ExclusionZoneConstraintTest, CircleClearanceIsSymmetric)
-#if 0
-TEST_F(ExclusionZoneConstraintTest, CircleClearanceIsSymmetric)
-{
-  // This test verifies that clearance is applied symmetrically
-  // by checking that gripper collides when approaching from both sides
-
-  exclusion_circle circle;
-  circle.center = Eigen::Vector3d(0.1, 0.1, 0.05);
-  circle.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
-  circle.radius = 0.02;
-  circle.projection_depth = 0.02;
-  circle.clearance = 0.01;
-
-  std::vector<exclusion_circle> circles = {circle};
-
-  ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
-
-  TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
-  Topology topology = mapper_->load_from_shape(test_box);
-  constraint.analyze_constraints(test_box, topology);
-  wire_fcl(constraint, gripper_, test_box);
-
-  // Place gripper clearly inside the exclusion cylinder (at its center)
-  gp_Trsf inside_transform;
-  inside_transform.SetTranslation(gp_Vec(0.1, 0.1, 0.05));
-
-  // Place gripper clearly outside (1 m away)
-  gp_Trsf outside_transform;
-  outside_transform.SetTranslation(gp_Vec(1.0, 1.0, 1.0));
-
-  bool collision_inside = constraint.intersects_exclusion_zone(inside_transform, 0.02);
-  bool collision_outside = constraint.intersects_exclusion_zone(outside_transform, 0.02);
-
-  // A gripper placed at the zone centre must collide
-  EXPECT_TRUE(collision_inside);
-  // A gripper placed 1 m away must not collide
-  EXPECT_FALSE(collision_outside);
-}
-#endif
-
+// Sample areas are empty until analyze_constraints() is called.
 TEST_F(ExclusionZoneConstraintTest, SampleAreasEmptyBeforeAnalysis)
 {
   exclusion_circle circle;
@@ -439,59 +356,10 @@ TEST_F(ExclusionZoneConstraintTest, SampleAreasEmptyBeforeAnalysis)
 
   ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
 
-  // Before analyze_constraints is called, sample_areas should be empty
   std::vector<hold_and_weld_gripper_sampler::core::SampleArea> areas =
     constraint.get_sample_areas();
   EXPECT_TRUE(areas.empty());
 }
-
-// TODO(@silanus23): Fix mock gripper geometry to match URDF convention (fingers at Y=0 rest pos)
-// TEST_F(ExclusionZoneConstraintTest, MultipleExclusionZonesAllChecked)
-#if 0
-TEST_F(ExclusionZoneConstraintTest, MultipleExclusionZonesAllChecked)
-{
-  // Create two separate exclusion circles
-  exclusion_circle circle1;
-  circle1.center = Eigen::Vector3d(0.0, 0.0, 0.05);
-  circle1.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
-  circle1.radius = 0.03;
-  circle1.projection_depth = 0.02;
-  circle1.clearance = 0.005;
-
-  exclusion_circle circle2;
-  circle2.center = Eigen::Vector3d(0.2, 0.0, 0.05);
-  circle2.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
-  circle2.radius = 0.03;
-  circle2.projection_depth = 0.02;
-  circle2.clearance = 0.005;
-
-  std::vector<exclusion_circle> circles = {circle1, circle2};
-
-  ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
-
-  TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.4, 0.2, 0.1).Shape();
-  Topology topology = mapper_->load_from_shape(test_box);
-  constraint.analyze_constraints(test_box, topology);
-  wire_fcl(constraint, gripper_, test_box);
-
-  // Collision with first zone only
-  gp_Trsf near_first;
-  near_first.SetTranslation(gp_Vec(0.0, 0.0, 0.05));
-  EXPECT_TRUE(constraint.intersects_exclusion_zone(near_first, 0.02));
-
-  // Collision with second zone only
-  gp_Trsf near_second;
-  near_second.SetTranslation(gp_Vec(0.2, 0.0, 0.05));
-  EXPECT_TRUE(constraint.intersects_exclusion_zone(near_second, 0.02));
-
-  // No collision in between (if far enough)
-  gp_Trsf between;
-  between.SetTranslation(gp_Vec(0.1, 0.15, 0.05));
-  bool collision_between = constraint.intersects_exclusion_zone(between, 0.02);
-  // This may or may not collide depending on gripper size - just verify no crash
-  EXPECT_NO_FATAL_FAILURE({(void)collision_between;});
-}
-#endif
 
 int main(int argc, char ** argv)
 {

@@ -79,7 +79,6 @@ struct OutputConfig
   std::string json_path = "grasps.json";
   size_t max_grasps = 0;  // 0 = all
   double min_quality = 0.0;
-  bool include_debug = true;
 };
 
 /**
@@ -96,10 +95,8 @@ struct ParsedConfig
   std::string gripper_urdf_path;
   std::optional<double> gripper_max_opening;
 
-  // Secondary shapes
   std::vector<SecondaryConfig> secondaries;
 
-  // Exclusion zones
   std::vector<constraints::exclusion_circle> exclusion_circles;
   std::vector<constraints::exclusion_polygon> exclusion_polygons;
   std::vector<constraints::exclusion_line> exclusion_lines;
@@ -122,18 +119,6 @@ struct ParsedConfig
  *
  * Loads configuration from YAML files following the ROS2 parameter format.
  * Supports both full configuration files and partial overrides.
- *
- * Usage:
- * @code
- * ConfigParser parser;
- * auto config = parser.parse_file("config/grasp_finder.yaml");
- *
- * if (config.has_value()) {
- *   // Use config to set up GraspFinder
- * } else {
- *   // Handle error
- * }
- * @endcode
  */
 class ConfigParser
 {

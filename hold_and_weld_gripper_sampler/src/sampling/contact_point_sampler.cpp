@@ -14,8 +14,6 @@
 
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 
-#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -23,23 +21,27 @@
 #include <tuple>
 #include <vector>
 
+#include <BRep_Tool.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
-#include <BRep_Tool.hxx>
+#include <Geom_Surface.hxx>
 #include <Geom2d_Curve.hxx>
 #include <GeomLProp_SLProps.hxx>
-#include <Geom_Surface.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <GProp_GProps.hxx>
-#include <rclcpp/rclcpp.hpp>
+#include <IntCurvesFace_ShapeIntersector.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <rclcpp/rclcpp.hpp>
+
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
 // TODO(@silanus23): Surface pairing uses face_min_distance as a pre-filter which false-rejects
 // valid pairs on organic/curved shapes where face edges are close but centers are graspable.
@@ -62,7 +64,7 @@ ContactPointSampler::ContactPointSampler(const SamplingConfig & config)
 std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
   const geometry::Topology & topology,
   const std::vector<int> & valid_surface_ids,
-  const std::vector<core::SampleArea> & exclusion_areas)
+  const std::vector<core::SampleArea> & exclusion_areas) const
 {
   std::vector<ContactPair> contact_pairs;
 
@@ -91,9 +93,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
     return contact_pairs;
   }
 
-  // For each surface pair, generate contact point pairs bidirectionally
   for (const auto & pair : surface_pairs) {
-    // Direction 1: Sample from surface_1, project to surface_2
     auto contacts_1 = sample_surface(pair.face_1, pair.surface_id_1, exclusion_areas);
 
     RCLCPP_DEBUG(logger_, "Surface pair %d-%d: sampled %zu points on surface 1",
@@ -154,7 +154,6 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       contact_pairs.push_back(cp);
     }
 
-    // Direction 2: Sample from surface_2, project to surface_1
     auto contacts_2 = sample_surface(pair.face_2, pair.surface_id_2, exclusion_areas);
 
     RCLCPP_DEBUG(logger_, "Surface pair %d-%d: sampled %zu points on surface 2",
@@ -279,7 +278,7 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
       pair.face_2 = s2.face;
       pair.normal_1 = s1.normal;
       pair.normal_2 = s2.normal;
-      pair.min_distance = 0.0; // Distance validation is fully deferred to contact loop
+      pair.min_distance = 0.0;  // Distance validation is fully deferred to contact loop
 
       pairs.push_back(pair);
     }
@@ -328,13 +327,28 @@ std::vector<gp_Pnt> ContactPointSampler::sample_full_face(const TopoDS_Face & fa
 
   double u_range = u_max - u_min;
   double v_range = v_max - v_min;
-  int u_steps = static_cast<int>(std::ceil(u_range / config_.sample_density));
-  int v_steps = static_cast<int>(std::ceil(v_range / config_.sample_density));
+
+  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+
+  // Estimate physical arc length per UV unit at the face midpoint so that
+  // sample_density is respected in metres regardless of surface parameterisation
+  // (e.g. a cylinder face has U in radians, not metres).
+  double u_mid = u_min + u_range * 0.5;
+  double v_mid = v_min + v_range * 0.5;
+  constexpr double kProbeEps = 1e-4;
+  gp_Pnt p0 = surf->Value(u_mid, v_mid);
+  gp_Pnt pu = surf->Value(u_mid + kProbeEps, v_mid);
+  gp_Pnt pv = surf->Value(u_mid, v_mid + kProbeEps);
+  double du_scale = p0.Distance(pu) / kProbeEps;   // metres per U-unit
+  double dv_scale = p0.Distance(pv) / kProbeEps;   // metres per V-unit
+  if (du_scale < 1e-9) {du_scale = 1.0;}
+  if (dv_scale < 1e-9) {dv_scale = 1.0;}
+
+  int u_steps = static_cast<int>(std::ceil(u_range * du_scale / config_.sample_density));
+  int v_steps = static_cast<int>(std::ceil(v_range * dv_scale / config_.sample_density));
 
   if (u_steps < 1) {u_steps = 1;}
   if (v_steps < 1) {v_steps = 1;}
-
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
 
   for (int i = 0; i <= u_steps; i++) {
     for (int j = 0; j <= v_steps; j++) {
@@ -368,13 +382,27 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
 
   double u_range = u_max - u_min;
   double v_range = v_max - v_min;
-  int u_steps = static_cast<int>(std::ceil(u_range / config_.sample_density));
-  int v_steps = static_cast<int>(std::ceil(v_range / config_.sample_density));
+
+  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+
+  // Estimate physical arc length per UV unit at the face midpoint — same fix
+  // as sample_full_face so exclusion-zone sampling also honours sample_density in metres.
+  double u_mid = u_min + u_range * 0.5;
+  double v_mid = v_min + v_range * 0.5;
+  constexpr double kProbeEps = 1e-4;
+  gp_Pnt p0 = surf->Value(u_mid, v_mid);
+  gp_Pnt pu = surf->Value(u_mid + kProbeEps, v_mid);
+  gp_Pnt pv = surf->Value(u_mid, v_mid + kProbeEps);
+  double du_scale = p0.Distance(pu) / kProbeEps;
+  double dv_scale = p0.Distance(pv) / kProbeEps;
+  if (du_scale < 1e-9) {du_scale = 1.0;}
+  if (dv_scale < 1e-9) {dv_scale = 1.0;}
+
+  int u_steps = static_cast<int>(std::ceil(u_range * du_scale / config_.sample_density));
+  int v_steps = static_cast<int>(std::ceil(v_range * dv_scale / config_.sample_density));
 
   if (u_steps < 1) {u_steps = 1;}
   if (v_steps < 1) {v_steps = 1;}
-
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
 
   for (int i = 0; i <= u_steps; i++) {
     for (int j = 0; j <= v_steps; j++) {
@@ -500,7 +528,7 @@ bool ContactPointSampler::is_point_in_exclusion(
         return true;
       }
     }
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_DEBUG(logger_, "Projection failed in exclusion check: %s", e.GetMessageString());
   }
 
@@ -546,7 +574,7 @@ bool ContactPointSampler::is_point_in_allowed_area(
         return false;
       }
     }
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_DEBUG(logger_, "Projection failed in allowed area check: %s", e.GetMessageString());
     return false;
   }
@@ -566,8 +594,73 @@ bool ContactPointSampler::find_opposing_contact(
     return false;
   }
 
-  BRepBuilderAPI_MakeVertex vertex_maker(contact_1);
+  // Ray cast (primary): BRepExtrema on curved faces finds the patch edge, not the
+  // true antipodal contact. Try ±normal to handle orientation ambiguity.
+  try {
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(face_2, props);
+    gp_Pnt centroid_2 = props.CentreOfMass();
 
+    // Direction from face_2 centroid toward contact_1 — this is the
+    // approach axis (contact_1 is on the opposite side of the workpiece)
+    gp_Vec approach(centroid_2, contact_1);
+    if (approach.Magnitude() > 1e-6) {
+      approach.Normalize();
+
+      // Shoot ray from contact_1 in the OPPOSITE direction (into the workpiece
+      // toward face_2), and also forward direction as fallback
+      gp_Dir ray_dir(-approach.X(), -approach.Y(), -approach.Z());
+      gp_Lin ray(contact_1, ray_dir);
+
+      IntCurvesFace_ShapeIntersector intersector;
+      intersector.Load(face_2, 1e-6);
+      intersector.Perform(ray, -1e10, 1e10);
+
+      if (intersector.NbPnt() > 0) {
+        // Pick intersection closest to contact_1
+        double best_dist = std::numeric_limits<double>::max();
+        gp_Pnt best_pt = intersector.Pnt(1);
+        for (int k = 1; k <= intersector.NbPnt(); ++k) {
+          double dist_to_pt = contact_1.Distance(intersector.Pnt(k));
+          if (dist_to_pt < best_dist && dist_to_pt > 1e-6) {  // exclude self-intersection
+            best_dist = dist_to_pt;
+            best_pt = intersector.Pnt(k);
+          }
+        }
+        if (best_dist < std::numeric_limits<double>::max()) {
+          opposing_contact = best_pt;
+          return true;
+        }
+      }
+
+      // Try forward direction too
+      gp_Dir ray_dir_fwd(approach.X(), approach.Y(), approach.Z());
+      gp_Lin ray_fwd(contact_1, ray_dir_fwd);
+      IntCurvesFace_ShapeIntersector intersector_fwd;
+      intersector_fwd.Load(face_2, 1e-6);
+      intersector_fwd.Perform(ray_fwd, -1e10, 1e10);
+
+      if (intersector_fwd.NbPnt() > 0) {
+        double best_dist = std::numeric_limits<double>::max();
+        gp_Pnt best_pt = intersector_fwd.Pnt(1);
+        for (int k = 1; k <= intersector_fwd.NbPnt(); ++k) {
+          double dist_to_pt = contact_1.Distance(intersector_fwd.Pnt(k));
+          if (dist_to_pt < best_dist && dist_to_pt > 1e-6) {
+            best_dist = dist_to_pt;
+            best_pt = intersector_fwd.Pnt(k);
+          }
+        }
+        if (best_dist < std::numeric_limits<double>::max()) {
+          opposing_contact = best_pt;
+          return true;
+        }
+      }
+    }
+  } catch (const Standard_Failure &) {
+    // Fall through to BRepExtrema
+  }
+
+  BRepBuilderAPI_MakeVertex vertex_maker(contact_1);
   BRepExtrema_DistShapeShape dist(vertex_maker.Vertex(), face_2);
   if (dist.NbSolution() == 0) {
     return false;
@@ -616,6 +709,7 @@ bool ContactPointSampler::is_valid_pairing(
   }
 
   double min_alignment = std::min(alignment_1, alignment_2);
+  // clamp guards sqrt of values slightly above 1.0 due to float precision
   double alignment_squared = std::min(1.0, min_alignment * min_alignment);
   double lateral_component = projection_length * std::sqrt(1.0 - alignment_squared);
   if (lateral_component > config_.max_lateral_deviation) {
@@ -650,10 +744,17 @@ bool ContactPointSampler::has_antiparallel_local_normals(
     }
   }
 
-  auto normals_1 = sample_normals_from_allowed_region(
-    face_1, surf_1, wires_1, 10, 100, config_.normal_sample_density);
-  auto normals_2 = sample_normals_from_allowed_region(
-    face_2, surf_2, wires_2, 10, 100, config_.normal_sample_density);
+  // Size both grids from the larger face so the large face is covered and
+  // the small face gets extra samples — over-sampling the small side is harmless.
+  GProp_GProps area_props_1, area_props_2;
+  BRepGProp::SurfaceProperties(face_1, area_props_1);
+  BRepGProp::SurfaceProperties(face_2, area_props_2);
+  double max_area_cm2 = std::max(area_props_1.Mass(), area_props_2.Mass()) * 10000.0;
+  int target_samples = std::max(10, std::min(100,
+    static_cast<int>(max_area_cm2 * config_.normal_sample_density)));
+
+  auto normals_1 = sample_normals_from_allowed_region(face_1, surf_1, wires_1, target_samples);
+  auto normals_2 = sample_normals_from_allowed_region(face_2, surf_2, wires_2, target_samples);
 
   if (normals_1.empty() || normals_2.empty()) {
     RCLCPP_DEBUG(logger_,
@@ -681,73 +782,14 @@ std::vector<gp_Vec> ContactPointSampler::sample_normals_from_allowed_region(
   const TopoDS_Face & face,
   const Handle(Geom_Surface) & surf,
   const std::vector<TopoDS_Wire> & wires,
-  int min_samples,
-  int max_samples,
-  double samples_per_cm2) const
+  int target_samples) const
 {
   std::vector<gp_Vec> normals;
 
   Standard_Real u_min, u_max, v_min, v_max;
   BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
-  int target_samples = min_samples;
-
-  if (wires.empty()) {
-    GProp_GProps props;
-    BRepGProp::SurfaceProperties(face, props);
-    double area_cm2 = props.Mass() * 10000.0;
-    target_samples = static_cast<int>(area_cm2 * samples_per_cm2);
-  } else {
-    int coarse_u = 20;
-    int coarse_v = 20;
-    int allowed_count = 0;
-    int total_count = 0;
-
-    for (int i = 0; i <= coarse_u; i++) {
-      for (int j = 0; j <= coarse_v; j++) {
-        double u = u_min + (u_max - u_min) * i / coarse_u;
-        double v = v_min + (v_max - v_min) * j / coarse_v;
-        gp_Pnt2d point_2d(u, v);
-
-        BRepClass_FaceClassifier classifier(face, point_2d, 1e-6);
-        if (classifier.State() != TopAbs_IN && classifier.State() != TopAbs_ON) {
-          continue;
-        }
-
-        total_count++;
-        bool is_allowed = true;
-
-        for (const auto & wire : wires) {
-          bool inside_wire = is_point_inside_wire(point_2d, wire, face);
-          bool is_exclusion_zone = (wire.Orientation() == TopAbs_REVERSED);
-
-          if (is_exclusion_zone && inside_wire) {
-            is_allowed = false;
-            break;
-          } else if (!is_exclusion_zone && !inside_wire) {
-            is_allowed = false;
-            break;
-          }
-        }
-
-        if (is_allowed) {
-          allowed_count++;
-        }
-      }
-    }
-
-    if (total_count > 0) {
-      GProp_GProps props;
-      BRepGProp::SurfaceProperties(face, props);
-      double total_area_cm2 = props.Mass() * 10000.0;
-      double allowed_fraction = static_cast<double>(allowed_count) / total_count;
-      double allowed_area_cm2 = total_area_cm2 * allowed_fraction;
-      target_samples = static_cast<int>(allowed_area_cm2 * samples_per_cm2);
-    }
-  }
-
-  target_samples = std::max(min_samples, std::min(max_samples, target_samples));
-
+  // Oversample by 2x so the actual count exceeds target after exclusion filtering.
   int samples_per_dim = std::max(1, static_cast<int>(std::sqrt(target_samples * 2.0)));
 
   RCLCPP_DEBUG(logger_, "Sampling %d normals (target=%d, grid=%dx%d)",

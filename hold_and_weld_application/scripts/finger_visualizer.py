@@ -207,32 +207,57 @@ class FingerVisualizer(Node):
         collision_obj.header.frame_id = self.frame_id
         collision_obj.id = object_id
 
-        link = root.find('.//link')
+        # Match the specific link by name; fall back to first link if not found
+        link = root.find(f".//link[@name='{object_id}']")
+        if link is None:
+            link = root.find('.//link')
         if link is None:
             self.get_logger().error(f"No <link> in URDF for '{object_id}'")
             return
 
-        geometry = link.find('.//collision/geometry')
-        if geometry is None:
+        # Iterate ALL <collision> tags so multi-primitive objects are fully represented
+        collisions = link.findall('collision')
+        if not collisions:
             self.get_logger().error(
                 f"No collision geometry in URDF for '{object_id}'"
             )
             return
 
-        primitive = self._geometry_to_primitive(geometry, object_id)
-        if primitive is None:
-            return
-        collision_obj.primitives = [primitive]
+        for col in collisions:
+            geometry = col.find('geometry')
+            if geometry is None:
+                continue
 
-        pose = Pose()
-        pose.position.x = float(pose_cfg.get('x', 0.0))
-        pose.position.y = float(pose_cfg.get('y', 0.0))
-        pose.position.z = float(pose_cfg.get('z', 0.0))
-        pose.orientation.x = float(orient_cfg.get('x', 0.0))
-        pose.orientation.y = float(orient_cfg.get('y', 0.0))
-        pose.orientation.z = float(orient_cfg.get('z', 0.0))
-        pose.orientation.w = float(orient_cfg.get('w', 1.0))
-        collision_obj.primitive_poses = [pose]
+            primitive = self._geometry_to_primitive(geometry, object_id)
+            if primitive is None:
+                continue
+
+            # Local collision origin offset (translation only; rpy ignored for primitives)
+            local_x, local_y, local_z = 0.0, 0.0, 0.0
+            origin = col.find('origin')
+            if origin is not None:
+                xyz = origin.get('xyz', '0 0 0').split()
+                if len(xyz) == 3:
+                    local_x, local_y, local_z = float(xyz[0]), float(xyz[1]), float(xyz[2])
+
+            pose = Pose()
+            pose.position.x = float(pose_cfg.get('x', 0.0)) + local_x
+            pose.position.y = float(pose_cfg.get('y', 0.0)) + local_y
+            pose.position.z = float(pose_cfg.get('z', 0.0)) + local_z
+            pose.orientation.x = float(orient_cfg.get('x', 0.0))
+            pose.orientation.y = float(orient_cfg.get('y', 0.0))
+            pose.orientation.z = float(orient_cfg.get('z', 0.0))
+            pose.orientation.w = float(orient_cfg.get('w', 1.0))
+
+            collision_obj.primitives.append(primitive)
+            collision_obj.primitive_poses.append(pose)
+
+        if not collision_obj.primitives:
+            self.get_logger().error(
+                f"All collision geometries failed to parse for '{object_id}'"
+            )
+            return
+
         collision_obj.operation = CollisionObject.ADD
 
         self.collision_pub.publish(collision_obj)
@@ -404,15 +429,15 @@ class FingerVisualizer(Node):
             is 100 mm below the joint origin, so the tip is at z=-0.20 and the
             root is at z=0.00 relative to the joint.
 
-        In the gripper frame built by compute_gripper_transform:
-          X = approach direction
-          Y = grip axis (finger spread)
-          Z = Y × X  →  toward gripper body (away from workpiece face)
+        # In the gripper frame built by compute_gripper_transform:
+          Y = grip axis (contact_1 → contact_2)
+          Z = approach direction (outward from workpiece face, away from palm)
+          X = Y × Z
 
-        So +Z in gripper frame points inward (toward palm), and the finger tip
+        So -Z in gripper frame points inward (toward palm), and the finger tip
         sits at the contact point (z_local = 0), with the body extending
-        finger_length along +Z.  Centre of the box is at finger_length/2
-        along +Z from the contact point.
+        finger_length along -Z.  Centre of the box is at finger_length/2
+        along -Z from the contact point.
 
         Each finger also gets a SPHERE marker at its tip (the contact face) so
         the exact contact location is clearly visible.  Sphere radius equals
@@ -441,7 +466,7 @@ class FingerVisualizer(Node):
         # Direction fingers extend inward: local +Z of gripper frame in world.
         # compute_gripper_transform sets Z = Y × X (grip × approach), which
         # points toward the gripper body — i.e. away from the workpiece face.
-        inward = self._quat_rotate(quat, [0.0, 0.0, 1.0])
+        inward = self._quat_rotate(quat, [0.0, 0.0, -1.0])
 
         half = finger_l / 2.0
 

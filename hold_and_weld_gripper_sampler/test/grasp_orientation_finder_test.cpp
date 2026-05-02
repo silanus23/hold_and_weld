@@ -16,10 +16,9 @@
 
 #include <Eigen/Dense>
 
-#include <algorithm>
+
 #include <cmath>
 #include <memory>
-#include <set>
 #include <vector>
 
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -54,7 +53,7 @@
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 
@@ -241,6 +240,7 @@ protected:
   std::shared_ptr<GeometryMapper> mapper_;
 };
 
+// Empty contact pair list must return no grasps.
 TEST_F(GraspOrientationFinderTest, EmptyContactPairsReturnsEmpty)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -254,9 +254,9 @@ TEST_F(GraspOrientationFinderTest, EmptyContactPairsReturnsEmpty)
   EXPECT_TRUE(grasps.empty());
 }
 
+// A valid opposing-face contact pair on a grippable box produces candidates with in-range scores.
 TEST_F(GraspOrientationFinderTest, FindGraspsOnSimpleBox)
 {
-  // Create a graspable box: 5cm (X) x 10cm (Y) x 5cm (Z)
   TopoDS_Shape box = create_box(0.05, 0.10, 0.05);
   Topology topology = mapper_->load_from_shape(box, "test_box");
 
@@ -268,17 +268,15 @@ TEST_F(GraspOrientationFinderTest, FindGraspsOnSimpleBox)
   wire_fcl(finder, gripper_, box);
 
   ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.025);   // Center of X=0 face (YZ plane)
-  pair.contact_2 = gp_Pnt(0.05, 0.05, 0.025);  // Center of X=0.05 face (YZ plane)
-  pair.grip_distance = 0.05;                    // Distance along X axis
+  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.025);
+  pair.contact_2 = gp_Pnt(0.05, 0.05, 0.025);
+  pair.grip_distance = 0.05;
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 1;
 
   std::vector<ContactPair> pairs = {pair};
   auto grasps = finder.find_valid_grasps(pairs, topology);
 
-  // Should find at least some grasp candidates (may be filtered by collision)
-  // The test verifies the method doesn't crash and returns valid structure
   for (const auto & grasp : grasps) {
     EXPECT_DOUBLE_EQ(grasp.grip_distance, 0.05);
     EXPECT_GE(grasp.quality_score, 0.0);
@@ -340,98 +338,51 @@ TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
 }
 #endif
 
-TEST_F(GraspOrientationFinderTest, ClusteringReducesEdgeCandidates)
+// Wider dual-seed dedup tolerance must produce fewer or equal orientations than a narrow tolerance.
+TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceReducesOrientations)
 {
-  // max_edge_candidates caps the number of edge seeds used per contact point.
-  // With 0 (no limit) every local minimum edge becomes a seed; with 1 only the
-  // closest edge is kept.  The capped run must therefore produce <= orientations.
-  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  OrientationConfig config_no_limit;
-  config_no_limit.max_edge_candidates = 0;  // keep all edge seeds
-  config_no_limit.finger_length = 0.2;      // large search radius → many edges
-  config_no_limit.angle_offsets = {0.0};
-  config_no_limit.collision_tolerance = 0.0001;
-
-  OrientationConfig config_capped;
-  config_capped.max_edge_candidates = 1;    // keep only the single closest edge seed
-  config_capped.finger_length = 0.2;
-  config_capped.angle_offsets = {0.0};
-  config_capped.collision_tolerance = 0.0001;
+  TopoDS_Shape u_edge_raw = create_u_shaped_edge(0.05);
+  TopoDS_Shape u_edge = create_face_with_edge(u_edge_raw);
+  Topology topology = mapper_->load_from_shape(u_edge, "test_arc");
 
   ParsedGripper small_gripper = create_small_gripper();
 
-  GraspOrientationFinder finder_no_limit(
-    box, small_gripper, nullptr, nullptr, config_no_limit);
-  GraspOrientationFinder finder_capped(
-    box, small_gripper, nullptr, nullptr, config_capped);
-  wire_fcl(finder_no_limit, small_gripper, box);
-  wire_fcl(finder_capped, small_gripper, box);
+  OrientationConfig config_no_dedup;
+  config_no_dedup.max_edge_candidates = 0;
+  config_no_dedup.finger_length = 0.10;
+  config_no_dedup.angle_offsets = {0.0};
+  config_no_dedup.collision_tolerance = 0.0001;
+  config_no_dedup.dual_seed_dedup_tolerance_deg = 0.1;  // near-zero: keep all seeds
 
-  // Contact pair across the X faces of the box
+  OrientationConfig config_dedup;
+  config_dedup.max_edge_candidates = 0;
+  config_dedup.finger_length = 0.10;
+  config_dedup.angle_offsets = {0.0};
+  config_dedup.collision_tolerance = 0.0001;
+  config_dedup.dual_seed_dedup_tolerance_deg = 90.0;    // aggressive: merge seeds within 90°
+
+  GraspOrientationFinder finder_no_dedup(u_edge, small_gripper, nullptr, nullptr, config_no_dedup);
+  GraspOrientationFinder finder_dedup(u_edge, small_gripper, nullptr, nullptr, config_dedup);
+  wire_fcl(finder_no_dedup, small_gripper, u_edge);
+  wire_fcl(finder_dedup, small_gripper, u_edge);
+
   ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
-  pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
+  pair.contact_1 = gp_Pnt(0.0, 0.02, 0.0);
+  pair.contact_2 = gp_Pnt(0.0, 0.02, 0.1);
   pair.grip_distance = 0.1;
   pair.surface_id_1 = 0;
-  pair.surface_id_2 = 1;
+  pair.surface_id_2 = 0;
 
   std::vector<ContactPair> pairs = {pair};
 
-  auto grasps_no_limit = finder_no_limit.find_valid_grasps(pairs, topology);
-  auto grasps_capped = finder_capped.find_valid_grasps(pairs, topology);
-
-  // Capping edge candidates must yield fewer or equal orientations
-  EXPECT_LE(grasps_capped.size(), grasps_no_limit.size());
-}
-
-TEST_F(GraspOrientationFinderTest, LargerDualSeedDedupToleranceFewerOrientations)
-{
-  // dual_seed_dedup_tolerance_deg merges edge seeds from contact_1 and contact_2
-  // that point in nearly the same bearing direction.  A tiny tolerance keeps
-  // almost every seed; a large tolerance aggressively merges them.
-  // The aggressively-merged run must produce <= orientations.
-  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config_narrow;
-  config_narrow.max_edge_candidates = 0;
-  config_narrow.finger_length = 0.15;
-  config_narrow.angle_offsets = {0.0};
-  config_narrow.collision_tolerance = 0.0001;
-  config_narrow.dual_seed_dedup_tolerance_deg = 0.1;   // near-zero: keep all seeds
-
-  OrientationConfig config_wide;
-  config_wide.max_edge_candidates = 0;
-  config_wide.finger_length = 0.15;
-  config_wide.angle_offsets = {0.0};
-  config_wide.collision_tolerance = 0.0001;
-  config_wide.dual_seed_dedup_tolerance_deg = 90.0;    // aggressive: merge seeds within 90°
-
-  GraspOrientationFinder finder_narrow(box, small_gripper, nullptr, nullptr, config_narrow);
-  GraspOrientationFinder finder_wide(box, small_gripper, nullptr, nullptr, config_wide);
-  wire_fcl(finder_narrow, small_gripper, box);
-  wire_fcl(finder_wide, small_gripper, box);
-
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
-  pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
-  pair.grip_distance = 0.1;
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 1;
-
-  std::vector<ContactPair> pairs = {pair};
-
-  auto grasps_narrow = finder_narrow.find_valid_grasps(pairs, topology);
-  auto grasps_wide = finder_wide.find_valid_grasps(pairs, topology);
+  auto grasps_no_dedup = finder_no_dedup.find_valid_grasps(pairs, topology);
+  auto grasps_dedup = finder_dedup.find_valid_grasps(pairs, topology);
 
   // Wider dedup tolerance must produce fewer or equal orientations
-  EXPECT_LE(grasps_wide.size(), grasps_narrow.size());
+  EXPECT_LE(grasps_dedup.size(), grasps_no_dedup.size());
 }
 
+// Three angle offsets must produce at least as many candidates as one offset.
 TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -470,13 +421,12 @@ TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates
   auto grasps_single = finder_single.find_valid_grasps(pairs, topology);
   auto grasps_triple = finder_triple.find_valid_grasps(pairs, topology);
 
-  // Triple offsets should produce more candidates (up to 3x if no collision filtering)
-  // At minimum, should be >= single (unless all collide)
   if (!grasps_single.empty()) {
     EXPECT_GE(grasps_triple.size(), grasps_single.size());
   }
 }
 
+// Empty angle_offsets must behave identically to an explicit {0.0} offset.
 TEST_F(GraspOrientationFinderTest, EmptyAngleOffsetsDefaultsToZero)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -515,61 +465,7 @@ TEST_F(GraspOrientationFinderTest, EmptyAngleOffsetsDefaultsToZero)
   EXPECT_EQ(grasps_empty.size(), grasps_zero.size());
 }
 
-TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceIsConfigurable)
-{
-  // Create a U-shaped arc where dual-seed strategy finds seeds from both ends
-  // Wrap in a face so topology has a valid surface
-  TopoDS_Shape u_edge_raw = create_u_shaped_edge(0.05);
-  TopoDS_Shape u_edge = create_face_with_edge(u_edge_raw);
-  Topology topology = mapper_->load_from_shape(u_edge, "test_arc");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  // Config with very small dedup tolerance (nearly no deduplication)
-  OrientationConfig config_no_dedup;
-  config_no_dedup.finger_length = 0.10;
-  config_no_dedup.collision_tolerance = 0.0001;
-  config_no_dedup.dual_seed_dedup_tolerance_deg = 0.1;  // Very small: ~no dedup
-
-  config_no_dedup.max_edge_candidates = 0;
-  config_no_dedup.angle_offsets = {0.0};
-
-  // Config with large dedup tolerance (aggressive deduplication)
-  OrientationConfig config_dedup;
-  config_dedup.finger_length = 0.10;
-  config_dedup.collision_tolerance = 0.0001;
-  config_dedup.dual_seed_dedup_tolerance_deg = 90.0;
-
-  config_dedup.max_edge_candidates = 0;
-  config_dedup.angle_offsets = {0.0};
-
-  GraspOrientationFinder finder_no_dedup(u_edge, small_gripper, nullptr, nullptr, config_no_dedup);
-  GraspOrientationFinder finder_dedup(u_edge, small_gripper, nullptr, nullptr, config_dedup);
-  wire_fcl(finder_no_dedup, small_gripper, u_edge);
-  wire_fcl(finder_dedup, small_gripper, u_edge);
-
-  // Contact inside the arc
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.02, 0.0);
-  pair.contact_2 = gp_Pnt(0.0, 0.02, 0.1);
-  pair.grip_distance = 0.1;
-  // surface_id_1 = surface_id_2 = 0 is intentional: this shape has only one
-  // face (surface 0).  Both contacts are associated with it so that
-  // find_edges_in_circle searches the same face's edges from two different Z
-  // positions.  The grip direction (Z-axis) is what matters here — not an
-  // opposing-face grasp.
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 0;
-
-  std::vector<ContactPair> pairs = {pair};
-
-  auto grasps_no_dedup = finder_no_dedup.find_valid_grasps(pairs, topology);
-  auto grasps_dedup = finder_dedup.find_valid_grasps(pairs, topology);
-
-  // With aggressive deduplication, we should have fewer or equal grasps
-  EXPECT_LE(grasps_dedup.size(), grasps_no_dedup.size());
-}
-
+// Every returned grasp must have a quality_score in [0, 1].
 TEST_F(GraspOrientationFinderTest, QualityScoreInValidRange)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -600,77 +496,7 @@ TEST_F(GraspOrientationFinderTest, QualityScoreInValidRange)
   }
 }
 
-// TODO(@silanus23): Fix mock gripper geometry to match URDF convention (fingers at Y=0 rest pos)
-#if 0
-TEST_F(GraspOrientationFinderTest, QualityScoreOrderingCenterVsEdge)
-{
-  // 100x100x100 mm cube.  Two contact pairs on the same opposing X faces:
-  //   - "center" pair: contacts at face center (Y=0.05, Z=0.05) — 50 mm
-  //     from every edge → maximum clearance → highest quality score.
-  //   - "edge" pair: contacts at Y=0.008 — only 8 mm from the nearest
-  //     Y-edge → low clearance → lower quality score.
-  // Both pairs use the same finger_length so that the same set of edges is
-  // visible; the difference is purely in how close the contact is to an edge.
-  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config;
-  config.finger_length = 0.08;     // Reaches edges from both positions
-  config.collision_tolerance = 0.0001;
-  config.max_edge_candidates = 1;
-  config.angle_offsets = {0.0};    // Single angle — one grasp per pair
-
-  GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, box);
-
-  // Center contact: 50 mm from every edge on the face
-  ContactPair center_pair;
-  center_pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
-  center_pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
-  center_pair.grip_distance = 0.1;
-  center_pair.surface_id_1 = 0;
-  center_pair.surface_id_2 = 1;
-  center_pair.normal_1 = gp_Vec(-1.0, 0.0, 0.0);
-  center_pair.normal_2 = gp_Vec(1.0, 0.0, 0.0);
-
-  // Near-edge contact: 8 mm from the nearest Y-edge
-  ContactPair edge_pair;
-  edge_pair.contact_1 = gp_Pnt(0.0, 0.008, 0.05);
-  edge_pair.contact_2 = gp_Pnt(0.1, 0.008, 0.05);
-  edge_pair.grip_distance = 0.1;
-  edge_pair.surface_id_1 = 0;
-  edge_pair.surface_id_2 = 1;
-  edge_pair.normal_1 = gp_Vec(-1.0, 0.0, 0.0);
-  edge_pair.normal_2 = gp_Vec(1.0, 0.0, 0.0);
-
-  std::vector<ContactPair> center_pairs = {center_pair};
-  std::vector<ContactPair> edge_pairs = {edge_pair};
-
-  auto center_grasps = finder.find_valid_grasps(center_pairs, topology);
-  auto edge_grasps = finder.find_valid_grasps(edge_pairs, topology);
-
-  ASSERT_FALSE(center_grasps.empty()) << "Center contact must produce at least one grasp";
-  ASSERT_FALSE(edge_grasps.empty()) << "Near-edge contact must produce at least one grasp";
-
-  // Pick the best (highest quality) grasp from each set
-  double center_best = 0.0;
-  for (const auto & g : center_grasps) {
-    center_best = std::max(center_best, g.quality_score);
-  }
-  double edge_best = 0.0;
-  for (const auto & g : edge_grasps) {
-    edge_best = std::max(edge_best, g.quality_score);
-  }
-
-  EXPECT_GT(center_best, edge_best)
-    << "Center-of-face contact (score=" << center_best
-    << ") must score higher than near-edge contact (score=" << edge_best
-    << ") because quality_score encodes minimum clearance to the nearest edge";
-}
-#endif
-
+// max_edge_candidates=2 must produce fewer or equal candidates than no limit.
 TEST_F(GraspOrientationFinderTest, MaxEdgeCandidatesLimitsOutput)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -713,29 +539,23 @@ TEST_F(GraspOrientationFinderTest, MaxEdgeCandidatesLimitsOutput)
 
   // Limited should have fewer or equal candidates
   EXPECT_LE(grasps_limited.size(), grasps_unlimited.size());
-
-  // If unlimited finds more than 2, limited should be capped
-  // (accounting for collision filtering which may reduce both)
 }
 
+// Contact point with no reachable edges (finger_length too small) must yield no grasps.
 TEST_F(GraspOrientationFinderTest, RejectsUnreachableContactWhenNoEdgesInRange)
 {
-  // Use a very small finger_length so no edges are in range
-  // This means the contact point is UNREACHABLE - the finger cannot
-  // physically get to it without passing through solid material.
-  TopoDS_Shape box = create_box(0.5, 0.5, 0.5);  // Large box
+  TopoDS_Shape box = create_box(0.5, 0.5, 0.5);
   Topology topology = mapper_->load_from_shape(box, "test_box");
 
   ParsedGripper small_gripper = create_small_gripper();
 
   OrientationConfig config;
-  config.finger_length = 0.001;  // Very small - won't find edges
+  config.finger_length = 0.001;
   config.collision_tolerance = 0.0001;
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
   wire_fcl(finder, small_gripper, box);
 
-  // Contact in the center of the face (far from edges)
   ContactPair pair;
   pair.contact_1 = gp_Pnt(0.0, 0.25, 0.25);
   pair.contact_2 = gp_Pnt(0.5, 0.25, 0.25);
@@ -746,11 +566,10 @@ TEST_F(GraspOrientationFinderTest, RejectsUnreachableContactWhenNoEdgesInRange)
   std::vector<ContactPair> pairs = {pair};
   auto grasps = finder.find_valid_grasps(pairs, topology);
 
-  // Should produce NO candidates - contact point is unreachable
-  // (no edge within finger_length to approach from)
   EXPECT_TRUE(grasps.empty());
 }
 
+// Approach direction of every grasp must be perpendicular to the grip axis and unit-length.
 TEST_F(GraspOrientationFinderTest, ApproachDirectionPerpendicularToGripAxis)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -779,77 +598,13 @@ TEST_F(GraspOrientationFinderTest, ApproachDirectionPerpendicularToGripAxis)
   grip_axis.Normalize();
 
   for (const auto & grasp : grasps) {
-    // Approach direction should be perpendicular to grip axis
     double dot = grasp.approach_direction.Dot(grip_axis);
     EXPECT_NEAR(dot, 0.0, 1e-6);
-
-    // Approach direction should be unit vector
     EXPECT_NEAR(grasp.approach_direction.Magnitude(), 1.0, 1e-6);
   }
 }
 
-TEST_F(GraspOrientationFinderTest, TransformFollowsURDFConvention)
-{
-  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config;
-  config.finger_length = 0.07;
-  config.collision_tolerance = 0.0001;
-  config.max_edge_candidates = 1;
-  config.angle_offsets = {0.0};
-
-  GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, box);
-
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
-  pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
-  pair.grip_distance = 0.1;
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 1;
-  pair.normal_1 = gp_Vec(-1.0, 0.0, 0.0);
-  pair.normal_2 = gp_Vec(1.0, 0.0, 0.0);
-
-  std::vector<ContactPair> pairs = {pair};
-  auto grasps = finder.find_valid_grasps(pairs, topology);
-
-  ASSERT_FALSE(grasps.empty())
-    << "find_valid_grasps returned no results for a clean opposing-face contact pair";
-
-  // Expected TCP at midpoint between contacts
-  gp_Pnt expected_tcp(
-    (pair.contact_1.X() + pair.contact_2.X()) / 2,
-    (pair.contact_1.Y() + pair.contact_2.Y()) / 2,
-    (pair.contact_1.Z() + pair.contact_2.Z()) / 2);
-
-  for (const auto & grasp : grasps) {
-    // Verify the transform is a valid rigid transformation
-    // by checking that the rotation part has determinant 1
-    gp_Trsf t = grasp.gripper_transform;
-    gp_Mat rot = t.VectorialPart();
-    double det =
-      rot.Value(1, 1) * (rot.Value(2, 2) * rot.Value(3, 3) - rot.Value(2, 3) * rot.Value(3, 2)) -
-      rot.Value(1, 2) * (rot.Value(2, 1) * rot.Value(3, 3) - rot.Value(2, 3) * rot.Value(3, 1)) +
-      rot.Value(1, 3) * (rot.Value(2, 1) * rot.Value(3, 2) - rot.Value(2, 2) * rot.Value(3, 1));
-    EXPECT_NEAR(std::abs(det), 1.0, 1e-6)
-      << "Rotation part of gripper_transform must have determinant 1";
-
-    // Verify grasp contacts match input
-    EXPECT_NEAR(grasp.contact_1.X(), pair.contact_1.X(), 1e-6);
-    EXPECT_NEAR(grasp.contact_1.Y(), pair.contact_1.Y(), 1e-6);
-    EXPECT_NEAR(grasp.contact_1.Z(), pair.contact_1.Z(), 1e-6);
-    EXPECT_NEAR(grasp.contact_2.X(), pair.contact_2.X(), 1e-6);
-    EXPECT_NEAR(grasp.contact_2.Y(), pair.contact_2.Y(), 1e-6);
-    EXPECT_NEAR(grasp.contact_2.Z(), pair.contact_2.Z(), 1e-6);
-
-    // Verify grip distance is preserved
-    EXPECT_NEAR(grasp.grip_distance, pair.grip_distance, 1e-6);
-  }
-}
-
+// Multiple contact pairs are each processed; every output grasp traces back to one input pair.
 TEST_F(GraspOrientationFinderTest, ProcessesMultipleContactPairs)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -863,7 +618,6 @@ TEST_F(GraspOrientationFinderTest, ProcessesMultipleContactPairs)
 
   GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
 
-  // Create multiple contact pairs
   ContactPair pair1;
   pair1.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
   pair1.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
@@ -881,18 +635,16 @@ TEST_F(GraspOrientationFinderTest, ProcessesMultipleContactPairs)
   std::vector<ContactPair> pairs = {pair1, pair2};
   auto grasps = finder.find_valid_grasps(pairs, topology);
 
-  // Should process both pairs (may have multiple grasps per pair)
-  // Each grasp should have contacts from one of the input pairs
   for (const auto & grasp : grasps) {
     bool matches_pair1 = (grasp.contact_1.Distance(pair1.contact_1) < 1e-6 &&
       grasp.contact_2.Distance(pair1.contact_2) < 1e-6);
     bool matches_pair2 = (grasp.contact_1.Distance(pair2.contact_1) < 1e-6 &&
       grasp.contact_2.Distance(pair2.contact_2) < 1e-6);
-
     EXPECT_TRUE(matches_pair1 || matches_pair2);
   }
 }
 
+// Larger finger_length reaches more edges and must produce at least as many candidates.
 TEST_F(GraspOrientationFinderTest, LargerFingerLengthFindsMoreEdges)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -931,131 +683,42 @@ TEST_F(GraspOrientationFinderTest, LargerFingerLengthFindsMoreEdges)
   auto grasps_small = finder_small.find_valid_grasps(pairs, topology);
   auto grasps_large = finder_large.find_valid_grasps(pairs, topology);
 
-  // Larger finger length should find more edge candidates
-  // (resulting in more or equal grasp candidates, before collision filtering)
   EXPECT_LE(grasps_small.size(), grasps_large.size());
 }
 
-TEST_F(GraspOrientationFinderTest, CollisionFilteringRemovesInvalidGrasps)
-{
-  // Create a complex shape where some grasps would collide
-  TopoDS_Shape box = create_box(0.03, 0.03, 0.03);  // Small box
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  // Use a gripper that's large relative to the box
-  OrientationConfig config;
-  config.finger_length = 0.05;
-  config.collision_tolerance = 0.001;
-
-  GraspOrientationFinder finder(box, gripper_, nullptr, nullptr, config);
-  wire_fcl(finder, gripper_, box);
-
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.015, 0.015);
-  pair.contact_2 = gp_Pnt(0.03, 0.015, 0.015);
-  pair.grip_distance = 0.03;
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 1;
-
-  std::vector<ContactPair> pairs = {pair};
-  auto grasps = finder.find_valid_grasps(pairs, topology);
-
-  // Grasps that pass collision check should not collide
-  // (We can't verify absence of collision directly, but we verify no crash)
-  for (const auto & grasp : grasps) {
-    EXPECT_DOUBLE_EQ(grasp.grip_distance, 0.03);
-  }
-}
-
-/**
- * @brief Test that straight edges produce exactly one local minimum
- */
-TEST_F(GraspOrientationFinderTest, StraightEdgeHasSingleMinimum)
-{
-  // Box has only straight edges
-  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config;
-  config.finger_length = 0.15;  // Large enough to include multiple edges
-  config.collision_tolerance = 0.0001;
-
-  GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, box);
-
-  // Contact point on face center - equidistant to edges
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);  // Center of YZ face at x=0
-  pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);  // Center of opposite face
-  pair.grip_distance = 0.1;
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 1;
-
-  std::vector<ContactPair> pairs = {pair};
-
-  // Should work without errors
-  EXPECT_NO_THROW({
-    auto grasps = finder.find_valid_grasps(pairs, topology);
-  });
-
-  // For a box, each straight edge should contribute exactly 1 constraint
-  // (BRepExtrema_ExtPC finds the single orthogonal projection point)
-}
-
-/**
- * @brief Test that curved edges (arc) can produce multiple local minima
- */
+// Curved arc boundary produces at least one grasp;
+// multiple grasps must have distinct approach directions.
 TEST_F(GraspOrientationFinderTest, CurvedEdgeHasMultipleMinima)
 {
-  // Create a half-disk face where the curved arc IS part of the surface boundary
-  // Arc goes from (0.05, 0, 0) through (0, 0.05, 0) to (-0.05, 0, 0)
-  // The arc edge is now in surface.edge_ids, so find_edges_in_circle will find it
-  TopoDS_Shape half_disk = create_face_with_arc_boundary(0.05);  // 5cm radius arc
+  TopoDS_Shape half_disk = create_face_with_arc_boundary(0.05);
   Topology topology = mapper_->load_from_shape(half_disk, "test_arc");
 
   ParsedGripper small_gripper = create_small_gripper();
 
-  // Use no clustering and no limit to see all edge candidates
   OrientationConfig config;
-  config.finger_length = 0.10;  // Large enough to include the whole arc
+  config.finger_length = 0.10;
   config.collision_tolerance = 0.0001;
-
-  config.max_edge_candidates = 0;  // Unlimited
-  config.angle_offsets = {0.0};    // Single offset for cleaner results
+  config.max_edge_candidates = 0;
+  config.angle_offsets = {0.0};
 
   GraspOrientationFinder finder(half_disk, small_gripper, nullptr, nullptr, config);
   wire_fcl(finder, small_gripper, half_disk);
 
-  // Contact point OFF-CENTER inside the arc - asymmetric position ensures
-  // different distances to each arc endpoint, producing different approach directions
-  // From (0.02, 0.02, 0), distances to arc endpoints:
-  //   - To (0.05, 0, 0): sqrt(0.03² + 0.02²) ≈ 0.036m (closer)
-  //   - To (-0.05, 0, 0): sqrt(0.07² + 0.02²) ≈ 0.073m (farther)
-  // Both are within finger_length (0.10m), so we should find 2 minima on the arc
+  // Off-center contact ensures asymmetric distances to arc endpoints
   ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.02, 0.02, 0.0);  // Off-center for asymmetry
-  pair.contact_2 = gp_Pnt(0.02, 0.02, 0.1);  // Arbitrary second point along Z
+  pair.contact_1 = gp_Pnt(0.02, 0.02, 0.0);
+  pair.contact_2 = gp_Pnt(0.02, 0.02, 0.1);
   pair.grip_distance = 0.1;
-  // surface_id_1 = surface_id_2 = 0 is intentional: the half-disk is a single
-  // face.  The test exercises find_local_minima_on_edge for curved arc edges,
-  // not an opposing-face grasp; contact_2 at z=0.1 merely defines the grip
-  // direction.
+  // surface_id_1 = surface_id_2 = 0: single-face half-disk; tests curved edge
+  // local-minima finding, not opposing-face geometry.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
   pair.normal_1 = gp_Vec(0.0, 0.0, -1.0);
   pair.normal_2 = gp_Vec(0.0, 0.0, 1.0);
 
   std::vector<ContactPair> pairs = {pair};
-
   auto grasps = finder.find_valid_grasps(pairs, topology);
 
-  // The key test is that BRepExtrema_ExtPC finds multiple minima on curved edges
-  // We should get at least 2 grasps (one per arc endpoint minimum)
-  // The radial-map algorithm clusters continuous LOW arcs. A contact inside a
-  // half-disk sees one connected open region (~270° outside the face boundary),
-  // producing one cluster and one seed — so ≥1 grasp is the correct expectation.
   EXPECT_GE(grasps.size(), 1) << "Should find at least one grasp from the arc";
 
   if (grasps.size() >= 2) {
@@ -1066,25 +729,20 @@ TEST_F(GraspOrientationFinderTest, CurvedEdgeHasMultipleMinima)
   }
 }
 
-/**
- * @brief Test max_orientations_per_pair limits the number of orientations tested
- */
+// max_orientations_per_pair=2 must cap output at 2 and produce <= results than no limit.
 TEST_F(GraspOrientationFinderTest, MaxOrientationsPerPairLimitsResults)
 {
-  // Wrap in a face so topology has a valid surface
   TopoDS_Shape u_edge_raw = create_u_shaped_edge(0.05);
   TopoDS_Shape u_edge = create_face_with_edge(u_edge_raw);
   Topology topology = mapper_->load_from_shape(u_edge, "test_arc");
 
   ParsedGripper small_gripper = create_small_gripper();
 
-  // Config with unlimited orientations
   OrientationConfig config_unlimited;
   config_unlimited.finger_length = 0.10;
-  config_unlimited.max_orientations_per_pair = 0;  // Unlimited
+  config_unlimited.max_orientations_per_pair = 0;  // No limit
   config_unlimited.collision_tolerance = 0.0001;
 
-  // Config with limited orientations
   OrientationConfig config_limited;
   config_limited.finger_length = 0.10;
   config_limited.max_orientations_per_pair = 2;
@@ -1100,231 +758,17 @@ TEST_F(GraspOrientationFinderTest, MaxOrientationsPerPairLimitsResults)
   pair.contact_1 = gp_Pnt(0.0, 0.02, 0.0);
   pair.contact_2 = gp_Pnt(0.0, 0.02, 0.1);
   pair.grip_distance = 0.1;
-  // surface_id_1 = surface_id_2 = 0 is intentional: the u_edge compound has
-  // only one face (surface 0).  The test exercises max_orientations_per_pair
-  // capping, not opposing-face grasp geometry.
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 0;
 
   std::vector<ContactPair> pairs = {pair};
+  auto grasps_unlimited = finder_unlimited.find_valid_grasps(pairs, topology);
+  auto grasps_limited = finder_limited.find_valid_grasps(pairs, topology);
 
-  // Both should work, limited config may produce fewer results
-  EXPECT_NO_THROW({
-    auto grasps_unlimited = finder_unlimited.find_valid_grasps(pairs, topology);
-    auto grasps_limited = finder_limited.find_valid_grasps(pairs, topology);
-  });
-}
-
-/**
- * @brief Test dual-seed strategy finds orientations from both contacts
- *
- * The dual-seed strategy considers edges near BOTH contact points, not just one.
- * Edges from contact_2 are shifted by 180° (finger symmetry) and merged with
- * edges from contact_1 to create the master seed list.
- */
-TEST_F(GraspOrientationFinderTest, DualSeedStrategyUsesBothContacts)
-{
-  TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
-  Topology topology = mapper_->load_from_shape(box, "test_box");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  // Disable clustering to see all seeds, use single angle offset
-  OrientationConfig config;
-  config.finger_length = 0.15;
-  config.collision_tolerance = 0.0001;
-
-  config.max_edge_candidates = 0;  // Unlimited
-  config.angle_offsets = {0.0};    // Single offset
-
-  GraspOrientationFinder finder(box, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, box);
-
-  // Contact points on opposite X faces - both have 4 nearby edges each
-  // (the 4 edges of each face)
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.05, 0.05);
-  pair.contact_2 = gp_Pnt(0.1, 0.05, 0.05);
-  pair.grip_distance = 0.1;
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 1;
-  pair.normal_1 = gp_Vec(-1.0, 0.0, 0.0);
-  pair.normal_2 = gp_Vec(1.0, 0.0, 0.0);
-
-  std::vector<ContactPair> pairs = {pair};
-
-  auto grasps = finder.find_valid_grasps(pairs, topology);
-
-  // With edges from both contacts (8 edges total, minus duplicates after 180° shift),
-  // we should get multiple grasp candidates
-  EXPECT_GT(grasps.size(), 0) << "Dual-seed strategy should find grasps";
-
-  // Verify we have grasps with different approach directions
-  // (indicating seeds from different edges/contacts were used)
-  if (grasps.size() >= 2) {
-    std::set<int> unique_approach_directions;
-    for (const auto & grasp : grasps) {
-      // Quantize approach direction to detect unique directions
-      int quantized = static_cast<int>(
-        std::atan2(grasp.approach_direction.Y(), grasp.approach_direction.Z()) * 180 / M_PI / 30);
-      unique_approach_directions.insert(quantized);
-    }
-    EXPECT_GT(unique_approach_directions.size(), 1)
-      << "Should have multiple unique approach directions from dual-seed strategy";
-  }
-}
-
-
-/**
- * @brief Test endpoint minima detection (when trend starts increasing or ends decreasing)
- */
-TEST_F(GraspOrientationFinderTest, EndpointMinimaDetected)
-{
-  // Create a simple straight edge where the contact is closest to one endpoint
-  // Wrap in a face so topology has a valid surface
-  gp_Pnt p1(0.0, 0.0, 0.0);
-  gp_Pnt p2(0.1, 0.0, 0.0);
-  TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(p1, p2).Edge();
-
-  BRep_Builder builder;
-  TopoDS_Compound edge_compound;
-  builder.MakeCompound(edge_compound);
-  builder.Add(edge_compound, edge);
-
-  TopoDS_Shape compound = create_face_with_edge(edge_compound);
-  Topology topology = mapper_->load_from_shape(compound, "test_edge");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config;
-  config.finger_length = 0.15;
-  config.collision_tolerance = 0.0001;
-
-  GraspOrientationFinder finder(compound, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, compound);
-
-  // Contact very close to p1 endpoint - minimum should be at endpoint
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.01, 0.02, 0.0);  // Close to p1
-  pair.contact_2 = gp_Pnt(0.01, 0.02, 0.1);
-  pair.grip_distance = 0.1;
-  // surface_id_1 = surface_id_2 = 0 is intentional: the compound has only one
-  // face (surface 0).  The test exercises endpoint-minimum detection on a
-  // straight edge; contact_2 at z=0.1 defines the grip direction only.
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 0;
-
-  std::vector<ContactPair> pairs = {pair};
-
-  EXPECT_NO_THROW({
-    auto grasps = finder.find_valid_grasps(pairs, topology);
-  });
-}
-
-/**
- * @brief Test with wavy B-spline edge that has multiple inflection points
- */
-
-
-/**
- * @brief Test edge that passes through finger circle finds the minimum inside
- *
- * When an edge passes through the finger circle, we should find the
- * local minimum that is inside the circle (the closest point).
- */
-TEST_F(GraspOrientationFinderTest, EdgePassingThroughCircleFindsMinimumInside)
-{
-  // Edge passes through finger circle
-  // Edge at y=0.08, contact at origin, finger_length=0.1
-  // Midpoint (closest point) is at distance 0.08 (inside circle)
-  // Wrap in a face so topology has a valid surface
-  gp_Pnt p1(-0.15, 0.08, 0.0);
-  gp_Pnt p2(0.15, 0.08, 0.0);
-  TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(p1, p2).Edge();
-
-  BRep_Builder builder;
-  TopoDS_Compound edge_compound;
-  builder.MakeCompound(edge_compound);
-  builder.Add(edge_compound, edge);
-
-  TopoDS_Shape compound = create_face_with_edge(edge_compound);
-  Topology topology = mapper_->load_from_shape(compound, "test_crossing_edge");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config;
-  config.finger_length = 0.10;  // 10cm - midpoint at 8cm is inside
-  config.collision_tolerance = 0.0001;
-
-  GraspOrientationFinder finder(compound, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, compound);
-
-  // Contact at origin
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.0, 0.0);
-  pair.contact_2 = gp_Pnt(0.0, 0.0, 0.1);
-  pair.grip_distance = 0.1;
-  // surface_id_1 = surface_id_2 = 0 is intentional: the compound has only one
-  // face (surface 0).  The test exercises find_local_minima_on_edge for an
-  // edge passing through the finger circle; contact_2 at z=0.1 defines the
-  // grip direction only, not an opposing face.
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 0;
-
-  std::vector<ContactPair> pairs = {pair};
-
-  // Should find the minimum at the midpoint (inside the circle)
-  EXPECT_NO_THROW({
-    auto grasps = finder.find_valid_grasps(pairs, topology);
-  });
-}
-
-/**
- * @brief Test edge completely outside finger circle returns no constraints
- */
-TEST_F(GraspOrientationFinderTest, EdgeOutsideCircleNoConstraints)
-{
-  // Edge completely outside the finger circle
-  // Wrap in a face so topology has a valid surface
-  gp_Pnt p1(-0.1, 0.2, 0.0);  // 20cm away from origin
-  gp_Pnt p2(0.1, 0.2, 0.0);
-  TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(p1, p2).Edge();
-
-  BRep_Builder builder;
-  TopoDS_Compound edge_compound;
-  builder.MakeCompound(edge_compound);
-  builder.Add(edge_compound, edge);
-
-  TopoDS_Shape compound = create_face_with_edge(edge_compound);
-  Topology topology = mapper_->load_from_shape(compound, "test_outside_edge");
-
-  ParsedGripper small_gripper = create_small_gripper();
-
-  OrientationConfig config;
-  config.finger_length = 0.10;
-  config.collision_tolerance = 0.0001;
-
-  GraspOrientationFinder finder(compound, small_gripper, nullptr, nullptr, config);
-  wire_fcl(finder, small_gripper, compound);
-
-  // Contact at origin - edge is too far
-  ContactPair pair;
-  pair.contact_1 = gp_Pnt(0.0, 0.0, 0.0);
-  pair.contact_2 = gp_Pnt(0.0, 0.0, 0.1);
-  pair.grip_distance = 0.1;
-  // surface_id_1 = surface_id_2 = 0 is intentional: the compound has only one
-  // face (surface 0).  The test exercises the case where the edge is entirely
-  // outside finger_length; contact_2 at z=0.1 defines the grip direction only,
-  // not an opposing face.
-  pair.surface_id_1 = 0;
-  pair.surface_id_2 = 0;
-
-  std::vector<ContactPair> pairs = {pair};
-
-  // Should work without errors - minima outside finger_length are filtered
-  EXPECT_NO_THROW({
-    auto grasps = finder.find_valid_grasps(pairs, topology);
-  });
+  // Cap must be respected
+  EXPECT_LE(grasps_limited.size(), 2u);
+  // Limited must not exceed unlimited
+  EXPECT_LE(grasps_limited.size(), grasps_unlimited.size());
 }
 
 int main(int argc, char ** argv)

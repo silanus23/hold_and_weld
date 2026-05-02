@@ -15,10 +15,10 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__IO__SHAPE_LOADER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__IO__SHAPE_LOADER_HPP_
 
+#include <Eigen/Dense>
+
 #include <string>
 #include <vector>
-
-#include <Eigen/Dense>
 
 #include <gp_Trsf.hxx>
 #include <TopoDS_Shape.hxx>
@@ -33,9 +33,9 @@ namespace io
  */
 struct ShapeLoaderConfig
 {
-  double linear_deflection = 0.0001;   // Linear deflection for triangulation [m]
-  double angular_deflection = 0.5;     // Angular deflection for triangulation [rad]
-  bool auto_triangulate = true;        // Triangulate loaded shapes automatically
+  double linear_deflection = 0.0001;
+  double angular_deflection = 0.5;
+  bool auto_triangulate = true;
 };
 
 /**
@@ -47,17 +47,6 @@ struct ShapeLoaderConfig
  *
  * Supported formats: STEP (.step, .stp), STL (.stl), and geometric primitives.
  * All loaded shapes are automatically triangulated for efficient collision detection.
- *
- * @example
- * @code
- * ShapeLoader loader;
- * auto fixture = loader.load_from_step("fixture.step",
- *   Eigen::Vector3d(0, 0, 0), Eigen::Quaterniond::Identity());
- * auto ground = loader.make_box(
- *   Eigen::Vector3d(2.0, 2.0, 0.01),
- *   Eigen::Vector3d(0, 0, -0.005),
- *   Eigen::Quaterniond::Identity());
- * @endcode
  */
 class ShapeLoader
 {

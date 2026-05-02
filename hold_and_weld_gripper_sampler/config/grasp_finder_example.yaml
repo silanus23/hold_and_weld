@@ -228,4 +228,3 @@
       min_quality: 0.0
 
       # Include debug information in output
-      include_debug: true

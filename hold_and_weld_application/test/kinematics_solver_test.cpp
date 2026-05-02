@@ -33,7 +33,9 @@ class KinematicsSolverTest : public ::testing::Test
 protected:
   void SetUp() override
   {
-    rclcpp::init(0, nullptr);
+    if (!rclcpp::ok()) {
+      rclcpp::init(0, nullptr);
+    }
 
     // Parse robot URDF
     URDFParser parser;

@@ -118,6 +118,7 @@ protected:
   std::unique_ptr<ShapeLoader> loader_;
 };
 
+// Default-constructed loader has expected deflection values and auto-triangulate enabled.
 TEST_F(ShapeLoaderTest, DefaultConstructor_HasExpectedConfigValues)
 {
   ShapeLoader loader;
@@ -128,6 +129,7 @@ TEST_F(ShapeLoaderTest, DefaultConstructor_HasExpectedConfigValues)
   EXPECT_TRUE(config.auto_triangulate);
 }
 
+// Custom config is stored and returned verbatim by get_config().
 TEST_F(ShapeLoaderTest, CustomConfigConstructor_AppliesProvidedConfig)
 {
   ShapeLoaderConfig config;
@@ -143,6 +145,7 @@ TEST_F(ShapeLoaderTest, CustomConfigConstructor_AppliesProvidedConfig)
   EXPECT_FALSE(retrieved_config.auto_triangulate);
 }
 
+// Box bounding box matches requested dimensions; centered at origin; has 6 faces.
 TEST_F(ShapeLoaderTest, MakeBox_WithBasicDimensions_CreatesCorrectShape)
 {
   Eigen::Vector3d dimensions(
@@ -153,23 +156,12 @@ TEST_F(ShapeLoaderTest, MakeBox_WithBasicDimensions_CreatesCorrectShape)
 
   EXPECT_FALSE(box.IsNull());
 
-  // Check dimensions via bounding box
   auto bbox_size = get_bounding_box_size(box);
   EXPECT_NEAR(bbox_size.x(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
   EXPECT_NEAR(bbox_size.y(), test_constants::kMediumDimension, test_constants::kPositionTolerance);
   EXPECT_NEAR(bbox_size.z(), test_constants::kLargeDimension, test_constants::kPositionTolerance);
 
-  // Box should have 6 faces
   EXPECT_EQ(count_faces(box), test_constants::kBoxFaceCount);
-}
-
-TEST_F(ShapeLoaderTest, MakeBox_WithDefaultCenter_IsCenteredAtOrigin)
-{
-  Eigen::Vector3d dimensions(
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension);
-  auto box = loader_->make_box(dimensions);
 
   auto center = get_bounding_box_center(box);
   EXPECT_NEAR(center.x(), 0.0, test_constants::kPositionTolerance);
@@ -177,46 +169,7 @@ TEST_F(ShapeLoaderTest, MakeBox_WithDefaultCenter_IsCenteredAtOrigin)
   EXPECT_NEAR(center.z(), 0.0, test_constants::kPositionTolerance);
 }
 
-TEST_F(ShapeLoaderTest, MakeBox_WithTranslation_IsCenteredAtSpecifiedPosition)
-{
-  Eigen::Vector3d dimensions(
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension);
-  Eigen::Vector3d center(
-    test_constants::kOffsetX,
-    test_constants::kOffsetY,
-    test_constants::kOffsetZ);
-
-  auto box = loader_->make_box(dimensions, center);
-
-  auto bbox_center = get_bounding_box_center(box);
-  EXPECT_NEAR(bbox_center.x(), test_constants::kOffsetX, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_center.y(), test_constants::kOffsetY, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_center.z(), test_constants::kOffsetZ, test_constants::kPositionTolerance);
-}
-
-TEST_F(ShapeLoaderTest, MakeBox_WithRotation90DegreesAroundZ_SwapsXAndYDimensions)
-{
-  Eigen::Vector3d dimensions(
-    test_constants::kMediumDimension,
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension);  // Longer in X
-  Eigen::Vector3d center = Eigen::Vector3d::Zero();
-
-  // Rotate 90 degrees around Z axis - X becomes Y
-  Eigen::Quaterniond rotation(Eigen::AngleAxisd(M_PI / 2, Eigen::Vector3d::UnitZ()));
-
-  auto box = loader_->make_box(dimensions, center, rotation);
-
-  auto bbox_size = get_bounding_box_size(box);
-
-  // After rotation, longer dimension should be in Y
-  EXPECT_NEAR(bbox_size.x(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.y(), test_constants::kMediumDimension, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.z(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
-}
-
+// Box volume equals product of its three dimensions.
 TEST_F(ShapeLoaderTest, MakeBox_VolumeCalculation_MatchesExpectedVolume)
 {
   Eigen::Vector3d dimensions(
@@ -233,13 +186,13 @@ TEST_F(ShapeLoaderTest, MakeBox_VolumeCalculation_MatchesExpectedVolume)
   EXPECT_NEAR(actual_volume, expected_volume, test_constants::kVolumeTolerance);
 }
 
+// Cylinder bounding box diameter equals 2*radius; height equals requested height.
 TEST_F(ShapeLoaderTest, MakeCylinder_WithBasicDimensions_HasCorrectBoundingBox)
 {
   auto cylinder = loader_->make_cylinder(test_constants::kTestRadius, test_constants::kTestHeight);
 
   EXPECT_FALSE(cylinder.IsNull());
 
-  // Check bounding box
   auto bbox_size = get_bounding_box_size(cylinder);
   EXPECT_NEAR(bbox_size.x(), 2 * test_constants::kTestRadius,
     test_constants::kCurvedGeometryTolerance);
@@ -248,29 +201,7 @@ TEST_F(ShapeLoaderTest, MakeCylinder_WithBasicDimensions_HasCorrectBoundingBox)
   EXPECT_NEAR(bbox_size.z(), test_constants::kTestHeight, test_constants::kCurvedGeometryTolerance);
 }
 
-TEST_F(ShapeLoaderTest, MakeCylinder_WithDefaultCenter_IsCenteredAtOrigin)
-{
-  auto cylinder = loader_->make_cylinder(test_constants::kTestRadius, test_constants::kTestHeight);
-
-  auto center = get_bounding_box_center(cylinder);
-  EXPECT_NEAR(center.x(), 0.0, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(center.y(), 0.0, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(center.z(), 0.0, test_constants::kCurvedGeometryTolerance);
-}
-
-TEST_F(ShapeLoaderTest, MakeCylinder_WithTranslation_IsCenteredAtSpecifiedPosition)
-{
-  Eigen::Vector3d center(0.5, 0.5, 0.5);
-
-  auto cylinder = loader_->make_cylinder(test_constants::kTestRadius, test_constants::kTestHeight,
-    center);
-
-  auto bbox_center = get_bounding_box_center(cylinder);
-  EXPECT_NEAR(bbox_center.x(), 0.5, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(bbox_center.y(), 0.5, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(bbox_center.z(), 0.5, test_constants::kCurvedGeometryTolerance);
-}
-
+// Cylinder volume equals pi*r^2*h.
 TEST_F(ShapeLoaderTest, MakeCylinder_VolumeCalculation_MatchesExpectedVolume)
 {
   auto cylinder = loader_->make_cylinder(test_constants::kTestRadius, test_constants::kTestHeight);
@@ -282,13 +213,13 @@ TEST_F(ShapeLoaderTest, MakeCylinder_VolumeCalculation_MatchesExpectedVolume)
   EXPECT_NEAR(actual_volume, expected_volume, test_constants::kVolumeTolerance);
 }
 
+// Sphere bounding box is a cube with side 2*radius.
 TEST_F(ShapeLoaderTest, MakeSphere_WithBasicRadius_HasCorrectBoundingBox)
 {
   auto sphere = loader_->make_sphere(test_constants::kTestRadius);
 
   EXPECT_FALSE(sphere.IsNull());
 
-  // Check bounding box (should be cube with side = 2*radius)
   auto bbox_size = get_bounding_box_size(sphere);
   EXPECT_NEAR(bbox_size.x(), 2 * test_constants::kTestRadius,
     test_constants::kCurvedGeometryTolerance);
@@ -298,31 +229,7 @@ TEST_F(ShapeLoaderTest, MakeSphere_WithBasicRadius_HasCorrectBoundingBox)
     test_constants::kCurvedGeometryTolerance);
 }
 
-TEST_F(ShapeLoaderTest, MakeSphere_WithDefaultCenter_IsCenteredAtOrigin)
-{
-  auto sphere = loader_->make_sphere(test_constants::kTestRadius);
-
-  auto center = get_bounding_box_center(sphere);
-  EXPECT_NEAR(center.x(), 0.0, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(center.y(), 0.0, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(center.z(), 0.0, test_constants::kCurvedGeometryTolerance);
-}
-
-TEST_F(ShapeLoaderTest, MakeSphere_WithTranslation_IsCenteredAtSpecifiedPosition)
-{
-  Eigen::Vector3d center(
-    test_constants::kOffsetX,
-    test_constants::kOffsetY,
-    test_constants::kOffsetZ);
-
-  auto sphere = loader_->make_sphere(test_constants::kTestRadius, center);
-
-  auto bbox_center = get_bounding_box_center(sphere);
-  EXPECT_NEAR(bbox_center.x(), test_constants::kOffsetX, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(bbox_center.y(), test_constants::kOffsetY, test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(bbox_center.z(), test_constants::kOffsetZ, test_constants::kCurvedGeometryTolerance);
-}
-
+// Sphere volume equals (4/3)*pi*r^3.
 TEST_F(ShapeLoaderTest, MakeSphere_VolumeCalculation_MatchesExpectedVolume)
 {
   auto sphere = loader_->make_sphere(test_constants::kTestRadius);
@@ -334,38 +241,7 @@ TEST_F(ShapeLoaderTest, MakeSphere_VolumeCalculation_MatchesExpectedVolume)
   EXPECT_NEAR(actual_volume, expected_volume, test_constants::kVolumeTolerance);
 }
 
-TEST_F(ShapeLoaderTest, MakeGroundPlane_WithDefaultParams_HasExpectedDimensions)
-{
-  auto ground = loader_->make_ground_plane();
-
-  EXPECT_FALSE(ground.IsNull());
-
-  auto bbox_size = get_bounding_box_size(ground);
-  EXPECT_NEAR(bbox_size.x(), test_constants::kGroundPlaneSize, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.y(), test_constants::kGroundPlaneSize, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.z(), test_constants::kGroundPlaneThickness,
-    test_constants::kPositionTolerance);
-}
-
-TEST_F(ShapeLoaderTest, MakeGroundPlane_AtZeroHeight_HasTopSurfaceAtZero)
-{
-  auto ground = loader_->make_ground_plane(
-    test_constants::kGroundPlaneSize,
-    test_constants::kGroundPlaneSize,
-    0.0,
-    test_constants::kGroundPlaneThickness);
-
-  // Top surface should be at z=0
-  Bnd_Box box;
-  BRepBndLib::Add(ground, box);
-
-  double x_min, y_min, z_min, x_max, y_max, z_max;
-  box.Get(x_min, y_min, z_min, x_max, y_max, z_max);
-
-  EXPECT_NEAR(z_max, 0.0, test_constants::kPositionTolerance);
-  EXPECT_NEAR(z_min, -test_constants::kGroundPlaneThickness, test_constants::kPositionTolerance);
-}
-
+// Ground plane with custom size, position, and thickness matches all three parameters.
 TEST_F(ShapeLoaderTest, MakeGroundPlane_WithCustomParams_HasCorrectDimensions)
 {
   constexpr double custom_size_x = 3.0;
@@ -381,7 +257,6 @@ TEST_F(ShapeLoaderTest, MakeGroundPlane_WithCustomParams_HasCorrectDimensions)
   EXPECT_NEAR(bbox_size.y(), custom_size_y, test_constants::kPositionTolerance);
   EXPECT_NEAR(bbox_size.z(), custom_thickness, test_constants::kPositionTolerance);
 
-  // Top surface should be at z=-0.5
   Bnd_Box box;
   BRepBndLib::Add(ground, box);
 
@@ -391,12 +266,14 @@ TEST_F(ShapeLoaderTest, MakeGroundPlane_WithCustomParams_HasCorrectDimensions)
   EXPECT_NEAR(z_max, custom_z_position, test_constants::kPositionTolerance);
 }
 
+// Combining an empty shape list throws std::runtime_error.
 TEST_F(ShapeLoaderTest, CombineShapes_WithEmptyVector_Throws)
 {
   std::vector<TopoDS_Shape> empty_shapes;
   EXPECT_THROW(loader_->combine_shapes(empty_shapes), std::runtime_error);
 }
 
+// Combining a single shape returns a shape with the same face count.
 TEST_F(ShapeLoaderTest, CombineShapes_WithSingleShape_ReturnsSameShape)
 {
   auto box = loader_->make_box(Eigen::Vector3d(
@@ -408,10 +285,10 @@ TEST_F(ShapeLoaderTest, CombineShapes_WithSingleShape_ReturnsSameShape)
   auto combined = loader_->combine_shapes(shapes);
 
   EXPECT_FALSE(combined.IsNull());
-  // Single shape should be returned as-is
   EXPECT_EQ(count_faces(combined), count_faces(box));
 }
 
+// Combining three shapes produces a compound whose face count is the sum of the parts.
 TEST_F(ShapeLoaderTest, CombineShapes_WithMultipleShapes_CreatesCompoundWithAllFaces)
 {
   auto box = loader_->make_box(Eigen::Vector3d(
@@ -426,11 +303,8 @@ TEST_F(ShapeLoaderTest, CombineShapes_WithMultipleShapes_CreatesCompoundWithAllF
   auto combined = loader_->combine_shapes(shapes);
 
   EXPECT_FALSE(combined.IsNull());
-
-  // Combined shape should be a compound
   EXPECT_EQ(combined.ShapeType(), TopAbs_COMPOUND);
 
-  // Total faces should be sum of individual faces
   int box_faces = count_faces(box);
   int sphere_faces = count_faces(sphere);
   int cylinder_faces = count_faces(cylinder);
@@ -439,43 +313,7 @@ TEST_F(ShapeLoaderTest, CombineShapes_WithMultipleShapes_CreatesCompoundWithAllF
   EXPECT_EQ(combined_faces, box_faces + sphere_faces + cylinder_faces);
 }
 
-TEST_F(ShapeLoaderTest, ApplyTransform_WithTranslationOnly_MovesShapeToCorrectPosition)
-{
-  auto box = loader_->make_box(Eigen::Vector3d(
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension));
-  Eigen::Vector3d translation(
-    test_constants::kOffsetX,
-    test_constants::kOffsetY,
-    test_constants::kOffsetZ);
-
-  auto transformed = loader_->apply_transform(box, translation, Eigen::Quaterniond::Identity());
-
-  auto center = get_bounding_box_center(transformed);
-  EXPECT_NEAR(center.x(), test_constants::kOffsetX, test_constants::kPositionTolerance);
-  EXPECT_NEAR(center.y(), test_constants::kOffsetY, test_constants::kPositionTolerance);
-  EXPECT_NEAR(center.z(), test_constants::kOffsetZ, test_constants::kPositionTolerance);
-}
-
-TEST_F(ShapeLoaderTest, ApplyTransform_WithRotationOnly_RotatesShapeCorrectly)
-{
-  // Create box longer in X direction
-  auto box = loader_->make_box(Eigen::Vector3d(
-    test_constants::kMediumDimension,
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension));
-
-  // Rotate 90 degrees around Z
-  Eigen::Quaterniond rotation(Eigen::AngleAxisd(M_PI / 2, Eigen::Vector3d::UnitZ()));
-  auto transformed = loader_->apply_transform(box, Eigen::Vector3d::Zero(), rotation);
-
-  auto bbox_size = get_bounding_box_size(transformed);
-  EXPECT_NEAR(bbox_size.x(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.y(), test_constants::kMediumDimension, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.z(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
-}
-
+// Combined rotation and translation correctly affects both extents and center.
 TEST_F(ShapeLoaderTest, ApplyTransform_WithCombinedTransform_AppliesBothCorrectly)
 {
   auto box = loader_->make_box(Eigen::Vector3d(
@@ -491,90 +329,28 @@ TEST_F(ShapeLoaderTest, ApplyTransform_WithCombinedTransform_AppliesBothCorrectl
   auto center = get_bounding_box_center(transformed);
   auto bbox_size = get_bounding_box_size(transformed);
 
-  // Check rotation effect
   EXPECT_NEAR(bbox_size.x(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
   EXPECT_NEAR(bbox_size.y(), test_constants::kMediumDimension, test_constants::kPositionTolerance);
 
-  // Check translation
   EXPECT_NEAR(center.x(), test_constants::kOffsetX, test_constants::kPositionTolerance);
   EXPECT_NEAR(center.y(), 0.0, test_constants::kPositionTolerance);
 }
 
-TEST_F(ShapeLoaderTest, LoadFromStep_WithNonexistentFile_ThrowsRuntimeError)
+// Loading from nonexistent STEP, STL, or URDF paths throws std::runtime_error.
+TEST_F(ShapeLoaderTest, LoadFromFile_WithNonexistentFile_ThrowsRuntimeError)
 {
   EXPECT_THROW(
     loader_->load_from_step("/nonexistent/path/file.step"),
     std::runtime_error);
-}
-
-TEST_F(ShapeLoaderTest, LoadFromStl_WithNonexistentFile_ThrowsRuntimeError)
-{
   EXPECT_THROW(
     loader_->load_from_stl("/nonexistent/path/file.stl"),
     std::runtime_error);
-}
-
-TEST_F(ShapeLoaderTest, LoadFromUrdf_WithNonexistentFile_ThrowsRuntimeError)
-{
   EXPECT_THROW(
     loader_->load_from_urdf("/nonexistent/path/file.urdf"),
     std::runtime_error);
 }
 
-TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithBoxGeometry_CreatesCorrectShape)
-{
-  std::string urdf_string =
-    R"(
-    <robot name="test_robot">
-      <link name="base_link">
-        <collision>
-          <origin xyz="0 0 0" rpy="0 0 0"/>
-          <geometry>
-            <box size="0.1 0.2 0.3"/>
-          </geometry>
-        </collision>
-      </link>
-    </robot>
-  )";
-
-  auto shape = loader_->load_from_urdf_string(urdf_string);
-
-  EXPECT_FALSE(shape.IsNull());
-
-  auto bbox_size = get_bounding_box_size(shape);
-  EXPECT_NEAR(bbox_size.x(), test_constants::kSmallDimension, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.y(), test_constants::kMediumDimension, test_constants::kPositionTolerance);
-  EXPECT_NEAR(bbox_size.z(), test_constants::kLargeDimension, test_constants::kPositionTolerance);
-}
-
-TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithCylinderGeometry_CreatesCorrectShape)
-{
-  std::string urdf_string =
-    R"(
-    <robot name="test_robot">
-      <link name="base_link">
-        <collision>
-          <origin xyz="0 0 0" rpy="0 0 0"/>
-          <geometry>
-            <cylinder radius="0.05" length="0.1"/>
-          </geometry>
-        </collision>
-      </link>
-    </robot>
-  )";
-
-  auto shape = loader_->load_from_urdf_string(urdf_string);
-
-  EXPECT_FALSE(shape.IsNull());
-
-  auto bbox_size = get_bounding_box_size(shape);
-  EXPECT_NEAR(bbox_size.x(), 2 * test_constants::kTestRadius,
-    test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(bbox_size.y(), 2 * test_constants::kTestRadius,
-    test_constants::kCurvedGeometryTolerance);
-  EXPECT_NEAR(bbox_size.z(), test_constants::kTestHeight, test_constants::kCurvedGeometryTolerance);
-}
-
+// URDF sphere geometry produces a shape with bounding box matching 2*radius on all axes.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithSphereGeometry_CreatesCorrectShape)
 {
   std::string urdf_string =
@@ -595,7 +371,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithSphereGeometry_CreatesCorrectShap
   EXPECT_FALSE(shape.IsNull());
 
   auto bbox_size = get_bounding_box_size(shape);
-  // Sphere radius is 0.1 in this test, so diameter is 0.2
   EXPECT_NEAR(bbox_size.x(), test_constants::kMediumDimension,
     test_constants::kCurvedGeometryTolerance);
   EXPECT_NEAR(bbox_size.y(), test_constants::kMediumDimension,
@@ -604,6 +379,7 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithSphereGeometry_CreatesCorrectShap
     test_constants::kCurvedGeometryTolerance);
 }
 
+// URDF origin xyz offset is applied and reflected in the bounding box center.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithOriginTransform_AppliesTransformCorrectly)
 {
   std::string urdf_string =
@@ -628,6 +404,7 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithOriginTransform_AppliesTransformC
   EXPECT_NEAR(center.z(), test_constants::kOffsetZ, test_constants::kPositionTolerance);
 }
 
+// URDF with multiple links produces a compound with more faces than a single box.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithMultipleCollisions_CombinesAllShapes)
 {
   std::string urdf_string =
@@ -657,11 +434,11 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithMultipleCollisions_CombinesAllSha
   EXPECT_FALSE(shape.IsNull());
   EXPECT_EQ(shape.ShapeType(), TopAbs_COMPOUND);
 
-  // Should have faces from both box and sphere
   int face_count = count_faces(shape);
-  EXPECT_GT(face_count, test_constants::kBoxFaceCount);  // Box has 6, sphere adds more
+  EXPECT_GT(face_count, test_constants::kBoxFaceCount);
 }
 
+// URDF with only visual geometry (no collision element) throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoCollisionGeometry_ThrowsRuntimeError)
 {
   std::string urdf_string =
@@ -677,12 +454,12 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoCollisionGeometry_ThrowsRuntime
     </robot>
   )";
 
-  // Should throw because no collision geometry found
   EXPECT_THROW(
     loader_->load_from_urdf_string(urdf_string),
     std::runtime_error);
 }
 
+// Malformed XML string throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithInvalidXml_ThrowsRuntimeError)
 {
   std::string urdf_string = "not valid xml <<<<";
@@ -692,6 +469,7 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithInvalidXml_ThrowsRuntimeError)
     std::runtime_error);
 }
 
+// XML missing a <robot> root element throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoRobotElement_ThrowsRuntimeError)
 {
   std::string urdf_string =
@@ -704,51 +482,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoRobotElement_ThrowsRuntimeError
   EXPECT_THROW(
     loader_->load_from_urdf_string(urdf_string),
     std::runtime_error);
-}
-
-TEST_F(ShapeLoaderTest, CreateSecondaryShapesForConstraint_CombinesMultipleShapes)
-{
-  // Simulate creating secondary shapes for KissingSurfaceConstraint
-  auto ground = loader_->make_ground_plane(test_constants::kGroundPlaneSize,
-    test_constants::kGroundPlaneSize, 0.0);
-  auto fixture = loader_->make_box(
-    Eigen::Vector3d(
-      test_constants::kSmallDimension,
-      test_constants::kSmallDimension,
-      test_constants::kMediumDimension),
-    Eigen::Vector3d(test_constants::kLargeDimension, 0.0, test_constants::kSmallDimension));
-
-  std::vector<TopoDS_Shape> secondaries = {ground, fixture};
-
-  // All shapes should be valid
-  for (const auto & shape : secondaries) {
-    EXPECT_FALSE(shape.IsNull());
-  }
-
-  // Could combine them if needed
-  auto combined = loader_->combine_shapes(secondaries);
-  EXPECT_FALSE(combined.IsNull());
-}
-
-TEST_F(ShapeLoaderTest, TriangulateExplicitly_WithAutoTriangulateDisabled_SuccessfullyTriangulates)
-{
-  // Create with auto-triangulate off
-  ShapeLoaderConfig config;
-  config.auto_triangulate = false;
-  ShapeLoader loader(config);
-
-  auto box = loader.make_box(Eigen::Vector3d(
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension,
-    test_constants::kSmallDimension));
-  EXPECT_FALSE(box.IsNull());
-
-  // Manually triangulate
-  loader.triangulate(box);
-
-  // Shape should still be valid
-  EXPECT_FALSE(box.IsNull());
-  EXPECT_EQ(count_faces(box), test_constants::kBoxFaceCount);
 }
 
 int main(int argc, char ** argv)

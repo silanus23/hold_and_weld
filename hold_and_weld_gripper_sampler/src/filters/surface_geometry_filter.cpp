@@ -1,3 +1,17 @@
+// Copyright 2026 Berkan Tali
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "hold_and_weld_gripper_sampler/filters/surface_filters/surface_geometry_filter.hpp"
 
 #include <cmath>
@@ -50,8 +64,7 @@ std::vector<int> SurfaceGeometryFilter::evaluate(const geometry::Topology & topo
       double u_mid = (u_min + u_max) / 2.0;
       double v_mid = (v_min + v_max) / 2.0;
 
-      // Note: Curvature is calculated at a single point.
-      // For complex NURBS, this may not represent the whole face.
+      // Curvature sampled at face centre only — may not represent complex NURBS faces.
       GeomLProp_SLProps surface_props(geom_surface, u_mid, v_mid, 2, 1e-6);
 
       if (!surface_props.IsCurvatureDefined()) {continue;}
@@ -61,7 +74,7 @@ std::vector<int> SurfaceGeometryFilter::evaluate(const geometry::Topology & topo
       if (mean_curvature <= max_mean_curvature_) {
         valid_surface_ids.push_back(static_cast<int>(i));
       }
-    } catch (Standard_Failure & e) {
+    } catch (const Standard_Failure & e) {
       RCLCPP_WARN(logger_, "Curvature analysis failed for surface %zu: %s", i,
             e.GetMessageString());
     }
@@ -75,5 +88,5 @@ std::string SurfaceGeometryFilter::get_name() const
   return "SurfaceGeometryFilter";
 }
 
-} // namespace filters
-} // namespace hold_and_weld_gripper_sampler
+}  // namespace filters
+}  // namespace hold_and_weld_gripper_sampler

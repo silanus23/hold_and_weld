@@ -4,13 +4,13 @@
   =================
   A parallel gripper for testing the grasp sampling pipeline.
   This is a standalone URDF (no xacro processing required).
-  
+
   Gripper specifications:
   - Base: 80mm x 120mm x 40mm
   - Fingers: 30mm x 40mm x 200mm each
   - Opening range: 60mm to 360mm (joint limits 0.0 to 0.15m per finger)
   - TCP: 120mm below gripper base center
-  
+
   The gripper_metadata section is parsed by GripperParser.
 -->
 <robot name="test_gripper">
@@ -20,19 +20,19 @@
   <gripper_metadata>
     <!-- Base link name (static part of gripper) -->
     <base_link name="gripper_base"/>
-    
+
     <!-- Finger definitions: link name and controlling joint -->
     <!-- finger_id: 1 or 2 (for two-finger parallel grippers) -->
     <!-- The joint axis defines the opening direction -->
     <finger finger_id="1" link="left_finger" joint="left_finger_joint"/>
     <finger finger_id="2" link="right_finger" joint="right_finger_joint"/>
-    
+
     <!-- Gripper type: parallel, angular, vacuum, etc. -->
     <gripper_type>parallel</gripper_type>
-    
+
     <!-- TCP (Tool Center Point) offset from base_link origin -->
     <!-- This is where the gripper "grasps" - typically between fingers -->
-    <tcp_offset xyz="0 0 -0.12" rpy="0 0 0"/>
+    <tcp_offset xyz="0 0 0.22" rpy="0 0 0"/>
   </gripper_metadata>
   <!-- =========================================================== -->
 
@@ -63,7 +63,7 @@
   <!-- Left Finger -->
   <link name="left_finger">
     <visual>
-      <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+      <origin xyz="0 0 0.1" rpy="0 0 0"/>
       <geometry>
         <box size="0.03 0.04 0.20"/>
       </geometry>
@@ -72,7 +72,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+      <origin xyz="0 0 0.1" rpy="0 0 0"/>
       <geometry>
         <box size="0.03 0.04 0.20"/>
       </geometry>
@@ -87,7 +87,7 @@
   <!-- Right Finger -->
   <link name="right_finger">
     <visual>
-      <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+      <origin xyz="0 0 0.1" rpy="0 0 0"/>
       <geometry>
         <box size="0.03 0.04 0.20"/>
       </geometry>
@@ -96,7 +96,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0 0 -0.1" rpy="0 0 0"/>
+      <origin xyz="0 0 0.1" rpy="0 0 0"/>
       <geometry>
         <box size="0.03 0.04 0.20"/>
       </geometry>
@@ -116,7 +116,7 @@
   <joint name="left_finger_joint" type="prismatic">
     <parent link="gripper_base"/>
     <child link="left_finger"/>
-    <origin xyz="0 0.03 -0.02" rpy="0 0 0"/>
+    <origin xyz="0 0.03 0.02" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="0.0" upper="0.15" effort="100" velocity="0.1"/>
     <dynamics damping="1.0" friction="2.0"/>
@@ -127,7 +127,7 @@
   <joint name="right_finger_joint" type="prismatic">
     <parent link="gripper_base"/>
     <child link="right_finger"/>
-    <origin xyz="0 -0.03 -0.02" rpy="0 0 0"/>
+    <origin xyz="0 -0.03 0.02" rpy="0 0 0"/>
     <axis xyz="0 -1 0"/>
     <limit lower="0.0" upper="0.15" effort="100" velocity="0.1"/>
     <dynamics damping="1.0" friction="2.0"/>

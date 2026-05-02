@@ -23,17 +23,19 @@
 
 namespace hold_and_weld_gripper_sampler
 {
+namespace core
+{
 
 TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distance)
 {
+  if (gripper.finger_1.IsNull() || gripper.finger_2.IsNull() || gripper.base.IsNull()) {
+    throw std::runtime_error("configure_gripper: Input shapes are null");
+  }
+
   const double finger_travel = std::max(0.0,
-      std::min(grip_distance / 2.0, gripper.max_opening / 2.0));
+    std::min(grip_distance / 2.0, gripper.max_opening / 2.0));
 
   try {
-    if (gripper.finger_1.IsNull() || gripper.finger_2.IsNull() || gripper.base.IsNull()) {
-      throw std::runtime_error("configure_gripper: Input shapes are null");
-    }
-
     gp_Trsf f1_trsf;
     f1_trsf.SetTranslation(gp_Vec(gripper.finger_1_axis.x(),
                                   gripper.finger_1_axis.y(),
@@ -67,9 +69,10 @@ TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distan
     builder.Add(compound, gripper.base);
 
     return compound;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     throw std::runtime_error(std::string("OCCT Transform failure: ") + e.GetMessageString());
   }
 }
 
+}  // namespace core
 }  // namespace hold_and_weld_gripper_sampler

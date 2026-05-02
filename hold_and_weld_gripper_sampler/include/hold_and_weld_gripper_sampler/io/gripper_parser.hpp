@@ -15,6 +15,7 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__IO__GRIPPER_PARSER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__IO__GRIPPER_PARSER_HPP_
 
+#include <tinyxml2.h>
 #include <memory>
 #include <optional>
 #include <string>
@@ -43,7 +44,7 @@ namespace io
  *   <finger finger_id="1" link="left_finger" joint="left_finger_joint"/>
  *   <finger finger_id="2" link="right_finger" joint="right_finger_joint"/>
  *   <gripper_type>parallel</gripper_type>
- *   <tcp_offset xyz="0 0 -0.12" rpy="0 0 0"/>
+ *   <tcp_offset xyz="0 0 0.22" rpy="0 0 0"/>
  * </gripper_metadata>
  * @endcode
  *
@@ -101,15 +102,20 @@ public:
 
 private:
   /**
-   * @brief Extract shape from link's collision geometry
+   * @brief Extract shape from link's collision geometry (all <collision> elements)
    *
    * @param urdf_string Complete URDF string
    * @param link_name Name of the link to extract
-   * @return TopoDS_Shape representing the collision geometry
+   * @return TopoDS_Shape (compound if multiple collision elements) representing the collision geometry
    * @throw std::runtime_error if link not found or geometry unsupported
    */
   TopoDS_Shape extract_link_shape(
     const std::string & urdf_string,
+    const std::string & link_name);
+
+  /// Overload accepting a pre-parsed <robot> element — avoids re-parsing the URDF string.
+  TopoDS_Shape extract_link_shape(
+    tinyxml2::XMLElement * robot,
     const std::string & link_name);
 
   /**
@@ -124,6 +130,11 @@ private:
     const std::string & urdf_string,
     const std::string & joint_name);
 
+  /// Overload accepting a pre-parsed <robot> element.
+  Eigen::Vector3d extract_joint_axis(
+    tinyxml2::XMLElement * robot,
+    const std::string & joint_name);
+
   /**
    * @brief Extract joint position limits
    *
@@ -136,6 +147,11 @@ private:
     const std::string & urdf_string,
     const std::string & joint_name);
 
+  /// Overload accepting a pre-parsed <robot> element.
+  std::pair<double, double> extract_joint_limits(
+    tinyxml2::XMLElement * robot,
+    const std::string & joint_name);
+
   /**
    * @brief Extract joint origin transform
    *
@@ -146,6 +162,11 @@ private:
    */
   gp_Trsf extract_joint_origin(
     const std::string & urdf_string,
+    const std::string & joint_name);
+
+  /// Overload accepting a pre-parsed <robot> element.
+  gp_Trsf extract_joint_origin(
+    tinyxml2::XMLElement * robot,
     const std::string & joint_name);
 
   /**

@@ -26,15 +26,13 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
-#include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
 
@@ -48,11 +46,11 @@ namespace core
  */
 struct GraspFinderResult
 {
-  std::vector<Grasp> grasps; // sorted by quality descending
+  std::vector<Grasp> grasps;  // sorted by quality descending
   size_t num_contact_pairs = 0;
   size_t num_valid_surfaces = 0;
   size_t num_banned_surfaces = 0;
-  size_t num_exclusion_areas = 0; // exclusion wires passed to contact sampler
+  size_t num_exclusion_areas = 0;  // exclusion wires passed to contact sampler
   size_t num_candidates = 0;
   bool success = false;
   std::string error_message;
@@ -100,13 +98,14 @@ struct GraspFinderConfig
   ShapeRefinerConfig shape_refiner;
 
   double kissing_contact_threshold = 0.8;
+
+  // TODO(@silanus23): unused — preserved for future auto-detection of ground-facing surfaces
+  // from primary shape topology (surfaces with normal.z < ground_normal_z_threshold).
+  // ground_safety_margin was intended as a small Z offset added to ground_bottom_z
+  // to avoid false positives at the exact contact plane.
   double ground_normal_z_threshold = -0.9;
   double ground_safety_margin = 0.005;
 
-  // Auto-computed from primary shape bounding box — do not set manually.
-  // ground_bottom_z  : lowest Z of the primary shape (top face of ground plane BVH)
-  // ground_center_x/y: XY center of the primary shape bounding box
-  // ground_size_x/y  : XY extent of the primary shape bounding box
   double ground_bottom_z = 0.0;
   double ground_center_x = 0.0;
   double ground_center_y = 0.0;
@@ -117,6 +116,7 @@ struct GraspFinderConfig
   // queries against known geometry. Separate from orientation.collision_tolerance (1mm)
   // which is looser to avoid false rejections during pose sampling.
   double collision_tolerance = 0.000001;
+  std::vector<TopoDS_Shape> ground_shapes;
 
   bool use_fcl = true;
   bool enable_ground_plane_check = true;
@@ -142,32 +142,6 @@ struct GraspFinderConfig
 class GraspFinder
 {
 public:
-  /**
-   * @brief Construct GraspFinder with all required inputs
-   *
-   * @param primary_shape Primary workpiece shape (must be pre-refined and triangulated)
-   * @param primary_topology Topology extracted from the refined primary shape
-   * @param gripper Parsed gripper from URDF
-   * @param secondary_shapes Fixture/ground shapes for collision
-   * @param exclusion_circles Optional exclusion circles (weld points, etc.)
-   * @param exclusion_polygons Optional exclusion polygons (forbidden regions)
-   * @param exclusion_lines Optional exclusion lines (weld seams, etc.)
-   * @param config Configuration for all sub-components
-   */
-  GraspFinder(
-    const TopoDS_Shape & primary_shape,
-    const geometry::Topology & primary_topology,
-    const ParsedGripper & gripper,
-    const std::vector<TopoDS_Shape> & secondary_shapes,
-    const std::optional<std::vector<constraints::exclusion_circle>> & exclusion_circles =
-    std::nullopt,
-    const std::optional<std::vector<constraints::exclusion_polygon>> & exclusion_polygons =
-    std::nullopt,
-    const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines =
-    std::nullopt,
-    const GraspFinderConfig & config = GraspFinderConfig{}
-  );
-
   /**
    * @brief Construct GraspFinder with shared GeometryMapper
    *
@@ -196,7 +170,8 @@ public:
     std::nullopt,
     const std::optional<std::vector<constraints::exclusion_line>> & exclusion_lines =
     std::nullopt,
-    const GraspFinderConfig & config = GraspFinderConfig{}
+    const GraspFinderConfig & config = GraspFinderConfig{},
+    const TopoDS_Shape & fcl_primary_shape = TopoDS_Shape{}
   );
 
   /**
@@ -224,6 +199,7 @@ public:
 private:
   std::shared_ptr<const geometry::GeometryMapper> mapper_;
   TopoDS_Shape primary_shape_;
+  TopoDS_Shape fcl_primary_shape_;  // pre-refiner copy for FCL — cleaner mesh
   geometry::Topology primary_topology_;
   ParsedGripper gripper_;
   std::vector<TopoDS_Shape> secondary_shapes_;

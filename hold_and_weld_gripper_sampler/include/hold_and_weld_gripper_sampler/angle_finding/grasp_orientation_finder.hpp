@@ -26,11 +26,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <TopoDS_Shape.hxx>
 
-#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/embree_mesh_query.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
+
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -51,7 +53,7 @@ struct OrientationConfig
 {
   double finger_length = 0.10;
   double finger_radius = 0.02;
-  size_t max_orientations_per_pair = 3;
+  size_t max_orientations_per_pair = 0;
   double collision_tolerance = 0.001;
   bool stop_on_first_valid = false;
   double ring_step_size = 0.010;
@@ -59,6 +61,14 @@ struct OrientationConfig
   double flat_detection_tolerance_m = 0.003;
   double cliff_merge_tolerance_deg = 2.0;
   double min_cliff_width_deg = 5.0;
+
+  bool randomize_seeds = false;
+
+  // When true, bypass the radial map entirely and test all angles at debug_sweep_step_deg
+  // intervals across the full 360°. Every contact pair gets the same uniform sweep.
+  // Use this to diagnose whether the collision checker accepts/rejects at all orientations.
+  bool debug_full_sweep = false;
+  double debug_sweep_step_deg = 10.0;
 
   // Kept for config-parser compatibility — not used by the radial-map algorithm
   size_t max_edge_candidates = 3;
@@ -95,7 +105,24 @@ struct RadialMaps
   std::vector<RadialSegment> flat;
   std::vector<RadialSegment> high;
   std::vector<RadialSegment> low;
+
+  std::vector<RadialSegment> & segs_for(SurfaceState state)
+  {
+    if (state == SurfaceState::FLAT) {return flat;}
+    if (state == SurfaceState::HIGH) {return high;}
+    return low;
+  }
+
+  const std::vector<RadialSegment> & segs_for(SurfaceState state) const
+  {
+    if (state == SurfaceState::FLAT) {return flat;}
+    if (state == SurfaceState::HIGH) {return high;}
+    return low;
+  }
 };
+
+static constexpr std::array<SurfaceState, 3> kAllSurfaceStates = {
+  SurfaceState::FLAT, SurfaceState::HIGH, SurfaceState::LOW};
 
 /**
  * @brief Represents a valid grasp candidate
@@ -125,14 +152,18 @@ Grasp to_grasp(const GraspCandidate & candidate);
  * 1. Build a local tangent frame per contact from its own surface normal.
  * 2. Sweep the outer ring (r = finger_length) using FCL raycasting in the
  *    local tangent plane. Miss = LOW (cliff), hit = FLAT or HIGH based on
- *    elevation relative to contact point.
+ *    elevation relative to contact point. FLAT and HIGH are stored for
+ *    diagnostics; only LOW segments survive as grasp candidates.
  * 3. Calibrate each contact's angular segments to a shared reference frame
  *    before merging.
  * 4. If no LOW arcs on the outer ring → skip this contact pair (fully flat).
- * 5. Sweep inner rings (r < finger_length) only within the LOW arc ranges
- *    found on the outer ring. Look only for HIGHs — a HIGH at any inner
- *    radius trims that arc from the candidate set.
- * 6. Cluster surviving LOW arcs → one approach seed per cliff.
+ * 5. Sweep inner rings (r = finger_length - ring_step_size down to
+ *    finger_radius, stepping by ring_step_size). Only angles within surviving
+ *    LOW segments are tested. A HIGH hit at any inner radius trims or splits
+ *    the containing LOW segment; FLAT/LOW hits leave it unchanged. Segments
+ *    too narrow after trimming (< min_cliff_width_deg) are discarded.
+ * 6. Intersect surviving LOW arcs from both contacts, then cluster → one
+ *    approach seed per cliff.
  * 7. Validate each seed against primary collision, exclusion zones, and
  *    secondary shapes via FCL.
  */
@@ -148,20 +179,12 @@ public:
   );
 
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
+  void set_embree_checker(std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker);
 
   std::vector<GraspCandidate> find_valid_grasps(
     const std::vector<sampling::ContactPair> & contact_pairs,
     const geometry::Topology & topology
   );
-
-private:
-  TopoDS_Shape primary_shape_;
-  ParsedGripper gripper_;
-  std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint_;
-  std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint_;
-  OrientationConfig config_;
-  std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
-  rclcpp::Logger logger_;
 
   /**
    * @brief Build a RadialMaps for one contact point using FCL raycasting.
@@ -173,19 +196,29 @@ private:
    *
    * @param contact        Contact point on the workpiece surface
    * @param normal         Outward surface normal at the contact
-   * @param lx             Local tangent frame X axis (0° in local frame)
-   * @param ly             Local tangent frame Y axis (90° in local frame)
+   * @param tangent_axis_x Local tangent frame X axis — points in the angle=0° direction of the radial sweep
+   * @param tangent_axis_y Local tangent frame Y axis — points in the angle=90° direction of the radial sweep
    * @param lifted_center  contact + normal * kCeilingOffset (pre-computed)
    * @param angle_offset   Rotation from local frame to shared reference [rad]
    */
   RadialMaps create_radial_maps(
     const gp_Pnt & contact,
     const gp_Dir & normal,
-    const gp_Vec & lx,
-    const gp_Vec & ly,
+    const gp_Vec & tangent_axis_x,
+    const gp_Vec & tangent_axis_y,
     const gp_Pnt & lifted_center,
     double angle_offset
   ) const;
+
+private:
+  TopoDS_Shape primary_shape_;
+  ParsedGripper gripper_;
+  std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint_;
+  std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint_;
+  OrientationConfig config_;
+  std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
+  std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker_;
+  rclcpp::Logger logger_;
 
   /**
    * @brief Classify a single FCL ray hit relative to the contact plane.
@@ -211,38 +244,10 @@ private:
   ) const;
 
   /**
-   * @brief Remove segments covered by HIGH on the outermost ring in either map.
-   *
-   * FLAT at outer ring means open space (no geometry within finger_length)
-   * and does NOT block a segment.
-   */
-  std::vector<RadialSegment> filter_by_outer_ring(
-    const std::vector<RadialSegment> & segments,
-    const RadialMaps & maps_1,
-    const RadialMaps & maps_2
-  ) const;
-
-  /** @brief Remove segments that overlap any HIGH segment at any radius. */
-  std::vector<RadialSegment> ban_high_angles(
-    const std::vector<RadialSegment> & segments,
-    const RadialMaps & maps_1,
-    const RadialMaps & maps_2
-  ) const;
-
-  /**
    * @brief Group angularly close segments into clusters and discard narrow ones.
    */
   std::vector<std::vector<RadialSegment>> cluster_and_filter(
     const std::vector<RadialSegment> & segments
-  ) const;
-
-  /** @brief Return the midpoint angle of a cluster (handles 0/2π wrap-around). */
-  double cluster_midpoint(const std::vector<RadialSegment> & cluster) const;
-
-  /** @brief Top-level orchestrator: derive approach seeds from two RadialMaps. */
-  std::vector<double> build_approach_seeds(
-    const RadialMaps & maps_1,
-    const RadialMaps & maps_2
   ) const;
 
   gp_Trsf compute_gripper_transform(

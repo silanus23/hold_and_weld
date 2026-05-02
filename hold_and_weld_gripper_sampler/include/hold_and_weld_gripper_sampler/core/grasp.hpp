@@ -21,19 +21,17 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace hold_and_weld_gripper_sampler
 {
 
 /**
- * @brief Represents a single grasp configuration.
+ * @brief Represents a single grasp configuration in the world frame.
  *
- * All geometric data is in the world frame (after STEP file transformation).
- * This struct is used throughout the sampling pipeline:
- * - Pre-filters create "marker" grasps (surface_id_2 = -1) to encode allowed surfaces
- * - Generator creates real grasps with both contact points
- * - Post-filters validate and score real grasps
+ * Pre-filters use surface_id_2 = -1 as a marker for allowed-surface encoding.
+ * Generator fills both contact points; post-filters validate and score them.
  */
 struct Grasp
 {
@@ -46,10 +44,9 @@ struct Grasp
   Eigen::Vector3d tcp_position;
 
   /**
-   * @brief TCP orientation in world frame (quaternion)
+   * @brief TCP orientation in world frame (quaternion).
    *
-   * Defines the gripper's approach direction and finger alignment.
-   * Convention: Z-axis points along approach direction (toward object)
+   * Z-axis points along the approach direction (toward object).
    */
   Eigen::Quaterniond tcp_orientation;
 
@@ -93,15 +90,7 @@ struct Grasp
   int surface_id_2;
 
   /**
-   * @brief Grasp quality score [0.0 - 1.0]
-   *
-   * Higher is better. Computed by quality filters based on:
-   * - Antipodality (normal alignment)
-   * - Distance from edges
-   * - Gripper opening (prefer mid-range)
-   * - Orientation alignment with constraints
-   *
-   * Default: 0.0 (unscored)
+   * @brief Grasp quality score [0.0 - 1.0]. Higher is better. Default: 0.0 (unscored).
    */
   double quality_score;
 
@@ -120,22 +109,7 @@ struct Grasp
   {}
 
   /**
-   * @brief Factory method to create Grasp from pre-converted values
-   *
-   * Use this with occt_utils conversion functions:
-   * - geometry::to_eigen(gp_Pnt) for contact points
-   * - geometry::extract_translation(gp_Trsf) for TCP position
-   * - geometry::extract_quaternion(gp_Trsf) for TCP orientation
-   *
-   * @param tcp_pos TCP position in world frame
-   * @param tcp_orient TCP orientation as quaternion
-   * @param opening Gripper opening distance
-   * @param contact_1 First contact point
-   * @param contact_2 Second contact point
-   * @param surf_id_1 Surface ID for first contact
-   * @param surf_id_2 Surface ID for second contact
-   * @param quality Quality score [0.0 - 1.0]
-   * @return Constructed Grasp object
+   * @brief Factory method to create a Grasp from pre-converted Eigen values.
    */
   static Grasp create(
     const Eigen::Vector3d & tcp_pos,
@@ -178,23 +152,14 @@ inline void sort_by_quality(std::vector<Grasp> & grasps)
 /**
  * @brief Diversity-aware reordering: interleave geometrically distant grasps.
  *
- * Uses greedy farthest-point selection so that each successive grasp in the
- * output list is as different as possible from all previously selected ones.
- * Diversity is measured by a combined distance in (TCP position, approach
- * direction) space, weighted so that a 180° orientation flip counts roughly
- * the same as a full workpiece-width translation.
+ * Uses greedy farthest-point selection so each successive grasp differs
+ * maximally from all previously selected ones. Distance combines TCP position
+ * (metres) and approach-direction angle (radians). The first element is always
+ * the highest-quality grasp (seed); quality breaks ties elsewhere.
  *
- * Quality is used as a tie-breaker when two candidates are equidistant: the
- * higher-quality grasp is seeded first (the first element is always the best
- * by quality), so the planner still gets the strongest grasp up front while
- * the remainder of the list varies maximally.
- *
- * @param grasps     Vector of grasps to reorder in place (should already be
- *                   quality-sorted so the seed is the global best).
- * @param pos_weight Scale factor applied to TCP position distances [m].
- *                   Default 1.0 — tune upward to prefer spatial spread.
- * @param ori_weight Scale factor applied to orientation distances [rad].
- *                   Default 1.0 — tune upward to prefer angular spread.
+ * @param grasps     Vector to reorder in place (quality-sorted before calling).
+ * @param pos_weight Scale applied to TCP position distances [m].
+ * @param ori_weight Scale applied to orientation distances [rad].
  */
 inline void sort_by_diversity(
   std::vector<Grasp> & grasps,
@@ -206,10 +171,7 @@ inline void sort_by_diversity(
     return;
   }
 
-  // Pre-extract approach directions from quaternion rotation matrices.
-  // Convention: gripper Z-axis (third column of rotation matrix) is the
-  // approach direction — consistent with compute_gripper_transform which
-  // builds gp_Ax3 with Z = y_axis × x_axis (toward body).
+  // Extract approach direction (gripper Z-axis = third column of rotation matrix).
   std::vector<Eigen::Vector3d> approach(n);
   for (std::size_t i = 0; i < n; ++i) {
     approach[i] = grasps[i].tcp_orientation.toRotationMatrix().col(2);
@@ -222,8 +184,7 @@ inline void sort_by_diversity(
   std::vector<Grasp> result;
   result.reserve(n);
 
-  // Seed: index 0 is already the highest-quality grasp (caller should
-  // quality-sort first). Pick it unconditionally.
+  // Seed with index 0 (highest-quality grasp; caller should quality-sort first).
   std::size_t pick = 0;
 
   for (std::size_t step = 0; step < n; ++step) {

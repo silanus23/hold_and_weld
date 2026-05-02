@@ -91,7 +91,7 @@ ExclusionZoneConstraint::ExclusionZoneConstraint(
       BRepMesh_IncrementalMesh(gripper_.base, mesh_linear_deflection_, Standard_False,
             mesh_angular_deflection_);
     }
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Meshing failed for one or more gripper components: %s",
           e.GetMessageString());
   }
@@ -136,8 +136,8 @@ TopoDS_Shape ExclusionZoneConstraint::create_tube_from_line(
     BRepBuilderAPI_MakeWire wire_maker(edge_maker.Edge());
     BRepBuilderAPI_MakeFace disk_maker(wire_maker.Wire());
     gp_Vec extrude(axis_dir.X() * actual_length,
-                   axis_dir.Y() * actual_length,
-                   axis_dir.Z() * actual_length);
+      axis_dir.Y() * actual_length,
+      axis_dir.Z() * actual_length);
     TopoDS_Shape tube = BRepPrimAPI_MakePrism(disk_maker.Face(), extrude).Shape();
     if (tube.IsNull()) {
       RCLCPP_ERROR(logger_, "Tube: prism shape is null");
@@ -146,10 +146,10 @@ TopoDS_Shape ExclusionZoneConstraint::create_tube_from_line(
     BRepMesh_IncrementalMesh(tube, mesh_linear_deflection_, Standard_False,
           mesh_angular_deflection_);
     return tube;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Tube creation failed: %s", e.GetMessageString());
     return TopoDS_Shape();
-  }catch (const std::exception & e) {
+  } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Standard exception in geometry creation: %s", e.what());
     return TopoDS_Shape();
   }
@@ -196,7 +196,7 @@ TopoDS_Shape ExclusionZoneConstraint::create_volume_from_circle(
     BRepMesh_IncrementalMesh(thick_disk, mesh_linear_deflection_, Standard_False,
           mesh_angular_deflection_);
     return thick_disk;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Circle volume creation failed: %s", e.GetMessageString());
     return TopoDS_Shape();
   } catch (const std::exception & e) {
@@ -272,10 +272,10 @@ TopoDS_Shape ExclusionZoneConstraint::create_prism_from_polygon(
     BRepMesh_IncrementalMesh(prism, mesh_linear_deflection_, Standard_False,
       mesh_angular_deflection_);
     return prism;
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Prism creation failed: %s", e.GetMessageString());
     return TopoDS_Shape();
-  }catch (const std::exception & e) {
+  } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Standard exception in geometry creation: %s", e.what());
     return TopoDS_Shape();
   }
@@ -299,7 +299,6 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
       return sample_areas;
     }
 
-    // Map edges back to primary shape faces to identify which surface each belongs to
     TopTools_IndexedDataMapOfShapeListOfShape edge_to_faces;
     TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_to_faces);
 
@@ -343,7 +342,7 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
       RCLCPP_DEBUG(logger_, "Exclusion wire created for surface %d (%zu edges)",
                     surface_id, edges.size());
     }
-  } catch (Standard_Failure & e) {
+  } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "OCCT Section operation or mapping failed: %s", e.GetMessageString());
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Standard exception in constraint processing: %s", e.what());
@@ -390,8 +389,6 @@ void ExclusionZoneConstraint::analyze_constraints(
     } else {
       RCLCPP_ERROR(logger_, "Skipping exclusion zone %zu due to geometry failure", i);
     }
-
-
   }
 
   for (size_t i = 0; i < circles_.size(); ++i) {
@@ -401,12 +398,17 @@ void ExclusionZoneConstraint::analyze_constraints(
 
     TopoDS_Shape proj = create_volume_from_circle(circle, false);
     TopoDS_Shape coll = create_volume_from_circle(circle, true);
-    projection_volumes_.push_back(proj);
-    collision_volumes_.push_back(coll);
 
-    auto areas = process_constraint_volume(proj, shape);
-    sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
-    RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
+    if (!proj.IsNull() && !coll.IsNull()) {
+      projection_volumes_.push_back(proj);
+      collision_volumes_.push_back(coll);
+      auto areas = process_constraint_volume(proj, shape);
+      sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
+      RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
+    } else {
+      RCLCPP_ERROR(logger_, "Skipping circle exclusion zone %zu due to geometry failure — "
+        "this zone will NOT be enforced", i);
+    }
   }
 
   for (size_t i = 0; i < polygons_.size(); ++i) {
@@ -416,21 +418,24 @@ void ExclusionZoneConstraint::analyze_constraints(
 
     TopoDS_Shape proj = create_prism_from_polygon(polygon, false);
     TopoDS_Shape coll = create_prism_from_polygon(polygon, true);
-    projection_volumes_.push_back(proj);
-    collision_volumes_.push_back(coll);
 
-    auto areas = process_constraint_volume(proj, shape);
-    sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
-    RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
+    if (!proj.IsNull() && !coll.IsNull()) {
+      projection_volumes_.push_back(proj);
+      collision_volumes_.push_back(coll);
+      auto areas = process_constraint_volume(proj, shape);
+      sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
+      RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
+    } else {
+      RCLCPP_ERROR(logger_, "Skipping polygon exclusion zone %zu due to geometry failure — "
+        "this zone will NOT be enforced", i);
+    }
   }
 
-  const size_t affected_surfaces = [&]() {
-      std::map<int, int> counts;
-      for (const auto & a : sample_areas_) {
-        counts[a.surface_id]++;
-      }
-      return counts.size();
-    }();
+  std::map<int, int> surface_counts;
+  for (const auto & a : sample_areas_) {
+    surface_counts[a.surface_id]++;
+  }
+  const size_t affected_surfaces = surface_counts.size();
 
   RCLCPP_INFO(logger_, "Exclusion analysis complete: %zu volume(s), %zu wire(s) "
     "on %zu surface(s)",

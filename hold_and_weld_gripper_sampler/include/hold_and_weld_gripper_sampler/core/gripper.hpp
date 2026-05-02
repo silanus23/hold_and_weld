@@ -67,8 +67,12 @@ struct ParsedGripper
  * @param grip_distance Target distance between finger contact points (meters)
  * @return Compound shape: finger_1 + finger_2 + base at configured state
  */
+namespace core
+{
+
 TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distance);
 
+}  // namespace core
 }  // namespace hold_and_weld_gripper_sampler
 
 #endif  // HOLD_AND_WELD_GRIPPER_SAMPLER__CORE__GRIPPER_HPP_

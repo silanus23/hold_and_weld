@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!--
+  Small Cylinder Workpiece URDF
+  =============================
+  A graspable cylindrical workpiece for testing the grasp sampling pipeline.
+  This is a standalone URDF (no xacro processing required).
+
+  Workpiece specifications:
+  - Radius:   150mm (0.150m)
+  - Diameter: 300mm (0.300m)  ← well within gripper range (60mm–360mm)
+  - Height:   250mm (0.250m)
+  - Cylinder axis along Z (URDF convention for <cylinder>)
+
+  Origin is at the geometric center of the cylinder.
+
+  When placed with center at (1.2, 0.0, 0.125):
+    → bottom circular face sits flush on z = 0.0 (ground plane)
+    → top circular face at z = 0.25
+    → cylinder axis: z ∈ [0.0, 0.25]
+    → radial extent: x ∈ [1.05, 1.35], y ∈ [-0.15, 0.15]
+
+  Graspable surface pairs with test_gripper (60mm–360mm opening):
+  - Curved side vs curved side: diameter = 300mm ✓  MAIN TARGET
+    ShapeRefiner will split curved surface into arc patches;
+    opposing patches are ~300mm apart (within gripper range).
+  - Top flat vs bottom flat: height = 250mm ✓
+    (bottom face banned by ground plane)
+
+  Coordinate system: meters. Frame: world.
+-->
+<robot name="cylinder_small_workpiece">
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.150" length="0.250"/>
+      </geometry>
+      <material name="steel">
+        <color rgba="0.7 0.7 0.75 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.150" length="0.250"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="9.0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <!--
+        Solid cylinder inertia:
+          Ixx = Iyy = (1/12) * m * (3*r^2 + h^2)
+                    = (1/12) * 9 * (3*0.150^2 + 0.250^2)
+                    = (1/12) * 9 * (0.0675 + 0.0625)
+                    = (1/12) * 9 * 0.1300
+                    = 0.09750
+          Izz = (1/2) * m * r^2
+              = (1/2) * 9 * 0.150^2
+              = 0.10125
+      -->
+      <inertia ixx="0.09750" ixy="0.0" ixz="0.0"
+               iyy="0.09750" iyz="0.0"
+               izz="0.10125"/>
+    </inertial>
+  </link>
+
+</robot>

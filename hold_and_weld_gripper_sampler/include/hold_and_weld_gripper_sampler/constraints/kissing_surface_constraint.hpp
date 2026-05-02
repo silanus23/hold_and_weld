@@ -25,7 +25,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
-#include "hold_and_weld_gripper_sampler/geometry/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
@@ -36,9 +36,14 @@ namespace constraints
 {
 
 /**
- * @brief Statistics for collision rejection tracking
+ * @brief High-level collision rejection statistics for a full grasp search
+ *
+ * Tracks how many gripper poses were checked and how many were rejected
+ * by FCL during secondary/ground collision validation. This is a simple
+ * pass/fail counter — distinct from FCLCollisionChecker::CollisionStats
+ * which tracks per-part, per-target rejection counts at the BVH level.
  */
-struct CollisionStats
+struct GraspCollisionStats
 {
   size_t total_checks = 0;
   size_t fcl_rejections = 0;
@@ -118,12 +123,12 @@ public:
    * 3. Checks collision with secondary shapes
    *
    * @param grip_distance Distance between fingers (determines joint state)
-   * @param grasp_pose 6-DOF pose of gripper (Eigen::Isometry3d)
+   * @param grasp_transform 6-DOF pose of gripper (gp_Trsf)
    * @return true if collision detected, false otherwise
    */
   bool intersects_secondary(
     double grip_distance,
-    const Eigen::Isometry3d & grasp_pose
+    const gp_Trsf & grasp_transform
   ) const;
 
   /**
@@ -151,7 +156,7 @@ public:
    *
    * @return Collision statistics structure
    */
-  CollisionStats get_collision_stats() const;
+  GraspCollisionStats get_collision_stats() const;
 
   /**
    * @brief Reset collision statistics
@@ -172,7 +177,7 @@ private:
   std::vector<core::SampleArea> partial_exclusions_;
 
   // Collision rejection telemetry (mutable for const methods)
-  mutable CollisionStats collision_stats_;
+  mutable GraspCollisionStats collision_stats_;
 
   // Logger
   rclcpp::Logger logger_;
