@@ -115,7 +115,6 @@ class URDFProcessor:
         path_str = str(path_str)
 
         if path_str.startswith('package://'):
-            logger.debug(f'Resolving package path: {path_str}')
             without_prefix = path_str[len('package://'):]
             parts = without_prefix.split('/', 1)
 
@@ -131,7 +130,6 @@ class URDFProcessor:
                 )
 
                 package_dir = get_package_share_directory(package_name)
-                logger.debug(f'Resolved package {package_name} to: {package_dir}')
             except ModuleNotFoundError:
                 raise FileNotFoundError(
                     f"ament_index_python not installed - cannot resolve package://"
@@ -140,6 +138,7 @@ class URDFProcessor:
                 raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
 
             resolved = Path(package_dir) / relative_path
+            logger.debug(f"Resolved '{path_str}' -> '{resolved}'")
 
         else:
             resolved = Path(path_str)
@@ -150,7 +149,11 @@ class URDFProcessor:
         return resolved
 
     def _process_xacro(self, xacro_path: Path) -> str:
-        """Process file through xacro (handles both .xacro and .urdf with macros)."""
+        """Process xacro files; read plain .urdf files directly without xacro."""
+        if xacro_path.suffix.lower() == '.urdf':
+            logger.debug(f'Reading plain URDF directly (no xacro): {xacro_path}')
+            return xacro_path.read_text()
+
         logger.debug(f'Processing file through xacro: {xacro_path}')
         try:
             import xacro
@@ -159,7 +162,7 @@ class URDFProcessor:
             return doc.toxml()
         except ModuleNotFoundError:
             raise ValueError(
-                f"xacro module not installed - cannot process URDF/xacro files"
+                f"xacro module not installed - cannot process xacro files"
             )
         except Exception as e:
             logger.error(f'Xacro processing failed: {e}')

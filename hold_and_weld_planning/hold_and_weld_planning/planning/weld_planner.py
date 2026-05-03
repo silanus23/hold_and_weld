@@ -36,7 +36,6 @@ class WeldPlanner:
                 - travel_angle_deg: Travel angle in degrees (torch tilt along travel)
                 - gap_mm: Gap distance from seam in millimeters
                 - waypoint_spacing_mm: Distance between waypoints (default 10mm)
-                - up_vector: World up vector [x, y, z] (default [0, 0, 1])
 
         Raises:
             ValueError: If gap_mm or waypoint_spacing_mm is non-positive
@@ -45,10 +44,6 @@ class WeldPlanner:
         self.travel_angle_rad = np.radians(parameters['travel_angle_deg'])
         self.gap_m = parameters['gap_mm'] / 1000.0
         self.waypoint_spacing_m = parameters.get('waypoint_spacing_mm', 10.0) / 1000.0
-        self.up_vector = np.array(
-            parameters.get('up_vector', [0.0, 0.0, 1.0]), dtype=float
-        )
-        self.up_vector = self.up_vector / np.linalg.norm(self.up_vector)
 
         if self.gap_m <= 0:
             raise ValueError(f'gap_mm must be positive, got {parameters["gap_mm"]}')
@@ -114,7 +109,7 @@ class WeldPlanner:
 
         seam.poses = poses
         seam.is_generated = True
-        logger.info(f'Generated {len(poses)} poses for seam')
+        logger.info(f'Generated {len(poses)} poses for {seam.segment_type} seam ({seam.length()*1000:.1f}mm)')
 
     def _validate_arrays(
         self, points: NDArray, normals_main: NDArray, normals_secondary: NDArray
@@ -244,9 +239,13 @@ class WeldPlanner:
                 perpendicular = np.cross(np.array([1, 0, 0]), tangent)
                 norm = np.linalg.norm(perpendicular)
                 if norm < 1e-10:
-                    # All fallbacks failed - degenerate tangent vector
-                    logger.warning('Degenerate tangent in _compute_away_vector, using [0, 1, 0]')
-                    perpendicular = np.array([0, 1, 0])
+                    # All cross-product fallbacks failed — tangent is degenerate.
+                    # Compute a guaranteed-perpendicular vector via cross with [0,1,0],
+                    # then cross that with tangent to ensure perpendicularity.
+                    logger.warning('Degenerate tangent in _compute_away_vector, using [0, 1, 0] cross tangent')
+                    fallback = np.cross(np.array([0.0, 1.0, 0.0]), tangent)
+                    fallback_norm = np.linalg.norm(fallback)
+                    perpendicular = fallback / fallback_norm if fallback_norm > 1e-10 else np.array([0.0, 1.0, 0.0])
 
         perpendicular = perpendicular / np.linalg.norm(perpendicular)
 
@@ -263,7 +262,13 @@ class WeldPlanner:
         """Build orthonormal frame (tangent, binormal, normal) from tangent and torch direction."""
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
-        binormal = binormal / np.linalg.norm(binormal)
+        binormal_norm = np.linalg.norm(binormal)
+        if binormal_norm < 1e-10:
+            raise ValueError(
+                'Cannot build base frame: normal and tangent are parallel '
+                '(away_from_wall vector is collinear with seam direction)'
+            )
+        binormal = binormal / binormal_norm
 
         tangent = np.cross(binormal, normal)
         tangent = tangent / np.linalg.norm(tangent)
@@ -279,6 +284,9 @@ class WeldPlanner:
     ) -> tuple[NDArray, NDArray, NDArray]:
         """Rotate torch around tangent axis by work angle toward lean direction."""
         sign = np.sign(np.dot(np.cross(normal, lean_direction), tangent))
+        if sign == 0:
+            # normal and lean_direction are coplanar with tangent — default to positive rotation
+            sign = 1.0
         work_rot = Rotation.from_rotvec(sign * self.work_angle_rad * tangent)
 
         normal_rotated = work_rot.apply(normal)
@@ -311,6 +319,13 @@ class WeldPlanner:
     ) -> Dict[str, Any]:
         """Build pose dictionary with position, quaternion, and 4x4 transform matrix."""
         rot_matrix = np.column_stack([tangent, binormal, normal])
+
+        if not np.all(np.isfinite(rot_matrix)):
+            raise ValueError(
+                f'Non-finite values in rotation matrix at index {index}: '
+                f'likely NaN/Inf propagated from degenerate normal or tangent'
+            )
+
         quat = Rotation.from_matrix(rot_matrix).as_quat()
 
         transform_matrix = np.eye(4)

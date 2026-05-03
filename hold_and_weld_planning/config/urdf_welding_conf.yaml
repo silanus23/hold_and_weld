@@ -1,6 +1,6 @@
 workpiece:
   auto_detect_seams: true
-  mode: occt
+  mode: mesh
 
   main_part:
     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
@@ -14,65 +14,128 @@ workpiece:
       - 0
       - 0
   secondary_part:
-    secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
+    secondary_path: "package://hold_and_weld_description/urdf/environment/cylinder.urdf.xacro"
     world_pose:
       xyz:
-      - 1.2
+      - 1.6
       - -0.5
       - 0.925
       rpy:
       - 0
       - 0
       - 0
+
+# ── T-joint cube straight ──────────────────────────────────────────────────────
+# workpiece:
+#   auto_detect_seams: true
+#   mode: occt
+#
+#   main_part:
+#     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
+#     world_pose:
+#       xyz:
+#       - 1.2
+#       - -0.5
+#       - 0.65
+#       rpy:
+#       - 0
+#       - 0
+#       - 0
+#   secondary_part:
+#     secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
+#     world_pose:
+#       xyz:
+#       - 1.2
+#       - -0.5
+#       - 0.925
+#       rpy:
+#       - 0
+#       - 0
+#       - 0
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
+# workpiece:
+#   auto_detect_seams: true
+#   mode: mesh
+#
+#   main_part:
+#     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
+#     world_pose:
+#       xyz:
+#       - 1.2
+#       - -0.5
+#       - 0.65
+#       rpy:
+#       - 0
+#       - 0.7853982
+#       - 0
+#   secondary_part:
+#     secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
+#     world_pose:
+#       xyz:
+#       - 1.394
+#       - -0.5
+#       - 0.844
+#       rpy:
+#       - 0
+#       - 0.7853982
+#       - 0
+# ──────────────────────────────────────────────────────────────────────────────
+
 parameters:
   num_smooth_points: 40
   gap_mm: 25.0
   work_angle_deg: 45.0
   travel_angle_deg: 5.0
-  
+  line_error_threshold: 0.001
+  circle_error_threshold: 0.001
+  angle_threshold_deg: 45.0
+  edge_detection_search_radius_ratio: 0.02
+
   # PathCreator configuration - Advanced geometry processing parameters
   # All parameters are optional - defaults shown below
   path_creator:
     # Outlier Removal
     # Remove points that are statistical outliers based on inter-point distances
     outlier_std_threshold: 5.0  # Number of standard deviations for outlier detection
-    
+
     # Corner Detection - General
     min_sub_path_length: 10  # Minimum points per sub-path after splitting at corners
     min_points_for_corner_detection: 20  # Minimum total points needed to attempt corner detection
-    
+
     # Corner Detection - Angle-based Method
     # Detects corners by measuring angle change between before/after vectors
     corner_min_angle: 25  # Minimum angle change in degrees to detect a corner (0-180)
     corner_angle_window: 10  # Window size (points) for angle-based detection
-    
+
     # Corner Detection - Curvature-based Method
     # Detects corners by measuring discrete curvature magnitude
     corner_curvature_window: 10  # Window size (points) for curvature-based detection
     corner_curvature_threshold: 0.8  # Normalized curvature threshold (0-1, higher = sharper corners only)
-    
+
     # Corner Detection - Combination & Filtering
     corner_min_agreement: 1  # Minimum detection methods that must agree on a corner (1 or 2)
     corner_tolerance: 5  # Maximum distance (points) between detections to group as same corner
     corner_filter_window: 5  # Window size for local maxima filtering
-    
+
     # Arc Merging
     # Merge consecutive arc segments with similar radii
     arc_radius_tolerance: 0.05  # Maximum radius difference in meters to merge arcs
     arc_merge_num_points: 100  # Number of points for smoothed merged arc
-    
+
     # Line Merging
     # Merge consecutive collinear line segments
     line_angle_tolerance_deg: 10.0  # Maximum angle difference in degrees to merge lines
     line_merge_max_error: 0.001  # Maximum fit error to allow line merge
     line_merge_max_iterations: 20  # Maximum iterations for iterative line merging
-    
+
     # Small Line Absorption
     # Absorb small line segments into adjacent arcs
     min_line_size: 70  # Minimum line segment size (points) to keep separate from arcs
     line_absorption_max_error: 0.01  # Maximum fit error to merge small lines into arcs
     line_absorption_max_iterations: 10  # Maximum iterations for absorption process
-    
+
     # First/Last Segment Merging (for closed paths)
     # Merge first and last segments if path was split arbitrarily at a corner
     first_last_angle_tolerance: 10  # Angle tolerance in degrees for merging first/last lines

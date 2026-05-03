@@ -79,9 +79,12 @@ class MeshLoader:
         if len(mesh.vertices) == 0:
             raise ValueError(f'Loaded mesh has no vertices: {resolved_path}')
 
-        logger.debug(f'Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces')
+        logger.info(f'Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces')
         self.manifold = self._build_manifold(mesh)
-        logger.info(f'Mesh loaded and converted to manifold (refined {refine_iterations} iterations)')
+        if refine_iterations > 0:
+            logger.info(f'Mesh loaded and converted to manifold (refined {refine_iterations} iterations)')
+        else:
+            logger.info('Mesh loaded and converted to manifold (no refinement)')
 
     def _resolve_package_path(self, path_str: str | Path) -> Path:
         """Resolve package:// URI to absolute filesystem path."""
@@ -101,7 +104,6 @@ class MeshLoader:
             try:
                 package_dir = get_package_share_directory(package_name)
             except Exception as e:
-                logger.error(f"Package '{package_name}' not found in ament index")
                 raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
 
             resolved = Path(package_dir) / relative_path
@@ -109,7 +111,6 @@ class MeshLoader:
             resolved = Path(path_str)
 
         if not resolved.exists():
-            logger.error(f'File does not exist: {resolved}')
             raise FileNotFoundError(f'File not found: {resolved}')
 
         return resolved
@@ -124,7 +125,6 @@ class MeshLoader:
                 )
             )
         except Exception as e:
-            logger.error(f'Manifold conversion failed: {e}')
             raise ValueError(f'Failed to convert mesh to manifold: {e}')
 
         # Subdivide to increase vertex density for smoother seam extraction

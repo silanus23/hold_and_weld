@@ -48,7 +48,11 @@ class LineSegment:
         return float(np.linalg.norm(self.end - self.start))
 
     def tangent(self) -> NDArray:
-        """Return normalized tangent vector along segment."""
+        """Return normalized tangent vector along segment.
+
+        Raises:
+            ValueError: If segment has zero length.
+        """
         length = self.length()
         if length < 1e-9:
             raise ValueError('Segment is degenerate (zero length)')
@@ -59,6 +63,8 @@ class LineSegment:
         return (self.start + self.end) / 2.0
 
     def point_at(self, t: float) -> NDArray:
-        """Return point at parameter t (0=start, 1=end)."""
-        # Linear interpolation: p(t) = start + t * (end - start)
+        """Return point at parameter t (0=start, 1=end).
+
+        Note: t is not clamped — values outside [0, 1] extrapolate beyond the segment.
+        """
         return self.start + t * (self.end - self.start)

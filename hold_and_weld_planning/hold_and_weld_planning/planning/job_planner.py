@@ -116,6 +116,9 @@ class JobPlanner:
         if main_ext in mesh_extensions and secondary_ext in mesh_extensions:
             return 'mesh'
 
+        logger.warning(
+            f"Unknown file extensions '{main_ext}'/'{secondary_ext}', defaulting to mesh mode"
+        )
         return 'mesh'
 
     def plan_job(self) -> list:
@@ -151,23 +154,7 @@ class JobPlanner:
             return []
 
         logger.info(f'Detected {len(seams)} seam(s)')
-
-        logger.info('Generating weld poses...')
-        weld_planner = WeldPlanner(self.parameters)
-
-        for idx, seam in enumerate(seams):
-            try:
-                weld_planner.generate_seam(seam)
-                num_poses = len(seam.poses) if seam.poses else 0
-                logger.debug(f'Seam {idx}: {num_poses} pose(s) generated')
-            except Exception as e:
-                logger.warning(f'Failed to generate poses for seam {idx}: {e}')
-                continue
-
-        successful_seams = [s for s in seams if s.is_generated]
-        logger.info(f'Successfully planned {len(successful_seams)}/{len(seams)} seam(s)')
-
-        return successful_seams
+        return self._generate_poses(seams)
 
     def _plan_job_occt(self) -> list:
         """Execute OCCT-based planning pipeline using pythonocc-core."""
@@ -183,7 +170,10 @@ class JobPlanner:
             return []
 
         logger.info(f'Detected {len(seams)} seam(s)')
+        return self._generate_poses(seams)
 
+    def _generate_poses(self, seams: list) -> list:
+        """Run WeldPlanner over extracted seams and return successfully planned ones."""
         logger.info('Generating weld poses...')
         weld_planner = WeldPlanner(self.parameters)
 
@@ -198,7 +188,6 @@ class JobPlanner:
 
         successful_seams = [s for s in seams if s.is_generated]
         logger.info(f'Successfully planned {len(successful_seams)}/{len(seams)} seam(s)')
-
         return successful_seams
 
     def _generate_shells(self) -> tuple:
@@ -230,6 +219,11 @@ class JobPlanner:
         shape_secondary = self._load_input_occt(
             self.secondary_path, self.secondary_world_transform
         )
+
+        if shape_main.IsNull():
+            raise RuntimeError('Main OCCT shape is null after loading')
+        if shape_secondary.IsNull():
+            raise RuntimeError('Secondary OCCT shape is null after loading')
 
         return shape_main, shape_secondary
 

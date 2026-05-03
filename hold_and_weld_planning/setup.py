@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from glob import glob
-
 from setuptools import find_packages, setup
 
 package_name = 'hold_and_weld_planning'
@@ -26,7 +24,6 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/generated', glob('generated/*.json')),
         ('share/' + package_name + '/config/examples', []),
     ],
     install_requires=['setuptools', 'numpy', 'scipy', 'pyyaml'],

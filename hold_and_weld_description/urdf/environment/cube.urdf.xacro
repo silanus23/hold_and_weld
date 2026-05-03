@@ -7,8 +7,8 @@
       <geometry>
         <box size="${cube_size} ${cube_size} ${cube_size}"/>
       </geometry>
-      <material name="red">
-        <color rgba="1 0 0 1"/>
+      <material name="blue">
+        <color rgba="0 0.45 0.9 1"/>
       </material>
     </visual>
     <collision>
@@ -27,8 +27,8 @@
   <gazebo reference="child_link">
     <visual>
       <material>
-        <ambient>1 0 0 1</ambient>
-        <diffuse>1 0 0 1</diffuse>
+        <ambient>0 0.45 0.9 1</ambient>
+        <diffuse>0 0.45 0.9 1</diffuse>
         <specular>0.5 0.5 0.5 1</specular>
       </material>
     </visual>

@@ -46,7 +46,6 @@ class ArcSegment:
         self.points = np.array(points, dtype=float)
         self.center = np.array(center, dtype=float)
 
-        # Validate array dimensions and shape
         if self.points.ndim != 2 or self.points.shape[1] != 3:
             raise ValueError('Points must be (N, 3) array')
         if len(self.points) < 2:
@@ -115,7 +114,6 @@ class ArcSegment:
                 f'Index {index} out of bounds for {len(self.points)} points'
             )
 
-        # Use finite differences: forward at start, backward at end, central elsewhere
         if index == 0:
             tangent = self.points[1] - self.points[0]
         elif index == len(self.points) - 1:
@@ -124,7 +122,7 @@ class ArcSegment:
             tangent = self.points[index + 1] - self.points[index - 1]
 
         norm = np.linalg.norm(tangent)
-        if norm < 1e-10:  # Reject degenerate tangent (coincident points)
+        if norm < 1e-10:
             raise ValueError(f'Cannot compute tangent at index {index}')
 
         return tangent / norm
@@ -136,18 +134,16 @@ class ArcSegment:
 
     def point_at(self, t: float) -> NDArray:
         """Return point at parameter t (0=start, 1=end)."""
-        # Clamp parameter to valid range
         if t <= 0:
             return self.points[0]
         if t >= 1:
             return self.points[-1]
 
-        # Linear interpolation between discretized points
         float_index = t * (len(self.points) - 1)
         lower_index = int(np.floor(float_index))
         upper_index = min(lower_index + 1, len(self.points) - 1)
 
-        alpha = float_index - lower_index  # Fractional part for blending
+        alpha = float_index - lower_index
         return (1 - alpha) * self.points[lower_index] + alpha * self.points[upper_index]
 
     def tangent(self) -> NDArray:

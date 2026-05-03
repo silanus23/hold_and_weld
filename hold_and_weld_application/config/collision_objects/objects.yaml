@@ -1,9 +1,10 @@
+# ── Final Boss: Cylinder-on-Workpiece ─────────────────────────────────────────
 /**:
   ros__parameters:
     base_link:
       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
       id: 'base_link'
-      spawn_name: 'base_link'
+      spawn_name: 'workpiece_cylinder'
       pose:
         x: 1.2
         y: -0.5
@@ -15,17 +16,100 @@
         w: 1.0
 
     child_link:
-      urdf_path: 'urdf/environment/prism.urdf.xacro'
+      urdf_path: 'urdf/environment/cylinder.urdf.xacro'
       id: 'child_link'
-      spawn_name: 'child_link'
+      spawn_name: 'cylinder_final_boss'
       pose:
-        x: 1.2
-        y: 0.0
+        x: 1.6
+        y: -0.5
         z: 0.125
-      orientation:
-        x: 0.0
-        y: 0.0
-        z: 0.0
-        w: 1.0
+      end_pose:
+        position:
+          x: 1.6
+          y: -0.5
+          z: 0.925
+        orientation:
+          x: 0.0
+          y: 0.0
+          z: 0.0
+          w: 1.0
 
     frame_id: 'world'
+
+# ── T-joint cube straight ──────────────────────────────────────────────────────
+# /**:
+#   ros__parameters:
+#     base_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'base_link'
+#       spawn_name: 'workpiece_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.65
+#       orientation:
+#         x: 0.0
+#         y: 0.0
+#         z: 0.0
+#         w: 1.0
+#
+#     child_link:
+#       urdf_path: 'urdf/environment/cube.urdf.xacro'
+#       id: 'child_link'
+#       spawn_name: 'cube_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.125
+#       end_pose:
+#         position:
+#           x: 1.2
+#           y: -0.5
+#           z: 0.925
+#         orientation:
+#           x: 0.0
+#           y: 0.0
+#           z: 0.0
+#           w: 1.0
+#
+#     frame_id: 'world'
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
+# /**:
+#   ros__parameters:
+#     base_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'base_link'
+#       spawn_name: 'workpiece_tjoint_45deg'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.65
+#       orientation:
+#         x: 0.0
+#         y: 0.3826834
+#         z: 0.0
+#         w: 0.9238795
+#
+#     child_link:
+#       urdf_path: 'urdf/environment/cube.urdf.xacro'
+#       id: 'child_link'
+#       spawn_name: 'cube_tjoint_45deg'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.125
+#       end_pose:
+#         position:
+#           x: 1.394
+#           y: -0.5
+#           z: 0.844
+#         orientation:
+#           x: 0.0
+#           y: 0.3826834
+#           z: 0.0
+#           w: 0.9238795
+#
+#     frame_id: 'world'
+# ──────────────────────────────────────────────────────────────────────────────

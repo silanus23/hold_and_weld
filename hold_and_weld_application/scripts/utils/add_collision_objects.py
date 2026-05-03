@@ -22,11 +22,11 @@ import xml.etree.ElementTree as ET
 from ament_index_python.packages import get_package_share_directory
 
 from geometry_msgs.msg import Pose
-from moveit_msgs.msg import CollisionObject
+from moveit_msgs.msg import CollisionObject, ObjectColor, PlanningScene
 import rclpy
 from rclpy.node import Node
 from shape_msgs.msg import SolidPrimitive
-from std_msgs.msg import Header
+from std_msgs.msg import ColorRGBA, Header
 import yaml
 
 
@@ -50,6 +50,9 @@ class AddCollisionObjects(Node):
         self.collision_pub = self.create_publisher(
             CollisionObject, '/collision_object', 10
         )
+        self.scene_pub = self.create_publisher(
+            PlanningScene, '/planning_scene', 10
+        )
 
         # Wait for subscribers
         self.get_logger().info('Waiting for collision_object subscribers')
@@ -72,6 +75,16 @@ class AddCollisionObjects(Node):
             base_link_config,
             frame_id,
             desc_pkg
+        )
+
+        # Set colors via PlanningScene
+        self.set_object_color(
+            child_link_config.get('id', 'child_link'),
+            ColorRGBA(r=0.0, g=0.45, b=0.9, a=1.0)
+        )
+        self.set_object_color(
+            base_link_config.get('id', 'base_link'),
+            ColorRGBA(r=0.6, g=0.6, b=0.6, a=1.0)
         )
 
     def add_object_from_urdf(self, urdf_path, object_id, object_config, frame_id, desc_pkg):
@@ -154,6 +167,20 @@ class AddCollisionObjects(Node):
         self.collision_pub.publish(collision_obj)
         rclpy.spin_once(self, timeout_sec=0.5)
         self.get_logger().info(f'{object_id} added to planning scene successfully!')
+
+    def set_object_color(self, object_id: str, color: ColorRGBA):
+        """Set the display color of a collision object in the planning scene."""
+        scene = PlanningScene()
+        scene.is_diff = True
+        obj_color = ObjectColor()
+        obj_color.id = object_id
+        obj_color.color = color
+        scene.object_colors.append(obj_color)
+        self.scene_pub.publish(scene)
+        self.get_logger().info(
+            f'Set color for {object_id}: '
+            f'rgba({color.r:.2f}, {color.g:.2f}, {color.b:.2f}, {color.a:.2f})'
+        )
 
 
 def main(args=None):

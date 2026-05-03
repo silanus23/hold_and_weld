@@ -18,71 +18,13 @@ from datetime import datetime
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import yaml
 
 from ..core.seam import Seam
 
 logger = logging.getLogger(__name__)
-
-
-def load_weld_job(
-    yaml_path: str | Path,
-) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
-    """Load weld job configuration from YAML file.
-
-    Args:
-        yaml_path: Path to YAML configuration file
-
-    Returns:
-        Tuple of (seams, parameters, surface_info)
-
-    Raises:
-        FileNotFoundError: If YAML file not found
-        ValueError: If YAML structure invalid
-    """
-    yaml_path = Path(yaml_path)
-
-    if not yaml_path.exists():
-        raise FileNotFoundError(f'Config file not found: {yaml_path}')
-
-    logger.info(f'Loading weld job config from: {yaml_path}')
-    
-    with open(yaml_path, 'r') as f:
-        config = yaml.safe_load(f)
-
-    required_keys = ['seams', 'parameters', 'surface']
-    for key in required_keys:
-        if key not in config:
-            raise ValueError(f"Missing required key '{key}' in {yaml_path}")
-
-    required_params = [
-        'joint_type',
-        'work_angle_deg',
-        'travel_angle_deg',
-        'gap_mm',
-        'num_points',
-    ]
-    for param in required_params:
-        if param not in config['parameters']:
-            raise ValueError(f"Missing required parameter '{param}' in {yaml_path}")
-
-    if 'center' not in config['surface'] or 'normal' not in config['surface']:
-        raise ValueError(f"Surface must have 'center' and 'normal' keys in {yaml_path}")
-
-    if not config['seams']:
-        raise ValueError(f'No seams defined in {yaml_path}')
-
-    seams = []
-    for i, seam_dict in enumerate(config['seams']):
-        if 'start' not in seam_dict or 'end' not in seam_dict:
-            raise ValueError(f"Seam {i} missing 'start' or 'end' in {yaml_path}")
-
-        seams.append(Seam(seam_dict))
-
-    logger.info(f'Loaded {len(seams)} seam(s) from config')
-    return seams, config['parameters'], config['surface']
 
 
 def load_urdf_config(
@@ -106,7 +48,7 @@ def load_urdf_config(
         raise FileNotFoundError(f'Config file not found: {yaml_path}')
 
     logger.info(f'Loading URDF-based config from: {yaml_path}')
-    
+
     with open(yaml_path, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -119,10 +61,15 @@ def load_urdf_config(
     ):
         raise ValueError(f"Config must have both 'main_part' and 'secondary_part' in {yaml_path}")
 
+    if 'main_path' not in config['workpiece']['main_part']:
+        raise ValueError(f"Missing 'main_path' under workpiece.main_part in {yaml_path}")
+
+    if 'secondary_path' not in config['workpiece']['secondary_part']:
+        raise ValueError(f"Missing 'secondary_path' under workpiece.secondary_part in {yaml_path}")
+
     if 'parameters' not in config:
         raise ValueError(f"Config missing 'parameters' section in {yaml_path}")
 
-    # Check if auto-detect is enabled
     auto_detect = config['workpiece'].get('auto_detect_seams', False)
 
     # Only require seams if auto-detect is disabled
@@ -135,7 +82,7 @@ def load_urdf_config(
             if 'start' not in seam_dict or 'end' not in seam_dict:
                 raise ValueError(f"Each seam must have 'start' and 'end' in {yaml_path}")
             seams.append(Seam(seam_dict))
-        
+
         logger.info(f'Loaded {len(seams)} seam(s) from config')
     else:
         logger.info('Auto-detect mode enabled, seams will be extracted from geometry')
@@ -159,16 +106,16 @@ def export_to_json(
         RuntimeError: If any seam not generated yet
     """
     output_path = Path(output_path)
-    
+
     for i, seam in enumerate(seams):
         if not seam.is_generated:
             raise RuntimeError(f'Seam {i} has not been generated yet - cannot export')
-    
+
     logger.debug(f'Creating output directory: {output_path.parent}')
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     total_poses = sum(len(seam.poses) for seam in seams)
-    
+
     data = {
         'metadata': {
             'generated_at': datetime.now().isoformat(),
@@ -185,10 +132,10 @@ def export_to_json(
         data['seams'][f'seam_{i}'] = seam.to_dict()
 
     logger.info(f'Exporting {len(seams)} seam(s) with {total_poses} total poses to: {output_path}')
-    
+
     with open(output_path, 'w') as f:
         json.dump(data, f, indent=2)
-    
+
     logger.info(f'Successfully exported to {output_path}')
 
 
@@ -230,6 +177,6 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
 
     output_filename = f'{job_name}_{timestamp}.json'
     output_path = output_dir / output_filename
-    
+
     logger.info(f'Generated output path: {output_path}')
     return output_path

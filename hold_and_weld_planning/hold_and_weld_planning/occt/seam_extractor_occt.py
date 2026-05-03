@@ -75,9 +75,8 @@ class SeamExtractorOCCT:
             shape_1: First OCCT shape (already transformed to world frame)
             shape_2: Second OCCT shape (already transformed to world frame)
             params: Dictionary with keys:
-                - num_smooth_points: Points per seam curve (default 100)
-                - tolerance: Distance tolerance for contact detection (default 1e-3)
-                - up_vector: Up direction for main/secondary determination (default [0,0,1])
+                    - num_smooth_points: Points per seam curve (default 100)
+                    - tolerance: Distance tolerance for contact detection (default 1e-3)
         """
         if shape_1.IsNull():
             raise ValueError('shape_1 is null')
@@ -89,8 +88,10 @@ class SeamExtractorOCCT:
 
         self.num_smooth_points = params.get('num_smooth_points', 100)
         self.tolerance = params.get('tolerance', 1e-3)
-        self.up_vector = np.array(params.get('up_vector', [0, 0, 1]))
-        self.up_vector = self.up_vector / np.linalg.norm(self.up_vector)
+
+        # Centroids for geometry-based main/secondary determination
+        self.centroid_1 = self._compute_shape_centroid(shape_1)
+        self.centroid_2 = self._compute_shape_centroid(shape_2)
 
     def extract_seams(self) -> List[Seam]:
         """Extract all weld seams from the two shapes.
@@ -184,7 +185,7 @@ class SeamExtractorOCCT:
             normals_B = self._extract_normals_from_surface(points, face_B)
 
         normals_main, normals_secondary = self._determine_main_secondary_normals(
-            normals_A, normals_B
+            normals_A, normals_B, points
         )
 
         is_edge_joint = (boundary_A is not None) and (boundary_B is not None)
@@ -241,6 +242,8 @@ class SeamExtractorOCCT:
 
             try:
                 common = BRepAlgoAPI_Common(face_A, face_B)
+                # Fuzzy value allows geometric tolerance in the boolean — faces touching
+                # within tolerance are treated as coincident.
                 common.SetFuzzyValue(self.tolerance)
                 common.Build()
 
@@ -520,7 +523,7 @@ class SeamExtractorOCCT:
                     logger.debug(f'Failed to get normal from surface, using previous normal as fallback: {e}')
                 else:
                     normals.append(np.array([0, 0, 1]))
-                    logger.debug(f'Failed to get normal from surface, using default fallback [0,0,1]: {e}')
+                    logger.warning(f'Failed to get normal for first point on surface, using hardcoded fallback [0,0,1]: {e}')
 
         normals = np.array(normals)
         normals = self._make_normals_consistent(normals)
@@ -549,11 +552,25 @@ class SeamExtractorOCCT:
 
         return np.array(fixed_normals)
 
+    def _compute_shape_centroid(self, shape: TopoDS_Shape) -> np.ndarray:
+        """Compute the volumetric centroid of an OCCT shape."""
+        props = GProp_GProps()
+        brepgprop.VolumeProperties(shape, props)
+        cog = props.CentreOfMass()
+        return np.array([cog.X(), cog.Y(), cog.Z()])
+
     def _determine_main_secondary_normals(self,
                                           normals_A: np.ndarray,
-                                          normals_B: np.ndarray
+                                          normals_B: np.ndarray,
+                                          seam_points: np.ndarray
                                           ) -> Tuple[np.ndarray, np.ndarray]:
-        """Determine which normals are main vs secondary using up vector alignment."""
+        """Determine which normals are main vs secondary based on part centroids.
+
+        The main surface is the base plate — the one whose normals point *away* from its
+        own part centroid relative to the seam. Computed by projecting the centroid-to-seam
+        vector onto each part's average normal: the higher dot product means the seam is
+        on the outward-facing side of that part → that part is the base (main).
+        """
         avg_normal_A = np.mean(normals_A, axis=0)
         avg_normal_B = np.mean(normals_B, axis=0)
 
@@ -567,8 +584,27 @@ class SeamExtractorOCCT:
         avg_normal_A = avg_normal_A / norm_A
         avg_normal_B = avg_normal_B / norm_B
 
-        dot_A = np.dot(avg_normal_A, self.up_vector)
-        dot_B = np.dot(avg_normal_B, self.up_vector)
+        # Vector from each part centroid to the seam centroid
+        seam_centroid = np.mean(seam_points, axis=0)
+        vec_A = seam_centroid - self.centroid_1
+        vec_B = seam_centroid - self.centroid_2
+
+        norm_vA = np.linalg.norm(vec_A)
+        norm_vB = np.linalg.norm(vec_B)
+
+        if norm_vA < 1e-10 or norm_vB < 1e-10:
+            logger.warning('Degenerate centroid-to-seam vector, defaulting to A as main')
+            return normals_A, normals_B
+
+        vec_A = vec_A / norm_vA
+        vec_B = vec_B / norm_vB
+
+        # The part whose average normal aligns MORE with its centroid-to-seam vector
+        # has the seam on its outward face → that is the base plate (main)
+        dot_A = np.dot(avg_normal_A, vec_A)
+        dot_B = np.dot(avg_normal_B, vec_B)
+
+        logger.debug(f'Centroid-based main selection: dot_A={dot_A:.3f}, dot_B={dot_B:.3f}')
 
         if dot_A >= dot_B:
             return normals_A, normals_B
@@ -598,7 +634,7 @@ class SeamExtractorOCCT:
         sas = ShapeAnalysis_Surface(surface)
         uv = sas.ValueOfUV(pnt, self.tolerance)
 
-        # Evaluate surface properties (1 = first derivatives needed for normal)
+        # 1 = compute up to first derivatives (required to evaluate the normal).
         props = GeomLProp_SLProps(surface, uv.X(), uv.Y(), 1, self.tolerance)
 
         if props.IsNormalDefined():
@@ -643,7 +679,7 @@ class SeamExtractorOCCT:
                 'type': 'polyline',
                 'points': points,
                 'curve_type': str(curve_type),
-                'description': 'Complex curve for Pilz waypoint planning'
+                'description': 'Complex curve (polyline) — use smoothed_points for waypoint planning'
             }
 
     def _wrap_in_seams(self,

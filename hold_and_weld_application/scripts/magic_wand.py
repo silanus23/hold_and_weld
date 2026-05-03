@@ -99,15 +99,24 @@ class MagicWand(Node):
                     desc_pkg
                 )
 
+            child_pose = child_link_config.get('pose', {})
             end_pose = child_link_config.get('end_pose', {})
-            if end_pose:
-                self.get_logger().info('Spawning child_link at end_pose')
+            if child_pose:
+                self.get_logger().info('Spawning child_link at initial pose')
                 self.spawn_collision_object(
                     child_link_config.get('urdf_path', ''),
                     child_link_config.get('id', 'child_link'),
-                    end_pose,
-                    desc_pkg,
-                    is_end_pose=True
+                    child_link_config,
+                    desc_pkg
+                )
+            else:
+                self.get_logger().warn('No initial pose defined for child_link')
+
+            if end_pose:
+                self.get_logger().info('Moving child_link to end_pose')
+                self.move_collision_object(
+                    child_link_config.get('id', 'child_link'),
+                    end_pose
                 )
             else:
                 self.get_logger().warn('No end_pose defined for child_link')
@@ -116,15 +125,11 @@ class MagicWand(Node):
         self.load_and_visualize_latest_json()
 
     def spawn_collision_object(
-        self, urdf_path, object_id, object_config, desc_pkg, is_end_pose=False
+        self, urdf_path, object_id, object_config, desc_pkg
     ):
-        """Spawn collision object at the specified pose."""
-        # Extract pose and orientation based on config structure
-        if is_end_pose:
-            pose_config = object_config
-        else:
-            pose_config = object_config.get('pose', {})
-            orientation_config = object_config.get('orientation', {})
+        """Spawn collision object at its initial pose using ADD operation."""
+        pose_config = object_config.get('pose', {})
+        orientation_config = object_config.get('orientation', {})
         full_urdf_path = os.path.join(desc_pkg, urdf_path)
 
         # Process xacro to get URDF
@@ -185,30 +190,19 @@ class MagicWand(Node):
                 collision_obj.primitives = [primitive]
 
         pose = Pose()
-        if is_end_pose:
-            position = object_config.get('position', {})
-            orientation = object_config.get('orientation', {})
-            pose.position.x = position.get('x', 0.0)
-            pose.position.y = position.get('y', 0.0)
-            pose.position.z = position.get('z', 0.0)
-            pose.orientation.x = orientation.get('x', 0.0)
-            pose.orientation.y = orientation.get('y', 0.0)
-            pose.orientation.z = orientation.get('z', 0.0)
-            pose.orientation.w = orientation.get('w', 1.0)
-        else:
-            pose.position.x = pose_config.get('x', 0.0)
-            pose.position.y = pose_config.get('y', 0.0)
-            pose.position.z = pose_config.get('z', 0.0)
-            pose.orientation.x = orientation_config.get('x', 0.0)
-            pose.orientation.y = orientation_config.get('y', 0.0)
-            pose.orientation.z = orientation_config.get('z', 0.0)
-            pose.orientation.w = orientation_config.get('w', 1.0)
+        pose.position.x = pose_config.get('x', 0.0)
+        pose.position.y = pose_config.get('y', 0.0)
+        pose.position.z = pose_config.get('z', 0.0)
+        pose.orientation.x = orientation_config.get('x', 0.0)
+        pose.orientation.y = orientation_config.get('y', 0.0)
+        pose.orientation.z = orientation_config.get('z', 0.0)
+        pose.orientation.w = orientation_config.get('w', 1.0)
 
         collision_obj.primitive_poses = [pose]
         collision_obj.operation = CollisionObject.ADD
 
         self.get_logger().info(
-            f'Spawning {object_id} at end_pose: '
+            f'Spawning {object_id} at initial pose: '
             f'position({pose.position.x:.3f}, '
             f'{pose.position.y:.3f}, {pose.position.z:.3f}), '
             f'orientation({pose.orientation.x:.3f}, '
@@ -219,12 +213,49 @@ class MagicWand(Node):
         if self.collision_pub.get_subscription_count() > 0:
             self.collision_pub.publish(collision_obj)
             rclpy.spin_once(self, timeout_sec=0.5)
-            self.get_logger().info(
-                f'{object_id} spawned at end_pose successfully!'
-            )
+            self.get_logger().info(f'{object_id} spawned successfully!')
         else:
             self.get_logger().warn(
                 f'{object_id} not spawned - no MoveIt subscribers available'
+            )
+
+    def move_collision_object(self, object_id, end_pose_config):
+        """Move an existing collision object to end_pose using MOVE operation."""
+        position = end_pose_config.get('position', {})
+        orientation = end_pose_config.get('orientation', {})
+
+        pose = Pose()
+        pose.position.x = position.get('x', 0.0)
+        pose.position.y = position.get('y', 0.0)
+        pose.position.z = position.get('z', 0.0)
+        pose.orientation.x = orientation.get('x', 0.0)
+        pose.orientation.y = orientation.get('y', 0.0)
+        pose.orientation.z = orientation.get('z', 0.0)
+        pose.orientation.w = orientation.get('w', 1.0)
+
+        collision_obj = CollisionObject()
+        collision_obj.header = Header()
+        collision_obj.header.frame_id = self.frame_id
+        collision_obj.id = object_id
+        collision_obj.primitive_poses = [pose]
+        collision_obj.operation = CollisionObject.MOVE
+
+        self.get_logger().info(
+            f'Moving {object_id} to end_pose: '
+            f'position({pose.position.x:.3f}, '
+            f'{pose.position.y:.3f}, {pose.position.z:.3f}), '
+            f'orientation({pose.orientation.x:.3f}, '
+            f'{pose.orientation.y:.3f}, {pose.orientation.z:.3f}, '
+            f'{pose.orientation.w:.3f})'
+        )
+
+        if self.collision_pub.get_subscription_count() > 0:
+            self.collision_pub.publish(collision_obj)
+            rclpy.spin_once(self, timeout_sec=0.5)
+            self.get_logger().info(f'{object_id} moved to end_pose successfully!')
+        else:
+            self.get_logger().warn(
+                f'{object_id} not moved - no MoveIt subscribers available'
             )
 
     def load_and_visualize_latest_json(self):

@@ -33,7 +33,6 @@ from .utils import (
     auto_generate_output_path,
     export_to_json,
     load_urdf_config,
-    load_weld_job,
 )
 
 __version__ = '0.2.0'
@@ -49,7 +48,6 @@ __all__ = [
     'PathCreator',
     'SeamExtractor',
     'JobPlanner',
-    'load_weld_job',
     'load_urdf_config',
     'export_to_json',
     'auto_generate_output_path',

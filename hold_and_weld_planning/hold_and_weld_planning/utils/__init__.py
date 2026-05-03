@@ -18,11 +18,9 @@ from .path_utils import (
     auto_generate_output_path,
     export_to_json,
     load_urdf_config,
-    load_weld_job,
 )
 
 __all__ = [
-    'load_weld_job',
     'export_to_json',
     'auto_generate_output_path',
     'load_urdf_config',

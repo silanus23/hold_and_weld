@@ -190,10 +190,7 @@ def main():
         logger.error(f'Invalid configuration - {e}')
         return 1
     except Exception as e:
-        logger.error(f'{e}')
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
+        logger.error(f'Unexpected error: {e}', exc_info=True)
         return 1
 
 

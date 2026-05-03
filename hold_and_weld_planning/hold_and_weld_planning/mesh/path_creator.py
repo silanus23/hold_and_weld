@@ -63,8 +63,6 @@ class PathCreator:
         points: np.ndarray,
         is_closed: bool = False,
         num_points: int = 100,
-        line_error_threshold: float = 0.0001,  # Legacy parameter, unused
-        circle_error_threshold: float = 0.0001,  # Legacy parameter, unused
         spline_smoothing_factor: float = 0.0,
         config: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
@@ -74,7 +72,7 @@ class PathCreator:
             points: Raw path points (N, 3)
             is_closed: Whether path forms closed loop
             num_points: Points per smoothed segment
-            spline_smoothing_factor: B-spline smoothing factor (0 = interpolation)
+            spline_smoothing_factor: B-spline smoothing factor (0 = interpolation, higher = smoother)
             config: Optional dict with tuning parameters (see class docstring for available keys)
 
         Returns:
@@ -108,7 +106,7 @@ class PathCreator:
         first_last_radius_tolerance = cfg.get('first_last_radius_tolerance', 0.05)
         first_last_gap_threshold = cfg.get('first_last_gap_threshold', 0.01)
 
-        logger.info(f'Processing path with {len(points)} points (closed={is_closed})')
+        logger.debug(f'Processing path with {len(points)} points (closed={is_closed})')
 
         points_cleaned = self._remove_outliers(points, std_threshold=std_threshold)
         logger.debug(f'After outlier removal: {len(points_cleaned)} points')
@@ -215,7 +213,7 @@ class PathCreator:
             max_iterations=line_absorption_max_iterations,
         )
 
-        logger.info(f'Path processing complete: {len(result)} final segment(s)')
+        logger.debug(f'Path processing complete: {len(result)} final segment(s)')
         return result
 
     def _should_merge_first_last(
@@ -231,7 +229,10 @@ class PathCreator:
         if len(sub_paths) <= 1:
             return False
 
-        # TODO(@silanus23): Test this check more
+        # TODO(@silanus23): Test this
+        # Heuristic check: merges first/last segments for closed paths that were
+        # split arbitrarily at the seam. Relies on geometry type, orientation, and
+        # endpoint proximity. Treat results with caution on atypical geometries.
         if first_geom['type'] != last_geom['type']:
             return False
 
@@ -296,7 +297,7 @@ class PathCreator:
             tolerance=corner_tolerance,
         )
 
-        logger.info(f'Detected {len(corner_indices)} corner(s) in path')
+        logger.debug(f'Detected {len(corner_indices)} corner(s) in path')
 
         if not corner_indices:
             return [points]
@@ -359,7 +360,7 @@ class PathCreator:
             if angle_deg > min_angle:
                 corners.append(i)
 
-        logger.debug(f'Angle-based detection found {len(corners)} candidate(s) before filtering')
+        logger.info(f'Angle-based detection found {len(corners)} candidate(s) before filtering')
         return self._filter_to_local_maxima(corners, points, window=filter_window)
 
     def _detect_corners_by_curvature(
@@ -733,16 +734,18 @@ class PathCreator:
         std_dist = np.std(distances)
 
         if std_dist < 1e-10:
-            logger.info('Outlier removal skipped (no significant point spacing variation)')
+            logger.debug('Outlier removal skipped (no significant point spacing variation)')
             return points
 
         outlier_mask = distances > (mean_dist + std_threshold * std_dist)
         keep_mask = np.ones(len(points), dtype=bool)
+        # distances has N-1 entries (np.diff), so [:-1] maps each distance back to its
+        # source point. ~ inverts the boolean mask: True = outlier becomes False = remove.
         keep_mask[:-1] = ~outlier_mask
 
         num_removed = np.sum(~keep_mask)
         if num_removed > 0:
-            logger.info(f'Removed {num_removed} outlier point(s)')
+            logger.debug(f'Removed {num_removed} outlier point(s)')
 
         return points[keep_mask]
 
@@ -851,13 +854,16 @@ class PathCreator:
         centroid = np.mean(points, axis=0)
         centered = points - centroid
 
+        # Project to 2D via PCA — arc points are planar, PCA finds that plane.
         pca = PCA(n_components=2)
         points_2d = pca.fit_transform(centered)
 
         center_2d_guess = np.mean(points_2d, axis=0)
         radius_guess = np.mean(np.linalg.norm(points_2d - center_2d_guess, axis=1))
 
-        # Nonlinear least squares: minimize deviation from constant radius
+        # Nonlinear least squares: minimize deviation from a constant radius.
+        # residuals() is a closure over points_2d — scipy calls it repeatedly,
+        # adjusting [cx, cy, r] until sum(residuals**2) is minimized.
         def residuals(params):
             cx, cy, r = params
             distances = np.sqrt(
@@ -873,6 +879,7 @@ class PathCreator:
             error = np.sum(result.fun**2)
 
             center_2d = np.array([cx_2d, cy_2d])
+            # Map 2D fitted center back to 3D: undo PCA projection then undo centring.
             center_3d = pca.inverse_transform(center_2d.reshape(1, -1))[0] + centroid
 
             return center_3d, abs(radius), error

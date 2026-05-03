@@ -69,7 +69,6 @@ class SeamExtractor:
                 - edge_detection_threshold: Edge score threshold (default 0.5)
                 - gaussian_sigma_ratio: Gaussian weight width (default 0.3)
                 - normal_outlier_threshold_std: Outlier rejection threshold (default 2.0)
-                - up_vector: Up direction for edge-to-edge main selection (default [0, 0, 1])
                 - PathCreator config parameters (see PathCreator.process_path docstring for full list):
                     - outlier_std_threshold, min_sub_path_length, min_points_for_corner_detection,
                     - corner_min_angle, corner_angle_window, corner_curvature_window, etc.
@@ -90,9 +89,9 @@ class SeamExtractor:
         self.gaussian_sigma_ratio = params.get('gaussian_sigma_ratio', 0.3)
         self.normal_outlier_threshold_std = params.get('normal_outlier_threshold_std', 2.0)
 
-        # Up vector for edge-to-edge main/secondary determination
-        self.up_vector = np.array(params.get('up_vector', [0, 0, 1]))
-        self.up_vector = self.up_vector / np.linalg.norm(self.up_vector)
+        # Centroids for geometry-based main/secondary determination
+        self.centroid_1 = np.array(mesh_1.centroid)
+        self.centroid_2 = np.array(mesh_2.centroid)
 
         path_creator_keys = [
             'outlier_std_threshold',
@@ -119,7 +118,6 @@ class SeamExtractor:
         ]
         self.path_creator_config = {k: params[k] for k in path_creator_keys if k in params}
 
-        # Validate meshes
         if not mesh_1.is_watertight:
             raise ValueError('mesh_1 is not watertight')
         if not mesh_2.is_watertight:
@@ -179,7 +177,6 @@ class SeamExtractor:
                     try:
                         points = geometry['points']
 
-                        # Detect contact type for each mesh
                         is_edge_contact_1 = self._is_seam_on_mesh_edge(points, self.mesh_1)
                         is_edge_contact_2 = self._is_seam_on_mesh_edge(points, self.mesh_2)
                         is_edge_joint = is_edge_contact_1 and is_edge_contact_2
@@ -196,7 +193,7 @@ class SeamExtractor:
                         )
 
                         normals_main, normals_secondary = self._determine_main_secondary_normals(
-                            normals_1, normals_2, is_edge_joint,
+                            normals_1, normals_2, points, is_edge_joint,
                             is_edge_contact_1, is_edge_contact_2
                         )
 
@@ -277,7 +274,7 @@ class SeamExtractor:
                 next_key = None
                 next_pt = None
                 for nkey, npt in neighbors:
-                    if nkey != prev_key and nkey not in visited:
+                    if nkey != prev_key and nkey not in visited:  # skip back-edge
                         next_key = nkey
                         next_pt = npt
                         break
@@ -298,8 +295,8 @@ class SeamExtractor:
             if len(path_points) >= self.min_segment_length:
                 paths.append(np.array(path_points))
 
-            logger.debug(f'Chained {len(segments)} segment(s) into {len(paths)} path(s), '
-                         f'{sum(len(p) for p in paths)} total points')
+        logger.debug(f'Chained {len(segments)} segment(s) into {len(paths)} path(s), '
+                     f'{sum(len(p) for p in paths)} total points')
 
         return paths
 
@@ -345,6 +342,8 @@ class SeamExtractor:
 
             nearby_normals = mesh.face_normals[nearby_faces]
             ref_normal = nearby_normals[0]
+            # Project all normals onto a reference to get a scalar distribution.
+            # Bimodal distribution → two distinct normal clusters → edge contact.
             dots = np.einsum('ij,j->i', nearby_normals, ref_normal)
 
             if len(np.unique(dots)) < 2:
@@ -360,7 +359,9 @@ class SeamExtractor:
                     kurtosis = stats.kurtosis(dots)
 
                 # BC = (skewness^2 + 1) / (kurtosis + 3)
-                bimodality_coeff = (skewness**2 + 1) / (kurtosis + 3)
+                # TODO(@silanus23): Replace brute-force vertex search with KDTree built once per mesh
+                denominator = max(kurtosis + 3, 1e-10)
+                bimodality_coeff = (skewness**2 + 1) / denominator
 
                 # Convert to edge score [0, 1]
                 if bimodality_coeff < 0.4:
@@ -372,7 +373,8 @@ class SeamExtractor:
 
                 edge_scores.append(edge_score)
 
-            except Exception:
+            except Exception as e:
+                logger.debug(f'Bimodality computation failed at point, scoring as surface: {e}')
                 edge_scores.append(0.0)
 
         edge_scores = np.array(edge_scores)
@@ -395,6 +397,7 @@ class SeamExtractor:
         sigma = num_points * self.gaussian_sigma_ratio
         indices = np.arange(num_points)
         weights = np.exp(-0.5 * ((indices - center) / sigma) ** 2)
+        # Rescale so weights sum to num_points, keeping weighted stats comparable to unweighted ones.
         weights = weights * (num_points / np.sum(weights))
 
         return weights
@@ -479,7 +482,7 @@ class SeamExtractor:
 
             else:
                 # Surface-to-surface
-                # TODO(@silanus23): Consider vanishing this
+                # TODO(@silanus23): Consider deleting this
                 try:
                     _, _, face_id_1 = trimesh.proximity.closest_point(self.mesh_1, [point])
                     normal_1 = self.mesh_1.face_normals[face_id_1[0]]
@@ -519,6 +522,8 @@ class SeamExtractor:
             closest_face_id = face_id[0]
         except Exception as e:
             logger.warning(f'Failed to get closest point on mesh: {e}, returning face 0 as fallback')
+            # Caller (_get_normals_for_points) has its own except that substitutes [0,0,1]
+            # if the face 0 normal is nonsensical for this point.
             return 0, 0
 
         face_vertices = mesh.faces[closest_face_id]
@@ -577,14 +582,19 @@ class SeamExtractor:
         self,
         normals_1: np.ndarray,
         normals_2: np.ndarray,
+        points: np.ndarray,
         is_edge_joint: bool,
         is_edge_contact_1: bool,
         is_edge_contact_2: bool,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Determine which normals are main vs secondary based on joint type and up vector."""
+        """Determine which normals are main vs secondary based on joint type and part centroids.
+
+        The main surface is the base plate — the one whose normals point *away* from its
+        own part centroid relative to the seam. Computed by projecting the centroid-to-seam
+        vector onto each part's average normal: the higher dot product means the normal
+        aligns with the outward direction → that part is the base (main).
+        """
         if is_edge_joint:
-            # Edge-to-edge: both geometrically equivalent, use up-vector as tie-breaker
-            # to consistently pick which is "main" (whichever is more horizontal/upward-facing)
             avg_normal_1 = np.mean(normals_1, axis=0)
             avg_normal_2 = np.mean(normals_2, axis=0)
 
@@ -598,8 +608,27 @@ class SeamExtractor:
             avg_normal_1 = avg_normal_1 / norm_1
             avg_normal_2 = avg_normal_2 / norm_2
 
-            dot_1 = np.dot(avg_normal_1, self.up_vector)
-            dot_2 = np.dot(avg_normal_2, self.up_vector)
+            # Vector from each part centroid to the seam centroid
+            seam_centroid = np.mean(points, axis=0)
+            vec_1 = seam_centroid - self.centroid_1
+            vec_2 = seam_centroid - self.centroid_2
+
+            norm_v1 = np.linalg.norm(vec_1)
+            norm_v2 = np.linalg.norm(vec_2)
+
+            if norm_v1 < 1e-10 or norm_v2 < 1e-10:
+                logger.warning('Degenerate centroid-to-seam vector, defaulting to mesh_1 as main')
+                return normals_1, normals_2
+
+            vec_1 = vec_1 / norm_v1
+            vec_2 = vec_2 / norm_v2
+
+            # The part whose average normal aligns more with its centroid-to-seam vector
+            # has the seam on its outward face → that is the base plate (main)
+            dot_1 = np.dot(avg_normal_1, vec_1)
+            dot_2 = np.dot(avg_normal_2, vec_2)
+
+            logger.debug(f'Centroid-based main selection: dot_1={dot_1:.3f}, dot_2={dot_2:.3f}')
 
             if dot_1 >= dot_2:
                 return normals_1, normals_2
@@ -649,6 +678,7 @@ class SeamExtractor:
         outlier_mask = deviation > (self.normal_outlier_threshold_std * std_dot)
 
         cleaned_normals = normals.copy()
+        # Replace outliers with average rather than removing — array must stay same length as points.
         cleaned_normals[outlier_mask] = avg_normal
 
         num_outliers = np.sum(outlier_mask)
@@ -680,6 +710,7 @@ class SeamExtractor:
         norm = np.linalg.norm(projected)
 
         if norm < 1e-10:
+            # Normal is parallel to tangent — projection collapses. Return unprojected as fallback.
             return normal
 
         return projected / norm

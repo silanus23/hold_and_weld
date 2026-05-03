@@ -154,7 +154,6 @@ class OCCTGenerator:
                         f'radius={geom.radius}, length={geom.length}'
                     )
 
-                # Cylinder centered along Z-axis
                 ax = gp_Ax2(gp_Pnt(0, 0, -geom.length/2), gp_Dir(0, 0, 1))
                 shape = BRepPrimAPI_MakeCylinder(ax, geom.radius, geom.length).Shape()
 
@@ -179,7 +178,6 @@ class OCCTGenerator:
                     f'Unsupported geometry type: {type(geom).__name__}'
                 )
 
-            # Apply collision transform
             local_T = self._get_collision_transform(collision)
             absolute_T = self.world_transform @ local_T
 
@@ -187,11 +185,10 @@ class OCCTGenerator:
             transformed_shape = BRepBuilderAPI_Transform(shape, trsf).Shape()
             shapes.append(transformed_shape)
 
-        # Fuse all collision shapes in this link
         if len(shapes) == 0:
             logger.warning(f'Link "{link.name}" produced no valid shapes')
             raise ValueError(f'Link "{link.name}" has no valid collision geometry')
-        
+
         if len(shapes) == 1:
             return shapes[0]
 
@@ -200,7 +197,7 @@ class OCCTGenerator:
         for i, shape in enumerate(shapes[1:], start=1):
             fused = BRepAlgoAPI_Fuse(result, shape)
             result = fused.Shape()
-            
+
             if result.IsNull():
                 logger.error(f'Fuse operation failed for link "{link.name}" at shape {i+1}/{len(shapes)}')
                 raise ValueError(f'Failed to fuse shapes for link "{link.name}"')
@@ -227,12 +224,11 @@ class OCCTGenerator:
 
     def _numpy_to_gp_trsf(self, matrix: np.ndarray) -> gp_Trsf:
         """Convert numpy 4x4 homogeneous matrix to OCCT gp_Trsf transformation."""
-        # Validate that rotation part is roughly orthogonal (no shear/scale)
         rot = matrix[:3, :3]
         det = np.linalg.det(rot)
         if not np.isclose(det, 1.0, atol=1e-3):
             logger.warning(f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear')
-        
+
         trsf = gp_Trsf()
 
         trsf.SetValues(

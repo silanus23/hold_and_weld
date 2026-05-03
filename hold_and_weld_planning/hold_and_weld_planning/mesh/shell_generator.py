@@ -71,7 +71,6 @@ class ShellGenerator:
         """
         origin = collision.origin if collision.origin else None
 
-        # Return identity matrix if no origin specified
         if origin is None:
             return [
                 [1.0, 0.0, 0.0, 0.0],
@@ -83,10 +82,8 @@ class ShellGenerator:
         xyz = origin.xyz if origin.xyz else [0, 0, 0]
         rpy = origin.rpy if origin.rpy else [0, 0, 0]
 
-        # Compute rotation matrix from roll-pitch-yaw angles
         rot_matrix = Rotation.from_euler('xyz', rpy).as_matrix()
 
-        # Build 4x4 homogeneous transform from rotation and translation
         r = rot_matrix
         x, y, z = xyz
         return [
@@ -125,14 +122,11 @@ class ShellGenerator:
 
             try:
                 link_manifold = self.create_link_shell(link)
-                # Union operation combines this link's geometry with accumulated shell
                 self.total_manifold += link_manifold
                 processed_count += 1
             except Exception as e:
-                logger.error(f"Failed to create shell for link '{link.name}': {e}")
-                raise RuntimeError(
-                    f"Failed to create shell for link '{link.name}': {e}"
-                )
+                logger.warning(f"Failed to create shell for link '{link.name}': {e}, skipping")
+                continue
 
         logger.info(f'Successfully created shells for {processed_count} link(s)')
         return self.total_manifold
@@ -166,7 +160,6 @@ class ShellGenerator:
                 if isinstance(geom, Box):
                     if len(geom.size) != 3:
                         raise ValueError(f'Box size must be [x, y, z], got {geom.size}')
-                    # Create centered box primitive
                     manifold_obj = manifold3d.Manifold.cube(geom.size, center=True)
                     logger.debug(f'Created box: size={geom.size}')
 
@@ -176,7 +169,6 @@ class ShellGenerator:
                             f'Cylinder dimensions must be positive: '
                             f'radius={geom.radius}, length={geom.length}'
                         )
-                    # Create centered cylinder primitive (32 segments for smoothness)
                     manifold_obj = manifold3d.Manifold.cylinder(
                         geom.length, geom.radius, circular_segments=32, center=True
                     )
@@ -187,17 +179,17 @@ class ShellGenerator:
                         raise ValueError(
                             f'Sphere radius must be positive: {geom.radius}'
                         )
-                    # Create sphere primitive (32 segments for smoothness)
                     manifold_obj = manifold3d.Manifold.sphere(
                         geom.radius, circular_segments=32
                     )
                     logger.debug(f'Created sphere: radius={geom.radius}')
 
                 elif isinstance(geom, Mesh):
-                    logger.warning(f"Mesh geometry in collision element {idx} of link '{link.name}' - not supported")
                     raise ValueError(
                         f'Mesh geometry is not supported in collision '
-                        f"element {idx} of link '{link.name}'"
+                        f"element {idx} of link '{link.name}' — "
+                        f'convert collision geometry to primitives (Box/Cylinder/Sphere) '
+                        f'or use the STL pipeline instead'
                     )
 
                 else:
@@ -206,17 +198,14 @@ class ShellGenerator:
                         f"in collision element {idx} of link '{link.name}'"
                     )
 
-                # Subdivide to increase vertex density for smoother boolean operations
                 if manifold_obj is not None:
                     if self.refine_iterations > 0:
-                        manifold_obj = manifold_obj.refine(33)
+                        manifold_obj = manifold_obj.refine(self.refine_iterations)
 
-                    # Compose local collision transform with link's world transform
                     local_T = np.array(self._get_collision_transform(collision))
                     absolute_T = self.world_transform @ local_T
 
-                    # Apply combined transform (manifold3d uses 3x4 matrix: [R|t])
-                    mat_3x4 = absolute_T[:3, :].tolist()
+                    mat_3x4 = absolute_T[:3, :].tolist()  # manifold3d takes [R|t] not 4x4
                     transformed_obj = manifold_obj.transform(mat_3x4)
 
                     link_combined += transformed_obj

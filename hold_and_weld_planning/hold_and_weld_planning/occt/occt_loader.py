@@ -77,7 +77,6 @@ class OCCTLoader:
             logger.error(f'Failed to load CAD file: {e}')
             raise ValueError(f'Failed to load CAD file: {e}')
 
-        logger.debug('Applying world transform to loaded shape')
         self.shape = self._apply_transform(shape, world_transform)
         logger.info('CAD file loaded and transformed successfully')
 
@@ -134,15 +133,12 @@ class OCCTLoader:
         status = reader.ReadFile(str(file_path))
 
         if status != IFSelect_RetDone:
-            logger.error(f'STEP reader failed for: {file_path}')
             raise RuntimeError(f'Failed to read STEP file: {file_path}')
 
-        logger.debug('Transferring STEP roots')
         reader.TransferRoots()
         shape = reader.OneShape()
 
         if shape.IsNull():
-            logger.error(f'STEP file contains no valid geometry: {file_path}')
             raise RuntimeError(f'STEP file contains no valid shapes: {file_path}')
 
         logger.debug(f'STEP file loaded successfully: {file_path.name}')
@@ -154,15 +150,12 @@ class OCCTLoader:
         status = reader.ReadFile(str(file_path))
 
         if status != IFSelect_RetDone:
-            logger.error(f'IGES reader failed for: {file_path}')
             raise RuntimeError(f'Failed to read IGES file: {file_path}')
 
-        logger.debug('Transferring IGES roots')
         reader.TransferRoots()
         shape = reader.OneShape()
 
         if shape.IsNull():
-            logger.error(f'IGES file contains no valid geometry: {file_path}')
             raise RuntimeError(f'IGES file contains no valid shapes: {file_path}')
 
         logger.debug(f'IGES file loaded successfully: {file_path.name}')
@@ -172,7 +165,6 @@ class OCCTLoader:
         self, shape: TopoDS_Shape, transform: NDArray
     ) -> TopoDS_Shape:
         """Apply 4x4 homogeneous transformation matrix to OCCT shape."""
-        # Validate transform has reasonable determinant
         rot = transform[:3, :3]
         det = np.linalg.det(rot)
         if not np.isclose(det, 1.0, atol=1e-3):
@@ -180,7 +172,6 @@ class OCCTLoader:
         
         trsf = gp_Trsf()
 
-        # Set transformation matrix (row-major)
         trsf.SetValues(
             transform[0, 0], transform[0, 1], transform[0, 2], transform[0, 3],
             transform[1, 0], transform[1, 1], transform[1, 2], transform[1, 3],
