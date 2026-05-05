@@ -49,7 +49,7 @@ class URDFProcessor:
         """
         resolved_path = self._resolve_package_path(urdf_path)
         logger.info(f'Loading URDF from: {resolved_path}')
-        
+
         urdf_string = self._process_xacro(resolved_path)
 
         try:
@@ -86,7 +86,7 @@ class URDFProcessor:
         self.world_xyz = xyz_array
         self.world_rpy = rpy_array
         self.world_transform = self._build_transform_matrix(xyz_array, rpy_array)
-        
+
         logger.debug(f'Set world pose: xyz={xyz_array}, rpy={rpy_array}')
 
     def get_collision_transform(self, collision: Any) -> NDArray:
@@ -132,7 +132,7 @@ class URDFProcessor:
                 package_dir = get_package_share_directory(package_name)
             except ModuleNotFoundError:
                 raise FileNotFoundError(
-                    f"ament_index_python not installed - cannot resolve package://"
+                    'ament_index_python not installed - cannot resolve package://'
                 )
             except Exception as e:
                 raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
@@ -162,7 +162,7 @@ class URDFProcessor:
             return doc.toxml()
         except ModuleNotFoundError:
             raise ValueError(
-                f"xacro module not installed - cannot process xacro files"
+                'xacro module not installed - cannot process xacro files'
             )
         except Exception as e:
             logger.error(f'Xacro processing failed: {e}')

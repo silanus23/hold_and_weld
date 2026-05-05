@@ -29,6 +29,7 @@ import trimesh
 
 logger = logging.getLogger(__name__)
 
+
 class MeshLoader:
     """Load STL mesh files and convert to manifold for weld planning pipeline.
 
@@ -82,7 +83,9 @@ class MeshLoader:
         logger.info(f'Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces')
         self.manifold = self._build_manifold(mesh)
         if refine_iterations > 0:
-            logger.info(f'Mesh loaded and converted to manifold (refined {refine_iterations} iterations)')
+            logger.info(
+                f'Mesh loaded and converted to manifold (refined {refine_iterations} iterations)'
+            )
         else:
             logger.info('Mesh loaded and converted to manifold (no refinement)')
 
@@ -96,7 +99,9 @@ class MeshLoader:
             parts = without_prefix.split('/', 1)
 
             if len(parts) != 2:
-                raise ValueError(f'Invalid package path format (expected package://pkg_name/path): {path_str}')
+                raise ValueError(
+                    f'Invalid package path format (expected package://pkg_name/path): {path_str}'
+                )
 
             package_name = parts[0]
             relative_path = parts[1]

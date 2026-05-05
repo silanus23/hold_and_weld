@@ -66,17 +66,21 @@ class PathCreator:
         spline_smoothing_factor: float = 0.0,
         config: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
-        """Process raw path: detect corners, smooth with splines, classify geometry, merge primitives.
+        """Process raw path: detect corners, smooth with splines, classify geometry, merge.
+
+        Detects corners, smooths with splines, classifies geometry, and merges primitives.
 
         Args:
             points: Raw path points (N, 3)
             is_closed: Whether path forms closed loop
             num_points: Points per smoothed segment
-            spline_smoothing_factor: B-spline smoothing factor (0 = interpolation, higher = smoother)
+            spline_smoothing_factor: B-spline smoothing factor
+                (0 = interpolation, higher = smoother)
             config: Optional dict with tuning parameters (see class docstring for available keys)
 
         Returns:
-            List of geometry dicts with 'type' ('line'/'arc'), 'points', 'center', and fit parameters
+            List of geometry dicts with 'type' ('line'/'arc'), 'points', 'center',
+            and fit parameters
         """
         cfg = config or {}
 
@@ -339,7 +343,9 @@ class PathCreator:
             raise ValueError(f'min_angle must be in (0, 180], got {min_angle}')
 
         if len(points) < 2 * window:
-            logger.debug(f'Path too short ({len(points)} points) for corner detection with window={window}')
+            logger.debug(
+                f'Path too short ({len(points)} points) for corner detection with window={window}'
+            )
             return []
 
         corners = []
@@ -380,7 +386,10 @@ class PathCreator:
             raise ValueError(f'Threshold must be in (0, 1], got {threshold}')
 
         if len(points) < window * 2:
-            logger.debug(f'Path too short ({len(points)} points) for curvature detection with window={window}')
+            logger.debug(
+                f'Path too short ({len(points)} points) for curvature'
+                f' detection with window={window}'
+            )
             return []
 
         curvatures = []
@@ -561,7 +570,10 @@ class PathCreator:
                     'error': error,
                 }
 
-                logger.debug(f'Merged {len(arc_group_geoms)} consecutive arcs into one (radius={radius:.4f}m)')
+                logger.debug(
+                    f'Merged {len(arc_group_geoms)} consecutive arcs'
+                    f' into one (radius={radius:.4f}m)'
+                )
                 merged.append(merged_geom)
                 i = j
             else:
@@ -615,7 +627,9 @@ class PathCreator:
                     'error': error,
                 }
 
-                logger.debug(f'Merged 2 collinear lines (angle diff={angle_deg:.2f}°, error={error:.6f})')
+                logger.debug(
+                    f'Merged 2 collinear lines (angle diff={angle_deg:.2f}°, error={error:.6f})'
+                )
                 segments = segments[:i] + [merged_line] + segments[i+2:]
                 merge_found = True
                 break
@@ -694,7 +708,10 @@ class PathCreator:
                             'radius': radius,
                             'error': error,
                         }
-                        logger.debug(f'Merged {len(absorb_indices)} segment(s) into arc (radius={radius:.4f}m)')
+                        logger.debug(
+                            f'Merged {len(absorb_indices)} segment(s)'
+                            f' into arc (radius={radius:.4f}m)'
+                        )
                         new_segments.append(merged_segment)
                         absorbed.update(absorb_indices)
                         changed = True
@@ -798,7 +815,8 @@ class PathCreator:
             # Large radius: arc is geometrically indistinguishable from a line, prefer line.
             if radius is not None and radius > max_realistic_radius:
                 logger.debug(
-                    f'Tie-break: radius={radius:.3f}m exceeds max_realistic_radius, classifying as line'
+                    f'Tie-break: radius={radius:.3f}m exceeds max_realistic_radius,'
+                    ' classifying as line'
                 )
                 return 'line', {
                     'center': line_center,
@@ -809,7 +827,8 @@ class PathCreator:
             # Avoids misclassifying near-straight segments as arcs due to numerical noise.
             elif line_error <= circle_error:
                 logger.debug(
-                    f'Tie-break: line_error={line_error:.6f} <= circle_error={circle_error:.6f}, classifying as line'
+                    f'Tie-break: line_error={line_error:.6f} <= circle_error={circle_error:.6f},'
+                    ' classifying as line'
                 )
                 return 'line', {
                     'center': line_center,
@@ -818,7 +837,8 @@ class PathCreator:
                 }
             else:
                 logger.debug(
-                    f'Tie-break: circle_error={circle_error:.6f} < line_error={line_error:.6f}, classifying as arc'
+                    f'Tie-break: circle_error={circle_error:.6f} < line_error={line_error:.6f},'
+                    ' classifying as arc'
                 )
                 return 'arc', {
                     'center': circle_center,

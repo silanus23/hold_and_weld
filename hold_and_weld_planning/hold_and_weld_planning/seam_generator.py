@@ -87,7 +87,7 @@ def setup_logging(verbose: bool) -> None:
 def main():
     """Run seam generation workflow from CLI."""
     args = parse_arguments()
-    
+
     setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def main():
 
         main_world_pose = workpiece_config['main_part'].get('world_pose')
         secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
-        
+
         # Extract mode from workpiece config
         mode = workpiece_config.get('mode', 'auto')
 

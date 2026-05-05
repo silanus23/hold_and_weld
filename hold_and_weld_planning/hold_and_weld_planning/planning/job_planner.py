@@ -22,18 +22,16 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import trimesh
 
-logger = logging.getLogger(__name__)
-
+from .weld_planner import WeldPlanner
 from ..mesh.mesh_loader import MeshLoader
 from ..mesh.seam_extractor import SeamExtractor
 from ..mesh.shell_generator import ShellGenerator
-
 from ..occt.occt_generator import OCCTGenerator
 from ..occt.occt_loader import OCCTLoader
 from ..occt.seam_extractor_occt import SeamExtractorOCCT
-
-from .weld_planner import WeldPlanner
 from ..urdf.urdf_processor import URDFProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class JobPlanner:
@@ -98,9 +96,9 @@ class JobPlanner:
 
         logger.info(f'JobPlanner initialized in {self.mode.upper()} mode')
         logger.info(f'Parameters: work_angle={self.parameters["work_angle_deg"]}°, '
-                   f'travel_angle={self.parameters["travel_angle_deg"]}°, '
-                   f'gap={self.parameters["gap_mm"]}mm, '
-                   f'tolerance={self.parameters["epsilon"]*1000:.3f}mm')
+                    f'travel_angle={self.parameters["travel_angle_deg"]}°, '
+                    f'gap={self.parameters["gap_mm"]}mm, '
+                    f'tolerance={self.parameters["epsilon"]*1000:.3f}mm')
 
     def _detect_mode(self, main_path: str, secondary_path: str) -> str:
         """Auto-detect processing mode (mesh vs occt) from file extensions."""
@@ -117,9 +115,10 @@ class JobPlanner:
             return 'mesh'
 
         raise ValueError(
-            f"Cannot auto-detect mode: unsupported file extension(s) '{main_ext}'/'{secondary_ext}'. "
-            f"Supported: {sorted(occt_extensions)} for OCCT mode, "
-            f"{sorted(mesh_extensions)} for mesh mode. "
+            f'Cannot auto-detect mode: unsupported file extension(s)'
+            f" '{main_ext}'/'{secondary_ext}'. "
+            f'Supported: {sorted(occt_extensions)} for OCCT mode, '
+            f'{sorted(mesh_extensions)} for mesh mode. '
             f"Set mode explicitly via the 'mode' parameter."
         )
 
@@ -143,9 +142,9 @@ class JobPlanner:
         mesh_main, mesh_secondary = self._generate_shells()
 
         logger.debug(f'Mesh 1: watertight={mesh_main.is_watertight}, '
-                    f'faces={len(mesh_main.faces)}, bounds={mesh_main.bounds}')
+                     f'faces={len(mesh_main.faces)}, bounds={mesh_main.bounds}')
         logger.debug(f'Mesh 2: watertight={mesh_secondary.is_watertight}, '
-                    f'faces={len(mesh_secondary.faces)}, bounds={mesh_secondary.bounds}')
+                     f'faces={len(mesh_secondary.faces)}, bounds={mesh_secondary.bounds}')
 
         logger.info('Extracting seams from geometry (CGAL)...')
         seam_extractor = SeamExtractor(mesh_main, mesh_secondary, self.parameters)

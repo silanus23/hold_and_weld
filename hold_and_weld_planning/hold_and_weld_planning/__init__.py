@@ -15,7 +15,6 @@
 """Hold and Weld Planning Package - Weld seam trajectory generation."""
 
 from .core import ArcSegment, LineSegment, Seam
-from .planning.job_planner import JobPlanner
 from .mesh import (
     MeshLoader,
     PathCreator,
@@ -28,6 +27,7 @@ from .occt import (
     SeamExtractorOCCT,
 )
 from .planning import WeldPlanner
+from .planning.job_planner import JobPlanner
 from .urdf import URDFProcessor
 from .utils import (
     auto_generate_output_path,

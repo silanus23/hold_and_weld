@@ -118,7 +118,9 @@ class ShellGenerator:
                 logger.debug(f"Link '{link.name}' has no collision geometry, skipping")
                 continue
 
-            logger.debug(f"Processing link '{link.name}' with {len(collisions)} collision element(s)")
+            logger.debug(
+                f"Processing link '{link.name}' with {len(collisions)} collision element(s)"
+            )
 
             try:
                 link_manifold = self.create_link_shell(link)
@@ -154,7 +156,7 @@ class ShellGenerator:
             geom = collision.geometry
             manifold_obj = None
 
-            logger.debug(f"Processing collision element {idx}: {type(geom).__name__}")
+            logger.debug(f'Processing collision element {idx}: {type(geom).__name__}')
 
             try:
                 if isinstance(geom, Box):

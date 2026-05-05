@@ -29,8 +29,6 @@ import numpy as np
 from scipy import stats
 import trimesh
 
-logger = logging.getLogger(__name__)
-
 from .path_creator import PathCreator
 from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
@@ -43,6 +41,8 @@ except ImportError as e:
         'mesh_intersection C++ module not found. '
         'Build it with: cd mesh_intersection && mkdir build && cd build && cmake .. && make'
     ) from e
+
+logger = logging.getLogger(__name__)
 
 
 class SeamExtractor:
@@ -69,7 +69,8 @@ class SeamExtractor:
                 - edge_detection_threshold: Edge score threshold (default 0.5)
                 - gaussian_sigma_ratio: Gaussian weight width (default 0.3)
                 - normal_outlier_threshold_std: Outlier rejection threshold (default 2.0)
-                - PathCreator config parameters (see PathCreator.process_path docstring for full list):
+                - PathCreator config parameters (see PathCreator.process_path docstring
+                    for full list):
                     - outlier_std_threshold, min_sub_path_length, min_points_for_corner_detection,
                     - corner_min_angle, corner_angle_window, corner_curvature_window, etc.
         """
@@ -182,8 +183,9 @@ class SeamExtractor:
                         is_edge_joint = is_edge_contact_1 and is_edge_contact_2
 
                         joint_type_str = (
-                            "edge-to-edge" if is_edge_joint
-                            else f"edge-to-surface (mesh_1={'edge' if is_edge_contact_1 else 'surface'}, "
+                            'edge-to-edge' if is_edge_joint
+                            else f'edge-to-surface '
+                                 f"(mesh_1={'edge' if is_edge_contact_1 else 'surface'}, "
                                  f"mesh_2={'edge' if is_edge_contact_2 else 'surface'})"
                         )
                         logger.debug(f'Detected joint type: {joint_type_str}')
@@ -215,7 +217,7 @@ class SeamExtractor:
                 continue
 
         logger.info(f'Extracted {len(seams)} seam(s) from {len(paths)} path(s) '
-                   f'({paths_succeeded} succeeded, {paths_failed} failed)')
+                    f'({paths_succeeded} succeeded, {paths_failed} failed)')
         return seams
 
     def _compute_intersection_curve(self) -> np.ndarray:
@@ -314,7 +316,7 @@ class SeamExtractor:
         seam_points: np.ndarray,
         mesh: trimesh.Trimesh,
     ) -> bool:
-        """Check if seam lies on geometric edge using bimodality coefficient of nearby face normals.
+        """Check if seam lies on geometric edge using bimodality coefficient of face normals.
 
         Searches for triangle mesh faces near each seam point. Edge contact shows bimodal
         normal distribution (two surfaces meeting), surface contact shows unimodal distribution.
@@ -368,7 +370,8 @@ class SeamExtractor:
                     kurtosis = stats.kurtosis(dots)
 
                 # BC = (skewness^2 + 1) / (kurtosis + 3)
-                # TODO(@silanus23): Replace brute-force vertex search with KDTree built once per mesh
+                # TODO(@silanus23): Replace brute-force vertex search with
+                # KDTree built once per mesh
                 denominator = max(kurtosis + 3, 1e-10)
                 bimodality_coeff = (skewness**2 + 1) / denominator
 
@@ -398,7 +401,10 @@ class SeamExtractor:
         return weighted_score > self.edge_detection_threshold
 
     def _compute_gaussian_weights(self, num_points: int) -> np.ndarray:
-        """Compute Gaussian weights centered on middle of seam to prioritize stable center points."""
+        """Compute Gaussian weights centered on middle of seam to prioritize stable center points.
+
+        Weights are centered on the middle of the seam to prioritize stable center points.
+        """
         if num_points < 3:
             return np.ones(num_points)
 
@@ -406,7 +412,8 @@ class SeamExtractor:
         sigma = num_points * self.gaussian_sigma_ratio
         indices = np.arange(num_points)
         weights = np.exp(-0.5 * ((indices - center) / sigma) ** 2)
-        # Rescale so weights sum to num_points, keeping weighted stats comparable to unweighted ones.
+        # Rescale so weights sum to num_points, keeping weighted stats
+        # comparable to unweighted ones.
         weights = weights * (num_points / np.sum(weights))
 
         return weights
@@ -429,13 +436,19 @@ class SeamExtractor:
                 try:
                     face_1a, face_1b = self._get_face_candidates_at_point(point, self.mesh_1)
                 except Exception as e:
-                    logger.warning(f'Failed to get face candidates on mesh_1: {e}, using face index 0 as fallback')
+                    logger.warning(
+                        f'Failed to get face candidates on mesh_1: {e},'
+                        ' using face index 0 as fallback'
+                    )
                     face_1a = face_1b = 0
 
                 try:
                     face_2a, face_2b = self._get_face_candidates_at_point(point, self.mesh_2)
                 except Exception as e:
-                    logger.warning(f'Failed to get face candidates on mesh_2: {e}, using face index 0 as fallback')
+                    logger.warning(
+                        f'Failed to get face candidates on mesh_2: {e},'
+                        ' using face index 0 as fallback'
+                    )
                     face_2a = face_2b = 0
 
                 normal_1a = self.mesh_1.face_normals[face_1a]
@@ -530,7 +543,9 @@ class SeamExtractor:
             _, _, face_id = trimesh.proximity.closest_point(mesh, [point])
             closest_face_id = face_id[0]
         except Exception as e:
-            logger.warning(f'Failed to get closest point on mesh: {e}, returning face 0 as fallback')
+            logger.warning(
+                f'Failed to get closest point on mesh: {e}, returning face 0 as fallback'
+            )
             # Caller (_get_normals_for_points) has its own except that substitutes [0,0,1]
             # if the face 0 normal is nonsensical for this point.
             return 0, 0
@@ -554,7 +569,9 @@ class SeamExtractor:
                 closest_edge = (v1, v2)
 
         if closest_edge is None:
-            logger.warning(f'No valid edge found in face {closest_face_id}, returning duplicate face')
+            logger.warning(
+                f'No valid edge found in face {closest_face_id}, returning duplicate face'
+            )
             return int(closest_face_id), int(closest_face_id)
 
         v1, v2 = closest_edge
@@ -687,7 +704,8 @@ class SeamExtractor:
         outlier_mask = deviation > (self.normal_outlier_threshold_std * std_dot)
 
         cleaned_normals = normals.copy()
-        # Replace outliers with average rather than removing — array must stay same length as points.
+        # Replace outliers with average rather than removing —
+        # array must stay same length as points.
         cleaned_normals[outlier_mask] = avg_normal
 
         num_outliers = np.sum(outlier_mask)

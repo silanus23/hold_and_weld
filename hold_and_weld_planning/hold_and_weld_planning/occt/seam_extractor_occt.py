@@ -47,7 +47,7 @@ from OCC.Core.GeomLProp import GeomLProp_SLProps
 from OCC.Core.gp import gp_Pnt
 from OCC.Core.GProp import GProp_GProps
 from OCC.Core.ShapeAnalysis import ShapeAnalysis_Surface
-from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_WIRE
+from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED
 from OCC.Core.TopExp import topexp, TopExp_Explorer
 from OCC.Core.TopoDS import topods, TopoDS_Shape
 from OCC.Core.TopTools import (
@@ -60,6 +60,7 @@ from ..core.line_segment import LineSegment
 from ..core.seam import Seam
 
 logger = logging.getLogger(__name__)
+
 
 class SeamExtractorOCCT:
     """Extract weld seams from OCCT shapes using face-to-face proximity detection.
@@ -129,7 +130,9 @@ class SeamExtractorOCCT:
             try:
                 edge_seams = self._process_single_edge(edge_data)
                 seams.extend(edge_seams)
-                logger.debug(f'Processed edge {idx + 1}/{len(intersection_data)}: {len(edge_seams)} seam(s)')
+                logger.debug(
+                    f'Processed edge {idx + 1}/{len(intersection_data)}: {len(edge_seams)} seam(s)'
+                )
 
             except Exception as e:
                 failed_count += 1
@@ -196,7 +199,10 @@ class SeamExtractorOCCT:
         return edge_seams
 
     def _find_contact_face_pairs(self) -> List[Dict]:
-        """Find all face pairs within tolerance using BRepExtrema_DistShapeShape proximity check."""
+        """Find all face pairs within tolerance using BRepExtrema_DistShapeShape proximity check.
+
+        Uses BRepExtrema_DistShapeShape to find all face pairs within tolerance.
+        """
         faces_1 = []
         exp1 = TopExp_Explorer(self.shape_1, TopAbs_FACE)
         while exp1.More():
@@ -228,7 +234,6 @@ class SeamExtractorOCCT:
                 except Exception as e:
                     logger.debug(f'Failed to compute distance for face pair: {e}')
                     continue
-
 
         return contact_candidates
 
@@ -271,7 +276,10 @@ class SeamExtractorOCCT:
     def _get_matching_boundary_edge(self, seam_edge: TopoDS_Shape,
                                     face: TopoDS_Shape
                                     ) -> TopoDS_Shape:
-        """Get boundary edge from face that geometrically matches seam edge, or None if synthetic."""
+        """Get boundary edge from face that geometrically matches seam edge, or None if synthetic.
+
+        Returns None if the edge is synthetic.
+        """
         edge_exp = TopExp_Explorer(face, TopAbs_EDGE)
 
         while edge_exp.More():
@@ -454,7 +462,8 @@ class SeamExtractorOCCT:
     #     except Exception:
     #         return False
 
-    # def _get_neighbor_faces(self, shape: TopoDS_Shape, target_face: TopoDS_Shape) -> List[TopoDS_Shape]:
+    # def _get_neighbor_faces(
+    #         self, shape: TopoDS_Shape, target_face: TopoDS_Shape) -> List[TopoDS_Shape]:
     #     """Get faces that share edges with target face."""
     #     edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
     #     topexp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
@@ -479,7 +488,8 @@ class SeamExtractorOCCT:
     #     brepgprop.SurfaceProperties(face, props)
     #     return props.Mass()
 
-    # def _get_pipe_normals(self, points: np.ndarray, surfaces: Dict) -> Tuple[np.ndarray, np.ndarray]:
+    # def _get_pipe_normals(
+    #         self, points: np.ndarray, surfaces: Dict) -> Tuple[np.ndarray, np.ndarray]:
     #     """Get normals for pipe joint from outer shafts."""
     #     shaft_1 = surfaces['shaft_1']
     #     shaft_2 = surfaces['shaft_2']
@@ -522,10 +532,16 @@ class SeamExtractorOCCT:
             except Exception as e:
                 if normals:
                     normals.append(normals[-1])
-                    logger.debug(f'Failed to get normal from surface, using previous normal as fallback: {e}')
+                    logger.debug(
+                        f'Failed to get normal from surface,'
+                        f' using previous normal as fallback: {e}'
+                    )
                 else:
                     normals.append(np.array([0, 0, 1]))
-                    logger.warning(f'Failed to get normal for first point on surface, using hardcoded fallback [0,0,1]: {e}')
+                    logger.warning(
+                        f'Failed to get normal for first point on surface,'
+                        f' using hardcoded fallback [0,0,1]: {e}'
+                    )
 
         normals = np.array(normals)
         normals = self._make_normals_consistent(normals)
@@ -533,7 +549,10 @@ class SeamExtractorOCCT:
         return normals
 
     def _make_normals_consistent(self, normals: np.ndarray) -> np.ndarray:
-        """Ensure all normals point in consistent direction by flipping those opposite to average."""
+        """Ensure all normals point in consistent direction by flipping those opposite to average.
+
+        Flips normals that are opposite to the average direction.
+        """
         if len(normals) == 0:
             return normals
 
@@ -681,7 +700,9 @@ class SeamExtractorOCCT:
                 'type': 'polyline',
                 'points': points,
                 'curve_type': str(curve_type),
-                'description': 'Complex curve (polyline) — use smoothed_points for waypoint planning'
+                'description': (
+                    'Complex curve (polyline) — use smoothed_points for waypoint planning'
+                )
             }
 
     def _wrap_in_seams(self,

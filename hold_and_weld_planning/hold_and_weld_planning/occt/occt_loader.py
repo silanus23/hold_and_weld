@@ -168,8 +168,10 @@ class OCCTLoader:
         rot = transform[:3, :3]
         det = np.linalg.det(rot)
         if not np.isclose(det, 1.0, atol=1e-3):
-            logger.warning(f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear')
-        
+            logger.warning(
+                f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear'
+            )
+
         trsf = gp_Trsf()
 
         trsf.SetValues(
@@ -179,7 +181,7 @@ class OCCTLoader:
         )
 
         transformed_shape = BRepBuilderAPI_Transform(shape, trsf).Shape()
-        
+
         if transformed_shape.IsNull():
             logger.error('Transform operation produced null shape')
             raise RuntimeError('Failed to apply transformation to shape')

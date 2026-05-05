@@ -109,7 +109,10 @@ class WeldPlanner:
 
         seam.poses = poses
         seam.is_generated = True
-        logger.info(f'Generated {len(poses)} poses for {seam.segment_type} seam ({seam.length()*1000:.1f}mm)')
+        logger.info(
+            f'Generated {len(poses)} poses for {seam.segment_type} seam'
+            f' ({seam.length()*1000:.1f}mm)'
+        )
 
     def _validate_arrays(
         self, points: NDArray, normals_main: NDArray, normals_secondary: NDArray
@@ -248,10 +251,17 @@ class WeldPlanner:
                     # All cross-product fallbacks failed — tangent is degenerate.
                     # Compute a guaranteed-perpendicular vector via cross with [0,1,0],
                     # then cross that with tangent to ensure perpendicularity.
-                    logger.warning('Degenerate tangent in _compute_away_vector, using [0, 1, 0] cross tangent')
+                    logger.warning(
+                        'Degenerate tangent in _compute_away_vector,'
+                        ' using [0, 1, 0] cross tangent'
+                    )
                     fallback = np.cross(np.array([0.0, 1.0, 0.0]), tangent)
                     fallback_norm = np.linalg.norm(fallback)
-                    perpendicular = fallback / fallback_norm if fallback_norm > 1e-10 else np.array([0.0, 1.0, 0.0])
+                    perpendicular = (
+                        fallback / fallback_norm
+                        if fallback_norm > 1e-10
+                        else np.array([0.0, 1.0, 0.0])
+                    )
 
         perpendicular = perpendicular / np.linalg.norm(perpendicular)
 
@@ -307,7 +317,10 @@ class WeldPlanner:
         binormal: NDArray,
         tangent: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Rotate torch around binormal axis by travel angle (pushes/pulls along weld direction)."""
+        """Rotate torch around binormal axis by travel angle (pushes/pulls along weld direction).
+
+        Pushes/pulls the torch along the weld direction.
+        """
         travel_rot = Rotation.from_rotvec(self.travel_angle_rad * binormal)
         tangent_final = travel_rot.apply(tangent)
         binormal_final = travel_rot.apply(binormal)

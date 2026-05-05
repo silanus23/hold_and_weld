@@ -199,7 +199,9 @@ class OCCTGenerator:
             result = fused.Shape()
 
             if result.IsNull():
-                logger.error(f'Fuse operation failed for link "{link.name}" at shape {i+1}/{len(shapes)}')
+                logger.error(
+                    f'Fuse operation failed for link "{link.name}" at shape {i+1}/{len(shapes)}'
+                )
                 raise ValueError(f'Failed to fuse shapes for link "{link.name}"')
 
         return result
@@ -227,7 +229,9 @@ class OCCTGenerator:
         rot = matrix[:3, :3]
         det = np.linalg.det(rot)
         if not np.isclose(det, 1.0, atol=1e-3):
-            logger.warning(f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear')
+            logger.warning(
+                f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear'
+            )
 
         trsf = gp_Trsf()
 
