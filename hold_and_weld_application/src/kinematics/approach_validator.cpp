@@ -18,11 +18,10 @@
 #include <cmath>
 
 #include <rclcpp/rclcpp.hpp>
-#include "hold_and_weld_application/action_servers/welder_action_server.hpp"
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -30,27 +29,24 @@ namespace kinematics
 ApproachValidator::ApproachValidator(
   std::shared_ptr<KinematicsSolver> kin_solver,
   std::shared_ptr<CeresIKSolver> ik_solver,
-  double manipulatibility_threshold)
+  double manipulability_threshold)
 : kinematics_solver_(std::move(kin_solver)),
   ceres_ik_solver_(std::move(ik_solver)),
-  manipulatibility_threshold_(manipulatibility_threshold),
-  seam_(nullptr)
+  manipulability_threshold_(manipulability_threshold),
+  seam_(std::nullopt)
 {
 }
 
 bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
 {
-  auto logger = rclcpp::get_logger("approach_validator");
+  auto logger = rclcpp::get_logger("kinematics");
 
-  if (!seam_ || seam_->poses.empty()) {
+  if (!seam_.has_value() || seam_->poses.empty()) {
     RCLCPP_ERROR(logger, "Validation failed: No seam data or empty poses");
     return false;
   }
 
-  RCLCPP_INFO(logger, "Validating approach for seam with %zu waypoints", seam_->poses.size());
-  RCLCPP_INFO(logger, "Manipulability threshold: %.6f", manipulatibility_threshold_);
-
-  RCLCPP_INFO(logger, "Phase 1: Validating approach → first seam point");
+  RCLCPP_INFO(logger, "Validating approach: %zu waypoints", seam_->poses.size());
 
   Eigen::Isometry3d first_pose = Eigen::Isometry3d::Identity();
   first_pose.translation() << seam_->poses[0].position.x,
@@ -66,7 +62,10 @@ bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
 
   Vector6d q_first_point;
 
-  // Relaxed tolerances for large jump
+  // Relaxed tolerances (20cm / 0.10 rad) for Phase 1: the approach configuration
+  // is OMPL-generated and may be far from the first seam point in joint space.
+  // Tight tolerances here cause spurious failures on valid approach poses.
+  // Phase 2 uses tight tolerances (3cm / 0.02 rad) since it warm-starts from the previous solution.
   bool success = ceres_ik_solver_->solve(
     first_pose,
     q_approach,
@@ -78,19 +77,15 @@ bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
     RCLCPP_WARN(logger, "Phase 1 FAILED: Cannot reach first seam point from approach");
     return false;
   }
-  double m_index_first = compute_manipulatibility(q_first_point);
+  double m_index_first = compute_manipulability(q_first_point);
   RCLCPP_DEBUG(logger, "First point manipulability: %.6f", m_index_first);
 
-  if (m_index_first < manipulatibility_threshold_) {
+  if (m_index_first < manipulability_threshold_) {
     RCLCPP_WARN(logger, "Phase 1 FAILED: Low manipulability at first point: %.6f < %.6f",
-                m_index_first, manipulatibility_threshold_);
+                m_index_first, manipulability_threshold_);
     return false;
   }
 
-  RCLCPP_INFO(logger, "Phase 1 PASSED: Approach → first point validated");
-
-  RCLCPP_INFO(logger, "Phase 2: Validating seam continuity (%zu waypoints)",
-              seam_->poses.size());
 
   Vector6d current_q = q_first_point;
   size_t waypoint_idx = 1;
@@ -124,30 +119,28 @@ bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
       return false;
     }
 
-    double m_index = compute_manipulatibility(next_q);
+    double m_index = compute_manipulability(next_q);
 
     RCLCPP_DEBUG(logger, "Waypoint %zu/%zu: Manipulability = %.6f",
                  waypoint_idx + 1, seam_->poses.size(), m_index);
 
-    if (m_index < manipulatibility_threshold_) {
+    if (m_index < manipulability_threshold_) {
       RCLCPP_WARN(logger, "Phase 2 FAILED: Low manipulability at waypoint %zu/%zu: %.6f < %.6f",
-                  waypoint_idx + 1, seam_->poses.size(), m_index, manipulatibility_threshold_);
+                  waypoint_idx + 1, seam_->poses.size(), m_index, manipulability_threshold_);
       return false;
     }
 
     current_q = next_q;
   }
 
-  RCLCPP_INFO(logger, "Phase 2 PASSED: All %zu waypoints validated", seam_->poses.size());
-  RCLCPP_INFO(logger, "Approach validation SUCCESSFUL (2-phase validation complete)");
+  RCLCPP_INFO(logger, "Approach validation passed (%zu waypoints)", seam_->poses.size());
   return true;
 }
 
-double ApproachValidator::compute_manipulatibility(const Vector6d & q)
+double ApproachValidator::compute_manipulability(const Vector6d & q) const
 {
-  auto logger = rclcpp::get_logger("approach_validator");
+  auto logger = rclcpp::get_logger("kinematics");
 
-  // Convert Vector6d to std::vector<double>
   std::vector<double> q_vec(6);
   for (size_t i = 0; i < 6; ++i) {
     q_vec[i] = q(i);
@@ -155,32 +148,27 @@ double ApproachValidator::compute_manipulatibility(const Vector6d & q)
 
   Eigen::MatrixXd J = kinematics_solver_->compute_jacobian(q_vec);
 
-  // Compute Yoshikawa manipulability measure: sqrt(det(J * J^T))
-  // This is more numerically stable and has better physical interpretation
   Eigen::MatrixXd JJT = J * J.transpose();
   double det_JJT = JJT.determinant();
 
   if (det_JJT < 0.0) {
-    RCLCPP_WARN(logger, "Negative determinant in JJ^T: %.9f - using abs value", det_JJT);
-    det_JJT = std::abs(det_JJT);
+    RCLCPP_WARN(logger,
+          "Negative determinant in JJ^T (%.9f) — numerical noise near singularity, returning 0.0",
+          det_JJT);
+    return 0.0;
   }
 
   double yoshikawa_index = std::sqrt(det_JJT);
 
-  // Also compute condition number as secondary check
   Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
   double cond_number = svd.singularValues()(0) /
     svd.singularValues()(svd.singularValues().size() - 1);
 
-  RCLCPP_DEBUG(logger, "Manipulability metrics - Yoshikawa: %.6f, Condition: %.2f",
-               yoshikawa_index, cond_number);
-  if (cond_number > 100.0) {
-    RCLCPP_DEBUG(logger, "High condition number (%.2f) - configuration near singularity",
-          cond_number);
-  }
+  RCLCPP_DEBUG(logger, "Manipulability: %.6f, condition: %.2f%s",
+    yoshikawa_index, cond_number, cond_number > 100.0 ? " (near singularity)" : "");
 
   return yoshikawa_index;
 }
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld

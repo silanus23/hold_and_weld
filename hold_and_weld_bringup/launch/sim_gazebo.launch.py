@@ -140,7 +140,7 @@ def generate_launch_description():
         ),
         launch_arguments=[
             ('gz_args', [gz_args, ' ', world_path]),
-            ('on_exit_shutdown', 'true'),
+            # on_exit_shutdown omitted: each process handles SIGINT independently.
         ],
     )
 

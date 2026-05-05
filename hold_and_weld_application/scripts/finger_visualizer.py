@@ -14,8 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Finger visualizer — publishes gripper finger box markers in RViz for each
-sampled grasp, showing exactly where the fingers will be placed on the part.
+Finger visualizer — publishes gripper finger box markers in RViz.
+
+Publishes markers for each sampled grasp, showing exactly where the fingers
+will be placed on the part.
 
   - Spawns objects at their START pose (where the gripper picks them up).
   - Reads the latest grasp JSON from grasps/ by metadata.generated_at.
@@ -23,7 +25,6 @@ sampled grasp, showing exactly where the fingers will be placed on the part.
 """
 
 import colorsys
-import math
 import glob
 import json
 import os
@@ -31,7 +32,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Pose
 from interactive_markers import InteractiveMarkerServer
 from moveit_msgs.msg import CollisionObject
 import rclpy
@@ -393,7 +394,8 @@ class FingerVisualizer(Node):
     def _make_grasp_markers(
         self, grasp: dict, index: int, frame_id: str, finger_length: float = 0.05
     ) -> list:
-        """Return a list of Marker messages for one grasp.
+        """
+        Return a list of Marker messages for one grasp.
 
         Finger geometry matches gripper_prefix.xacro exactly:
           - Box cross-section : 30 mm (X) × 40 mm (Y)  [local gripper frame]

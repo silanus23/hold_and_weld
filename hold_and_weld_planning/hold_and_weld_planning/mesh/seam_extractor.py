@@ -257,6 +257,15 @@ class SeamExtractor:
         visited = set()
         paths = []
 
+        # Warn about branching nodes (degree > 2) — these are T-junctions in the intersection
+        # curve. The greedy traversal will pick one branch and silently drop the others.
+        branching_nodes = [k for k, v in adjacency.items() if len(v) > 2]
+        if branching_nodes:
+            logger.warning(
+                f'{len(branching_nodes)} branching node(s) detected in intersection graph '
+                f'(T-junctions) — only one branch will be followed per node, others are dropped'
+            )
+
         for start_key in adjacency.keys():
             if start_key in visited:
                 continue

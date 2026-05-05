@@ -17,7 +17,7 @@
 #include <stdexcept>
 #include <rclcpp/rclcpp.hpp>
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -28,7 +28,7 @@ KinematicsSolver::KinematicsSolver(const ParsedChain & chain)
   base_link_(chain.base_link),
   tip_link_(chain.tip_link)
 {
-  auto logger = rclcpp::get_logger("kinematics_solver");
+  auto logger = rclcpp::get_logger("kinematics");
 
   if (dof_ != 6) {
     RCLCPP_ERROR(
@@ -93,7 +93,6 @@ Eigen::MatrixXd KinematicsSolver::compute_jacobian(const std::vector<double> & q
 
   Eigen::MatrixXd J(6, dof_);
 
-  // Compute transforms to each joint (BEFORE applying joint motion)
   std::vector<Eigen::Isometry3d> joint_transforms(dof_ + 1);
   joint_transforms[0] = Eigen::Isometry3d::Identity();
 
@@ -110,7 +109,6 @@ Eigen::MatrixXd KinematicsSolver::compute_jacobian(const std::vector<double> & q
 
   Eigen::Vector3d tcp_position = (joint_transforms[dof_] * tool_transform_).translation();
 
-  // Compute Jacobian columns for each joint
   for (size_t i = 0; i < dof_; ++i) {
     Eigen::Matrix3d rotation_to_joint =
       joint_transforms[i].rotation() * joint_local_transforms_[i].rotation();
@@ -154,7 +152,6 @@ double KinematicsSolver::compute_condition_number(const std::vector<double> & q)
   double sigma_max = singular_values(0);
   double sigma_min = singular_values(singular_values.size() - 1);
 
-  // Avoid division by zero
   if (sigma_min < 1e-10) {
     return std::numeric_limits<double>::infinity();
   }
@@ -176,6 +173,11 @@ bool KinematicsSolver::check_joint_limits(
 {
   validate_joint_vector(q);
 
+  if (margin < 0.0) {
+    throw std::invalid_argument(
+      "check_joint_limits: margin must be non-negative, got " + std::to_string(margin));
+  }
+
   for (size_t i = 0; i < dof_; ++i) {
     double q_min_safe = joint_limits_[i].first + margin;
     double q_max_safe = joint_limits_[i].second - margin;
@@ -189,4 +191,4 @@ bool KinematicsSolver::check_joint_limits(
 }
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld

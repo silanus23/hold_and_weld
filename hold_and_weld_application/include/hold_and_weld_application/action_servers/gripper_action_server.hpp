@@ -15,8 +15,11 @@
 #ifndef HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_
 
+#include <atomic>
+#include <condition_variable>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -43,6 +46,8 @@
 
 namespace hold_and_weld
 {
+namespace application
+{
 
 /**
  * @brief Timing constants for gripper operations and action handling.
@@ -55,7 +60,9 @@ constexpr int GRIPPER_RESULT_TIMEOUT_SEC = 10;
 constexpr int ATTACH_SETTLE_TIME_MS = 500;
 constexpr int DETACH_SETTLE_TIME_MS = 250;
 constexpr int MOTION_SETTLE_TIME_MS = 250;
-}
+constexpr int PLANNING_SCENE_SERVICE_TIMEOUT_SEC = 2;
+constexpr int PLANNING_SCENE_RESPONSE_TIMEOUT_SEC = 2;
+}  // namespace timing
 
 /**
  * @struct GripperJob
@@ -136,14 +143,16 @@ public:
   rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
   on_shutdown(const rclcpp_lifecycle::State & state);
 
-private:
-  // Initialization
   /**
-   * @brief Initialize MoveIt interface and planning scene.
+   * @brief Clean shutdown called from main() after spin() returns, before rclcpp::shutdown().
+   *
+   * Sets shutdown_requested_, calls stop() while the ROS context is still valid,
+   * then waits up to 2 s for execute() to return naturally before giving up.
+   * This must be called while move_group is still reachable on the network.
    */
-  void initialize_moveit();
+  void manual_shutdown();
 
-  // Action server callbacks
+private:
   /**
    * @brief Handle incoming goal requests from action clients.
    * @param uuid Unique identifier for the goal.
@@ -169,6 +178,20 @@ private:
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
+   * @brief Persistent worker thread loop — waits for queued goals and executes them.
+   */
+  void worker_thread_func();
+
+  /**
+   * @brief Signal the worker thread to stop and join it.
+   *
+   * Sets shutdown_requested_, wakes the worker via execution_cv_, then joins
+   * worker_thread_.  Must only be called after any in-flight execute() has
+   * already returned (i.e. after waiting on execution_future_).
+   */
+  void shutdown_worker();
+
+  /**
    * @brief Execute the gripper job for a given goal (with action server feedback).
    * @param goal_handle Handle to the goal being executed.
    */
@@ -188,7 +211,11 @@ private:
    */
   bool run_job(std::function<void(const std::string &, float)> feedback_callback);
 
-  // Configuration loading
+  /**
+   * @brief Initialize MoveIt interface and planning scene.
+   */
+  void initialize_moveit();
+
   /**
    * @brief Load job configuration from YAML file.
    * @param yaml_path Path to the YAML configuration file.
@@ -198,7 +225,7 @@ private:
    * @brief Load object configuration (base_link, child_link) from shared objects.yaml.
    */
   void load_object_config();
-  // Gripper control
+
   /**
    * @brief Set the gripper to a specific position.
    * @param position Target position for the gripper (0.0 = closed, 0.15 = open).
@@ -206,7 +233,6 @@ private:
    */
   bool set_finger_aperture(double position);
 
-  // Motion
   /**
    * @brief Move the arm to a specified pose.
    * @param pose Target pose for the arm.
@@ -230,7 +256,6 @@ private:
    */
   bool detach_object(const std::string & object_id);
 
-  // Utility
   /**
    * @brief Normalize a quaternion to unit length.
    * @param q Quaternion to normalize (modified in-place).
@@ -250,31 +275,33 @@ private:
    */
   bool allow_collision_for_placement();
 
-  // Members
   rclcpp_action::Server<TriggerGripper>::SharedPtr action_server_;
+
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
-  rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> moveit_executor_;
   std::thread moveit_thread_;
 
+  rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
+  rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr get_planning_scene_client_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_action_client_;
   rclcpp_lifecycle::LifecyclePublisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr
     attached_collision_pub_;
-  rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr get_planning_scene_client_;
 
-  // Configuration
+  std::thread worker_thread_;
+  std::shared_ptr<GoalHandleTriggerGripper> pending_goal_;
+  std::condition_variable execution_cv_;
+  std::mutex execution_mutex_;
+  std::atomic<bool> shutdown_requested_{false};
+  std::shared_future<void> execution_future_;
+  std::mutex execution_future_mutex_;
+  std::mutex move_group_mutex_;
+
   std::mutex config_mutex_;
   GripperJob job_;
   bool job_loaded_ = false;
-
-  // Object IDs from shared config
-  std::string base_link_id_ = "base_link";  // base_link ID from URDF
-
-  // Gripper position limits [m]
+  std::string base_link_id_ = "base_link";
   double open_position_ = 0.15;
   double close_position_ = 0.0;
-
-  // Robot-specific configuration
   std::vector<std::string> gripper_joint_names_ = {
     "robot1_left_finger_joint", "robot1_right_finger_joint"};
   std::vector<std::string> touch_links_ = {
@@ -282,27 +309,16 @@ private:
     "robot1_gripper_base", "robot1_left_finger", "robot1_right_finger"};
   std::string attach_link_ = "robot1_link_6_t";
   int max_planning_retries_ = 3;
-
-  // Execution thread management
-  std::shared_ptr<std::thread> execution_thread_;
-  std::mutex execution_mutex_;
-
-  // MoveIt thread safety
-  std::mutex move_group_mutex_;
-
-  // Configuration parameters
   std::string arm_group_name_;
   std::string yaml_path_;
   bool auto_trigger_ = false;
   double auto_trigger_delay_sec_ = 3.0;
 
-  // Initialization
   rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
-
-  // Logger
   rclcpp::Logger logger_;
 };
 
+}  // namespace application
 }  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_

@@ -21,6 +21,8 @@ import glob
 import json
 import os
 
+from ament_index_python.packages import get_package_share_directory
+
 from geometry_msgs.msg import Point, Vector3
 from interactive_markers import InteractiveMarkerServer
 import rclpy
@@ -32,6 +34,7 @@ from visualization_msgs.msg import (
     Marker,
     MarkerArray,
 )
+
 
 class GraspVisualizer(Node):
     """Node to visualize grasp results from JSON files."""
@@ -57,10 +60,9 @@ class GraspVisualizer(Node):
 
     def load_and_visualize_latest(self):
         """Load the latest grasp JSON and visualize."""
-        workspace_root = os.path.expanduser('~/ros2_yaskawa')
         grasps_dir = os.path.join(
-            workspace_root,
-            'src/hold_and_weld/hold_and_weld_application/grasps'
+            get_package_share_directory('hold_and_weld_application'),
+            'grasps'
         )
 
         if not os.path.exists(grasps_dir):

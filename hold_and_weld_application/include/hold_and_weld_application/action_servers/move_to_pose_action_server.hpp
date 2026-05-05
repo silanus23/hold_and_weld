@@ -15,12 +15,14 @@
 #ifndef HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__MOVE_TO_POSE_ACTION_SERVER_HPP_
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__MOVE_TO_POSE_ACTION_SERVER_HPP_
 
-#include <memory>
+#include <atomic>
+#include <future>
 #include <map>
-#include <string>
-#include <thread>
+#include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <string>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -30,6 +32,8 @@
 #include "hold_and_weld_application/action/move_to_pose.hpp"
 
 namespace hold_and_weld
+{
+namespace application
 {
 
 /**
@@ -70,8 +74,15 @@ public:
    */
   ~MoveToPoseActionServer() override;
 
+  /**
+   * @brief Clean shutdown called from main() after spin() returns, before rclcpp::shutdown().
+   *
+   * Sets shutdown_requested_, calls stop() on all cached move groups while the ROS context
+   * is still valid, then waits for execute() to return before joining the worker thread.
+   */
+  void manual_shutdown();
+
 private:
-  // Action server callbacks
   /**
    * @brief Handle incoming goal requests from action clients.
    * @param uuid Unique identifier for the goal.
@@ -96,7 +107,6 @@ private:
    */
   void handle_accepted(const std::shared_ptr<GoalHandleMoveToPose> goal_handle);
 
-  // Worker thread
   /**
    * @brief Worker thread function for asynchronous goal execution.
    */
@@ -143,23 +153,24 @@ private:
     const std::string & step,
     float percentage);
 
-  // Member variables
   rclcpp_action::Server<MoveToPose>::SharedPtr action_server_;
   MoveToPoseConfig config_;
+  rclcpp::Logger logger_;
 
-  // Worker thread management
   std::thread worker_thread_;
-  std::mutex queue_mutex_;
-  std::condition_variable queue_cv_;
+  std::mutex execution_mutex_;
+  std::condition_variable execution_cv_;
   std::shared_ptr<GoalHandleMoveToPose> pending_goal_;
-  bool shutdown_ = false;
+  std::atomic<bool> shutdown_requested_{false};
+  std::shared_future<void> execution_future_;
+  std::mutex execution_future_mutex_;
 
-  // Cached move groups (created on-demand per move_group_name)
   std::mutex move_group_cache_mutex_;
   std::map<std::string, std::shared_ptr<moveit::planning_interface::MoveGroupInterface>>
   move_group_cache_;
 };
 
+}  // namespace application
 }  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__MOVE_TO_POSE_ACTION_SERVER_HPP_

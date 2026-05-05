@@ -26,7 +26,7 @@
 
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -149,6 +149,6 @@ private:
 };
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__KINEMATICS__CERES_IK_SOLVER_HPP_

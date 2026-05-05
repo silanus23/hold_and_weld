@@ -14,12 +14,12 @@
 
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 
- #include <Eigen/Dense>
+#include <Eigen/Dense>
 #include <cmath>
 
 #include <rclcpp/rclcpp.hpp>
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -62,7 +62,6 @@ bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
   Eigen::Quaterniond q_target(target_pose_.rotation());
   Eigen::Quaterniond q_current(current_pose.rotation());
 
-  // Calculate quaternion error (q_target * q_current^-1)
   Eigen::Quaterniond q_err = q_target * q_current.conjugate();
 
   // Quaternions double-cover 3D rotations (q and -q are the same rotation).
@@ -161,7 +160,13 @@ bool CeresIKSolver::solve(
     solution_vec[i] = q_solution[i];
   }
 
-  Eigen::Isometry3d achieved_pose = fk_solver_->compute_fk(solution_vec);
+  Eigen::Isometry3d achieved_pose;
+  try {
+    achieved_pose = fk_solver_->compute_fk(solution_vec);
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(logger, "IK post-solve FK check failed: %s", e.what());
+    return false;
+  }
   double position_error = (achieved_pose.translation() - target_pose.translation()).norm();
 
   Eigen::AngleAxisd rot_err_aa(target_pose.rotation() * achieved_pose.rotation().transpose());
@@ -179,4 +184,4 @@ bool CeresIKSolver::solve(
 }
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld

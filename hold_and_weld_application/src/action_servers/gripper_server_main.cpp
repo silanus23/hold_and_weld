@@ -20,12 +20,17 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
-  auto node = std::make_shared<hold_and_weld::GripperActionServer>();
+  auto node = std::make_shared<hold_and_weld::application::GripperActionServer>();
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
 
   executor.spin();
+
+  // manual_shutdown() must be called while the ROS context is still valid:
+  // it calls stop() (a topic publish) so move_group can process the cancel
+  // before the context is torn down by rclcpp::shutdown().
+  node->manual_shutdown();
 
   rclcpp::shutdown();
   return 0;

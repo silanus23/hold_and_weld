@@ -30,17 +30,20 @@
 
 namespace hold_and_weld
 {
+namespace application
+{
 
 WelderActionServer::WelderActionServer(const rclcpp::NodeOptions & options)
 : LifecycleNode("welder_action_server", options),
-  logger_(rclcpp::get_logger("Application"))
+  logger_(rclcpp::get_logger("application"))
 {
-  RCLCPP_INFO(logger_, "Welder Action Server constructed");
 }
 
 WelderActionServer::~WelderActionServer()
 {
-  shutdown_worker();
+  // manual_shutdown() should have already been called from main().
+  // This is a safety net for any path that bypasses main() (e.g. tests).
+  manual_shutdown();
 
   if (moveit_executor_) {
     moveit_executor_->cancel();
@@ -50,97 +53,94 @@ WelderActionServer::~WelderActionServer()
   }
 }
 
+void WelderActionServer::manual_shutdown()
+{
+  // Idempotent safe to call multiple times (destructor calls it as safety net).
+  // shutdown_worker() sets shutdown_requested_ under the execution_mutex_; check it first.
+  if (shutdown_requested_.exchange(true)) {
+    return;
+  }
+
+  RCLCPP_DEBUG(logger_, "Manual shutdown: signalling stop");
+
+  // stop() is a topic publish — works as long as the ROS context is still valid.
+  // Call before rclcpp::shutdown() so move_group can process the cancel.
+  try {
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (...) {
+    RCLCPP_WARN(logger_, "Exception caught while stopping move_group during shutdown");
+  }
+
+  // Poll until execute_weld() returns or the ROS context dies — whichever comes first.
+  // move_group_->execute(plan) inside execute_weld() blocks until the controller finishes
+  // the trajectory, so we must break the wait externally when the context is invalidated
+  // to avoid spinning forever.
+  {
+    // Take a local copy of the future to poll without holding the mutex.
+    std::shared_future<void> future_copy;
+    {
+      std::lock_guard<std::mutex> lock(execution_future_mutex_);
+      future_copy = execution_future_;
+    }
+
+    if (future_copy.valid()) {
+      while (rclcpp::ok() &&
+        future_copy.wait_for(std::chrono::milliseconds(10)) ==
+        std::future_status::timeout)
+      {}
+
+      if (future_copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        RCLCPP_INFO(logger_, "Execution finished cleanly.");
+      } else {
+        RCLCPP_WARN(
+          logger_,
+          "ROS context shut down before execute() returned — proceeding with worker "
+          "shutdown. move_group_ is kept alive by the worker thread's captured "
+          "shared_ptr.");
+      }
+    }
+  }
+
+  // Shut down the worker regardless of whether execute() returned.
+  shutdown_worker();
+}
+
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 {
-  RCLCPP_INFO(logger_, "Configuring Welder Action Server");
-
-  // Wait for MoveIt and controllers to be available before creating
-  // MoveGroupInterface to prevent race conditions on startup
-  RCLCPP_INFO(logger_, "Waiting for required services to become available");
+  // Temporary node used only for service availability checks during configuration.
+  // A separate node is required because this lifecycle node's executor is not
+  // spinning freely during on_configure, so service calls on 'this' would deadlock.
   auto temp_node = std::make_shared<rclcpp::Node>("welder_service_waiter");
-
-  // MoveIt's compute_cartesian_path service indicates that move_group is running
   auto cartesian_path_client = temp_node->create_client<moveit_msgs::srv::GetCartesianPath>(
     "/compute_cartesian_path");
 
   RCLCPP_INFO(logger_, "Waiting for MoveIt compute_cartesian_path service");
-  constexpr int MAX_WAIT_SECONDS = 60;
-  int wait_count = 0;
-
-  while (!cartesian_path_client->wait_for_service(std::chrono::seconds(1))) {
-    if (!rclcpp::ok()) {
-      RCLCPP_ERROR(logger_, "Interrupted while waiting for MoveIt service");
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    }
-
-    wait_count++;
-
-    if (wait_count >= MAX_WAIT_SECONDS) {
-      RCLCPP_ERROR(
-        logger_,
-        "MoveIt service not available after %d seconds. Is move_group running?",
-        MAX_WAIT_SECONDS);
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    } else if (wait_count % 10 == 0) {
-      RCLCPP_WARN(
-        logger_,
-        "Still waiting for MoveIt service (%d/%d seconds)",
-        wait_count,
-        MAX_WAIT_SECONDS);
-    } else if (wait_count % 5 == 0) {
-      RCLCPP_INFO(
-        logger_,
-        "Waiting for MoveIt service (%d/%d seconds)",
-        wait_count,
-        MAX_WAIT_SECONDS);
-    }
+  if (!hold_and_weld::wait_for_service(cartesian_path_client, "MoveIt compute_cartesian_path",
+      logger_))
+  {
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
   RCLCPP_INFO(logger_, "MoveIt is available");
 
-  // Wait for controller_manager services (indicates controllers are loaded)
   auto list_controllers_client = temp_node->create_client<
     controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
 
   RCLCPP_INFO(logger_, "Waiting for controller_manager service");
-  wait_count = 0;
-
-  while (!list_controllers_client->wait_for_service(std::chrono::seconds(1))) {
-    if (!rclcpp::ok()) {
-      RCLCPP_ERROR(logger_, "Interrupted while waiting for controller_manager service");
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    }
-
-    wait_count++;
-
-    if (wait_count >= MAX_WAIT_SECONDS) {
-      RCLCPP_ERROR(
-        logger_,
-        "Controller manager service not available after %d seconds. Is controller_manager running?",
-        MAX_WAIT_SECONDS);
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-    } else if (wait_count % 10 == 0) {
-      RCLCPP_WARN(
-        logger_,
-        "Still waiting for controller_manager service (%d/%d seconds)",
-        wait_count,
-        MAX_WAIT_SECONDS);
-    } else if (wait_count % 5 == 0) {
-      RCLCPP_INFO(
-        logger_,
-        "Waiting for controller_manager service (%d/%d seconds)",
-        wait_count,
-        MAX_WAIT_SECONDS);
-    }
+  if (!hold_and_weld::wait_for_service(list_controllers_client,
+      "controller_manager/list_controllers", logger_))
+  {
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
   RCLCPP_INFO(logger_, "Controllers are ready");
 
   load_config_from_yaml();
 
   std::string urdf_string;
-  // URDF string is only needed for kinematics — fetch it here where we manage nodes
   if (config_.use_approach_validator) {
-    RCLCPP_INFO(logger_, "Asking robot_state_publisher for the master URDF");
+    RCLCPP_DEBUG(logger_, "Fetching robot_description from robot_state_publisher");
 
     auto param_client = std::make_shared<rclcpp::SyncParametersClient>(temp_node,
         "robot_state_publisher");
@@ -168,9 +168,6 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     rclcpp::NodeOptions node_options;
     node_options.automatically_declare_parameters_from_overrides(true);
 
-    // MoveGroupInterface requires a separate executor thread to prevent deadlocks.
-    // MoveIt uses internal action clients that need to be spun while the main
-    // lifecycle node is executing callbacks.
     internal_node = std::make_shared<rclcpp::Node>(
       "welder_moveit_internal",
       node_options);
@@ -178,7 +175,7 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     bool use_sim_time = false;
     if (this->get_parameter("use_sim_time", use_sim_time)) {
       internal_node->set_parameter(rclcpp::Parameter("use_sim_time", use_sim_time));
-      RCLCPP_INFO(logger_, "Copied use_sim_time=%s to internal node",
+      RCLCPP_DEBUG(logger_, "Copied use_sim_time=%s to internal node",
           use_sim_time ? "true" : "false");
     }
 
@@ -254,29 +251,27 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
       RCLCPP_INFO(logger_, "Detected kinematic chain: %s -> %s",
                   base_link.c_str(), tip_link.c_str());
 
-      auto urdf_parser = std::make_unique<hold_and_weld_application::kinematics::URDFParser>();
+      auto urdf_parser = std::make_unique<hold_and_weld::kinematics::URDFParser>();
 
-      hold_and_weld_application::kinematics::ParsedChain parsed_chain;
+      hold_and_weld::kinematics::ParsedChain parsed_chain;
       parsed_chain = urdf_parser->extract_joint_chain_from_string(urdf_string, base_link, tip_link);
 
-      RCLCPP_INFO(logger_, "Parsed kinematic chain with %zu actuated joints",
+      RCLCPP_DEBUG(logger_, "Parsed kinematic chain with %zu actuated joints",
                   parsed_chain.actuated_joints.size());
 
       kinematics_solver_ =
-        std::make_shared<hold_and_weld_application::kinematics::KinematicsSolver>(parsed_chain);
-      RCLCPP_INFO(logger_, "Kinematics solver initialized");
+        std::make_shared<hold_and_weld::kinematics::KinematicsSolver>(parsed_chain);
 
-      ceres_solver_ = std::make_shared<hold_and_weld_application::kinematics::CeresIKSolver>(
+      ceres_solver_ = std::make_shared<hold_and_weld::kinematics::CeresIKSolver>(
         kinematics_solver_, 1.0);
-      RCLCPP_INFO(logger_, "Ceres IK solver initialized");
 
       approach_validator_ =
-        std::make_unique<hold_and_weld_application::kinematics::ApproachValidator>(
+        std::make_unique<hold_and_weld::kinematics::ApproachValidator>(
         kinematics_solver_,
         ceres_solver_,
-        0.000001);
-      RCLCPP_INFO(logger_, "Approach validator initialized");
-      RCLCPP_INFO(logger_, "All kinematics solvers initialized successfully");
+        config_.manipulability_threshold);
+
+      RCLCPP_INFO(logger_, "Kinematics solvers initialized");
     } catch (const std::exception & e) {
       RCLCPP_ERROR(logger_, "Failed to initialize kinematics: %s", e.what());
       shutdown_worker();
@@ -286,98 +281,181 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     }
   }
 
-  worker_thread_ = std::thread(&WelderActionServer::worker_thread_func, this);
-
   action_server_ = rclcpp_action::create_server<TriggerWelder>(
     this->get_node_base_interface(),
     this->get_node_clock_interface(),
     this->get_node_logging_interface(),
     this->get_node_waitables_interface(),
     "trigger_welder",
-    std::bind(&WelderActionServer::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
-    std::bind(&WelderActionServer::handle_cancel, this, std::placeholders::_1),
-    std::bind(&WelderActionServer::handle_accepted, this, std::placeholders::_1));
+    [this](const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const TriggerWelder::Goal> goal)
+    {
+      return this->handle_goal(uuid, goal);
+    },
+    [this](const std::shared_ptr<GoalHandleTriggerWelder> handle) {
+      return this->handle_cancel(handle);
+    },
+    [this](const std::shared_ptr<GoalHandleTriggerWelder> handle) {
+      this->handle_accepted(handle);
+    }
+  );
 
-  RCLCPP_INFO(logger_, "Welder Action Server configured");
+  // Start the persistent worker thread that will process queued goals.
+  // Currently supports a single queued goal at a time, multi-goal queuing is deferred.
+  // Worker is started last so it cannot receive goals before the action server is live.
+  worker_thread_ = std::thread(&WelderActionServer::worker_thread_func, this);
+
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
 {
-  RCLCPP_INFO(logger_, "Activating Welder Action Server");
-  RCLCPP_INFO(logger_, "Welder Action Server activated and ready!");
+  RCLCPP_INFO(logger_, "Activating welder action server");
+  // No activation work required, the welder has no lifecycle publishers
+  // and no auto-trigger mechanism. Worker thread is already running from on_configure.
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
 {
-  RCLCPP_INFO(logger_, "Deactivating Welder Action Server");
-
-  if (move_group_) {
-    move_group_->stop();
+  RCLCPP_INFO(logger_, "Deactivating welder action server");
+  try {
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Failed to stop move group: %s", e.what());
   }
 
-  RCLCPP_INFO(logger_, "Welder Action Server deactivated");
+  // Wait for any in-flight execute_weld() to finish. We do not call shutdown_worker()
+  // here because the worker must stay alive for re-activation. The executor must still
+  // be running so execute()'s result callback can unblock.
+  {
+    std::shared_future<void> future_copy;
+    {
+      std::lock_guard<std::mutex> lock(execution_future_mutex_);
+      future_copy = execution_future_;
+    }
+    if (future_copy.valid()) {
+      future_copy.wait();
+      RCLCPP_DEBUG(logger_, "In-flight weld execution finished before deactivation completed.");
+    }
+  }
+
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 {
-  RCLCPP_INFO(logger_, "Cleaning up Welder Action Server");
+  RCLCPP_INFO(logger_, "Cleaning up welder action server");
+  // stop() while moveit_executor_ is still spinning so the cancel reaches the controller
+  // and execute() returns cleanly before shutdown_worker() joins the worker thread.
+  try {
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Failed to stop move group: %s", e.what());
+  }
+
+  // Wait for any in-flight execute_weld() to finish. The executor must still
+  // be running so execute()'s result callback can unblock.
+  {
+    std::shared_future<void> future_copy;
+    {
+      std::lock_guard<std::mutex> lock(execution_future_mutex_);
+      future_copy = execution_future_;
+    }
+    if (future_copy.valid()) {
+      future_copy.wait();
+    }
+  }
 
   shutdown_worker();
-  action_server_.reset();
-  move_group_.reset();
 
-  if (moveit_executor_) {
-    moveit_executor_->cancel();
+  action_server_.reset();
+
+  {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
+    move_group_.reset();
   }
-  if (moveit_thread_.joinable()) {
-    moveit_thread_.join();
+
+  // Worker is done, safe to stop the executor now.
+  try {
+    if (moveit_executor_) {
+      moveit_executor_->cancel();
+    }
+    if (moveit_thread_.joinable()) {
+      moveit_thread_.join();
+    }
+    moveit_executor_.reset();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Failed to cleanup MoveIt executor: %s", e.what());
   }
-  moveit_executor_.reset();
 
   approach_validator_.reset();
   kinematics_solver_.reset();
   ceres_solver_.reset();
 
-  RCLCPP_INFO(logger_, "Welder Action Server cleaned up");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 {
-  RCLCPP_INFO(logger_, "Shutting down Welder Action Server");
-
-  // Inline cleanup directly to ensure proper shutdown regardless of current lifecycle state
-  shutdown_worker();
-
-  if (action_server_) {
-    action_server_.reset();
+  RCLCPP_INFO(logger_, "Shutting down welder action server");
+  // stop() while moveit_executor_ is still spinning so the cancel reaches the controller
+  // and execute() returns cleanly before shutdown_worker() joins the worker thread.
+  try {
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Failed to stop move group: %s", e.what());
   }
 
-  if (move_group_) {
-    move_group_->stop();
+  // Wait for any in-flight execute_weld() to finish. The executor must still
+  // be running so execute()'s result callback can unblock.
+  {
+    std::shared_future<void> future_copy;
+    {
+      std::lock_guard<std::mutex> lock(execution_future_mutex_);
+      future_copy = execution_future_;
+    }
+    if (future_copy.valid()) {
+      future_copy.wait();
+    }
+  }
+
+  shutdown_worker();
+
+  action_server_.reset();
+
+  {
+    std::lock_guard<std::mutex> lock(move_group_mutex_);
     move_group_.reset();
   }
 
-  if (moveit_executor_) {
-    moveit_executor_->cancel();
+  // Worker is done, safe to stop the executor now.
+  try {
+    if (moveit_executor_) {
+      moveit_executor_->cancel();
+    }
+    if (moveit_thread_.joinable()) {
+      moveit_thread_.join();
+    }
+    moveit_executor_.reset();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Failed to cleanup MoveIt executor: %s", e.what());
   }
-  if (moveit_thread_.joinable()) {
-    moveit_thread_.join();
-  }
-  moveit_executor_.reset();
 
   approach_validator_.reset();
   kinematics_solver_.reset();
   ceres_solver_.reset();
 
-  RCLCPP_INFO(logger_, "Welder Action Server shutdown complete");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
@@ -385,7 +463,7 @@ void WelderActionServer::load_config_from_yaml()
 {
   std::string yaml_path;
   try {
-    yaml_path = ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
+    yaml_path = ament_index_cpp::get_package_share_directory("hold_and_weld_bringup") +
       "/config/tasks/welding.yaml";
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Failed to get package share directory: %s", e.what());
@@ -400,7 +478,6 @@ void WelderActionServer::load_config_from_yaml()
     return;
   }
 
-  // There are unneeded configurations here kept as backup
   try {
     YAML::Node yaml = YAML::LoadFile(yaml_path);
 
@@ -437,6 +514,9 @@ void WelderActionServer::load_config_from_yaml()
     if (yaml["json_file"]) {
       config_.json_file = yaml["json_file"].as<std::string>();
     }
+    if (yaml["manipulability_threshold"]) {
+      config_.manipulability_threshold = yaml["manipulability_threshold"].as<double>();
+    }
     RCLCPP_INFO(logger_, "Configuration loaded successfully");
   } catch (const YAML::Exception & e) {
     RCLCPP_ERROR(logger_, "YAML parsing error: %s", e.what());
@@ -453,8 +533,8 @@ void WelderActionServer::worker_thread_func()
     std::shared_ptr<GoalHandleTriggerWelder> goal_handle;
 
     {
-      std::unique_lock<std::mutex> lock(work_mutex_);
-      work_cv_.wait(lock, [this] {
+      std::unique_lock<std::mutex> lock(execution_mutex_);
+      execution_cv_.wait(lock, [this] {
           return pending_goal_ != nullptr || shutdown_requested_;
         });
 
@@ -467,21 +547,25 @@ void WelderActionServer::worker_thread_func()
     }
 
     if (goal_handle) {
+      auto promise = std::make_shared<std::promise<void>>();
+      {
+        std::lock_guard<std::mutex> lock(execution_future_mutex_);
+        execution_future_ = promise->get_future().share();
+      }
       execute_weld(goal_handle);
+      promise->set_value();
     }
   }
 }
 
-std::string WelderActionServer::find_latest_json()
+std::string WelderActionServer::find_latest_json() const
 {
-  // First, check if user provided a specific trajectory directory via parameter
   std::string trajectory_dir;
   if (this->has_parameter("trajectory_directory")) {
     trajectory_dir = this->get_parameter("trajectory_directory").as_string();
     RCLCPP_INFO(logger_, "Using trajectory directory from parameter: %s",
                 trajectory_dir.c_str());
   } else {
-    // Fallback: use installed trajectory directory
     try {
       std::string pkg_share =
         ament_index_cpp::get_package_share_directory("hold_and_weld_application");
@@ -527,11 +611,9 @@ std::string WelderActionServer::find_latest_json()
   }
 }
 
-std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string & filepath)
+std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string & filepath) const
 {
   std::vector<WeldSeam> seams;
-
-  RCLCPP_INFO(logger_, "Loading seams from: %s", filepath.c_str());
 
   std::ifstream file(filepath);
   if (!file.is_open()) {
@@ -566,7 +648,6 @@ std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string
         auto s = seam_data["start"];
         seam.start = {s[0], s[1], s[2]};
       }
-      // If missing or wrong size, stays at default {0,0,0}
 
       if (seam_data.contains("end") && seam_data["end"].size() == 3) {
         auto e = seam_data["end"];
@@ -577,7 +658,20 @@ std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string
 
       seam.poses.reserve(seam_data["poses"].size());
       for (const auto & pose_data : seam_data["poses"]) {
-        seam.poses.push_back(json_to_pose(pose_data));
+        try {
+          seam.poses.push_back(json_to_pose(pose_data));
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(
+            logger_, "Seam %s: failed to parse pose — skipping seam. Reason: %s",
+            seam_id.c_str(), e.what());
+          seam.poses.clear();
+          break;
+        }
+      }
+
+      if (seam.poses.empty()) {
+        RCLCPP_WARN(logger_, "Seam %s has no valid poses after parsing, skipping", seam_id.c_str());
+        continue;
       }
 
       seam.num_poses = seam.poses.size();
@@ -609,9 +703,16 @@ rclcpp_action::CancelResponse WelderActionServer::handle_cancel(
   [[maybe_unused]] const std::shared_ptr<GoalHandleTriggerWelder> goal_handle)
 {
   RCLCPP_INFO(logger_, "Received cancel request");
-  if (move_group_) {
-    move_group_->stop();
+
+  // stop() is safe to call without move_group_mutex_ (non-blocking signal).
+  try {
+    if (move_group_) {
+      move_group_->stop();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger_, "Failed to stop move_group: %s", e.what());
   }
+
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -619,10 +720,10 @@ void WelderActionServer::handle_accepted(
   const std::shared_ptr<GoalHandleTriggerWelder> goal_handle)
 {
   {
-    std::lock_guard<std::mutex> lock(work_mutex_);
+    std::lock_guard<std::mutex> lock(execution_mutex_);
     pending_goal_ = goal_handle;
   }
-  work_cv_.notify_one();
+  execution_cv_.notify_one();
 }
 
 void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle)
@@ -690,10 +791,9 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
       continue;
     }
 
-    RCLCPP_INFO(logger_, "Executing seam %zu/%zu: %s",
-                 seam_idx + 1, seams.size(), seam.seam_id.c_str());
-    RCLCPP_INFO(logger_, "  Length: %.3f m", seam.length_m);
-    RCLCPP_INFO(logger_, "  Points: %zu", seam.num_poses);
+    RCLCPP_INFO(logger_, "Seam %zu/%zu: %s (%.3f m, %zu points)",
+                 seam_idx + 1, seams.size(), seam.seam_id.c_str(),
+                 seam.length_m, seam.num_poses);
 
     if (goal_handle->is_canceling()) {
       result->success = false;
@@ -799,10 +899,9 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
   // is computed by backing up along the negative Z axis of the first pose
   Eigen::Vector3d torch_direction = q * Eigen::Vector3d(0, 0, -1);
 
-  // 10cm offset gives enough clearance for OMPL to plan a smooth approach
   Eigen::Vector3d pos0(seam.poses[0].position.x, seam.poses[0].position.y,
     seam.poses[0].position.z);
-  Eigen::Vector3d approach_pos = pos0 - torch_direction * 0.10;
+  Eigen::Vector3d approach_pos = pos0 - torch_direction * config_.approach_offset_z;
 
   geometry_msgs::msg::Pose approach_pose;
   approach_pose.position.x = approach_pos.x();
@@ -810,7 +909,7 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
   approach_pose.position.z = approach_pos.z();
   approach_pose.orientation = seam.poses[0].orientation;
 
-  RCLCPP_INFO(logger_, "Approach Position: (%.3f, %.3f, %.3f)",
+  RCLCPP_DEBUG(logger_, "Approach Position: (%.3f, %.3f, %.3f)",
                approach_pose.position.x, approach_pose.position.y, approach_pose.position.z);
 
   move_group_->setStartStateToCurrentState();
@@ -821,12 +920,15 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
   }
 
   auto current_pose = move_group_->getCurrentPose();
+  if (current_pose.header.frame_id.empty()) {
+    RCLCPP_WARN(logger_, "getCurrentPose() returned invalid pose — skipping distance log");
+  }
   double distance = std::sqrt(
     std::pow(approach_pose.position.x - current_pose.pose.position.x, 2) +
     std::pow(approach_pose.position.y - current_pose.pose.position.y, 2) +
     std::pow(approach_pose.position.z - current_pose.pose.position.z, 2)
   );
-  RCLCPP_INFO(logger_, "Distance to approach target: %.3f m", distance);
+  RCLCPP_DEBUG(logger_, "Distance to approach target: %.3f m", distance);
 
   move_group_->setPoseTarget(approach_pose);
   move_group_->setGoalPositionTolerance(0.001);
@@ -836,6 +938,10 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
   // The approach validator solves IK in the robot's own base frame.
   WeldSeam local_seam = seam;
   const auto * joint_model_group = current_state->getJointModelGroup(config_.welder_group_name);
+  if (!joint_model_group) {
+    RCLCPP_ERROR(logger_, "Joint model group '%s' not found", config_.welder_group_name.c_str());
+    return false;
+  }
   std::string base_link_name = joint_model_group->getLinkModelNames().front();
   Eigen::Isometry3d world_to_base = current_state->getGlobalLinkTransform(base_link_name);
   Eigen::Isometry3d base_to_world = world_to_base.inverse();
@@ -872,9 +978,39 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
       continue;
     }
 
+    const auto & ik_joint_names =
+      move_group_->getRobotModel()
+      ->getJointModelGroup(config_.welder_group_name)
+      ->getVariableNames();
+
+    if (ik_joint_names.size() != 6) {
+      RCLCPP_ERROR(logger_, "Expected 6 IK joints, got %zu — skipping OMPL attempt %d",
+                   ik_joint_names.size(), ompl_attempt);
+      continue;
+    }
+
     Eigen::Matrix<double, 6, 1> q_approach;
+    bool joint_mapping_ok = true;
     for (size_t i = 0; i < 6; ++i) {
-      q_approach(i) = final_point.positions[i];
+      const auto & expected_name = ik_joint_names[i];
+      auto it = std::find(
+        trajectory.joint_names.begin(),
+        trajectory.joint_names.end(),
+        expected_name);
+      if (it == trajectory.joint_names.end()) {
+        RCLCPP_ERROR(logger_,
+                     "Required joint '%s' not found in trajectory joint_names — "
+                     "skipping OMPL attempt %d",
+                     expected_name.c_str(), ompl_attempt);
+        joint_mapping_ok = false;
+        break;
+      }
+      const size_t traj_idx = static_cast<size_t>(
+        std::distance(trajectory.joint_names.begin(), it));
+      q_approach(i) = final_point.positions[traj_idx];
+    }
+    if (!joint_mapping_ok) {
+      continue;
     }
 
     if (config_.use_approach_validator) {
@@ -908,6 +1044,7 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
       if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
         return true;
       }
+      RCLCPP_ERROR(logger_, "Execution failed on OMPL attempt %d", ompl_attempt);
     }
   }
 
@@ -918,8 +1055,20 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
 
 bool WelderActionServer::retract_from_seam(const geometry_msgs::msg::Pose & last_pose)
 {
+  // Retract along the tool's local -Z axis (torch tip direction, away from the work
+  // piece), matching the approach_seam convention of q * (0,0,-1). Offsetting along
+  // world +Z is incorrect for non-horizontal seams.
+  const Eigen::Quaterniond q(
+    last_pose.orientation.w,
+    last_pose.orientation.x,
+    last_pose.orientation.y,
+    last_pose.orientation.z);
+  const Eigen::Vector3d retract_dir = q * Eigen::Vector3d(0.0, 0.0, -1.0);
+
   geometry_msgs::msg::Pose retract_pose = last_pose;
-  retract_pose.position.z += config_.retract_offset_z;
+  retract_pose.position.x += retract_dir.x() * config_.retract_offset_z;
+  retract_pose.position.y += retract_dir.y() * config_.retract_offset_z;
+  retract_pose.position.z += retract_dir.z() * config_.retract_offset_z;
 
   RCLCPP_INFO(logger_, "Retracting from seam to (%.3f, %.3f, %.3f)",
                retract_pose.position.x,
@@ -929,9 +1078,9 @@ bool WelderActionServer::retract_from_seam(const geometry_msgs::msg::Pose & last
   move_group_->setPoseTarget(retract_pose);
   auto result = move_group_->move();
   if (result == moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_INFO(logger_, "Retract complete");
     return true;
   }
+  RCLCPP_ERROR(logger_, "Failed to retract from seam");
   return false;
 }
 
@@ -974,19 +1123,39 @@ bool WelderActionServer::execute_cartesian_path(
 void WelderActionServer::shutdown_worker()
 {
   {
-    std::lock_guard<std::mutex> lock(work_mutex_);
+    std::lock_guard<std::mutex> lock(execution_mutex_);
     shutdown_requested_ = true;
   }
-  work_cv_.notify_one();
+  execution_cv_.notify_one();
 
   if (worker_thread_.joinable()) {
-    worker_thread_.join();
+    // If execute() is still running, worker_thread_.join() would block forever.
+    // Check the execution_future_ to see if execute_weld() has already returned.
+    bool execution_done = true;
+    {
+      std::lock_guard<std::mutex> lock(execution_future_mutex_);
+      if (execution_future_.valid()) {
+        execution_done =
+          (execution_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+      }
+    }
+
+    if (execution_done) {
+      worker_thread_.join();
+    } else {
+      // execute() is still blocked. Detach so we don't hang.
+      // worker_thread_ holds move_group_ via its captured shared_ptr,
+      // so it won't access freed memory after the node is destroyed.
+      RCLCPP_WARN(logger_, "Worker thread still in execute() — detaching."
+                           " move_group_ kept alive by captured shared_ptr.");
+      worker_thread_.detach();
+    }
   }
 }
 
 geometry_msgs::msg::Pose WelderActionServer::transform_pose_to_base_frame(
   const geometry_msgs::msg::Pose & world_pose,
-  const Eigen::Isometry3d & base_to_world_transform)
+  const Eigen::Isometry3d & base_to_world_transform) const
 {
   Eigen::Isometry3d eigen_world_pose = Eigen::Isometry3d::Identity();
   eigen_world_pose.translation() << world_pose.position.x,
@@ -1012,4 +1181,5 @@ geometry_msgs::msg::Pose WelderActionServer::transform_pose_to_base_frame(
   return base_pose;
 }
 
+}  // namespace application
 }  // namespace hold_and_weld

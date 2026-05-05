@@ -339,7 +339,9 @@ class SeamExtractorOCCT:
                 dot = abs(normal_1.Dot(normal_2))
                 return dot > 0.9999
 
-            # General curves: sample points along edge_1 and check distance to edge_2
+            # General curves: sample points along edge_1 and check distance to edge_2.
+            # 5 samples balances cost vs coverage for typical short intersection edges;
+            # increase if false positives occur on long spline edges.
             else:
                 num_samples = 5
                 for i in range(num_samples):

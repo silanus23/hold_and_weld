@@ -19,6 +19,7 @@ retract_offset_z: 0.15          # Offset above seam end for retract (meters)
 cartesian_path_threshold: 0.95  # Minimum fraction of path that must be achievable (0.0-1.0)
 cartesian_step_size: 0.01       # Step size for Cartesian path computation (meters)
 velocity_scaling: 0.3           # Velocity scaling factor (0.0-1.0)
+manipulability_threshold: 1e-6  # Yoshikawa manipulability singularity threshold
 
 # Retry parameters
 max_ompl_planning_attempts: 3        # Maximum OMPL planning attempts for approach

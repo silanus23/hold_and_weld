@@ -25,7 +25,7 @@
 
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -114,7 +114,6 @@ public:
   }
 
 private:
-  // Robot structure (precomputed from URDF)
   size_t dof_;
   std::vector<Eigen::Isometry3d> joint_local_transforms_;
   std::vector<Eigen::Vector3d> joint_axes_;
@@ -132,6 +131,6 @@ private:
 };
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__KINEMATICS__KINEMATICS_SOLVER_HPP_

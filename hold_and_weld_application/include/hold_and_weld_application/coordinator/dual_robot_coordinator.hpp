@@ -29,6 +29,8 @@
 
 namespace hold_and_weld
 {
+namespace application
+{
 
 /**
  * @class DualRobotCoordinator
@@ -171,37 +173,28 @@ private:
    */
   void welder_result_callback(const GoalHandleTriggerWelder::WrappedResult & result);
 
-  // Parameters
-  bool auto_start_{true};  ///< Auto-start sequence when ready
+  bool auto_start_{true};
 
-  // State tracking
   std::atomic<bool> is_active_{false};
   std::atomic<bool> system_ready_{false};
   std::atomic<bool> sequence_started_{false};
   std::atomic<bool> sequence_running_{false};
 
-  // Readiness monitoring
   rclcpp::TimerBase::SharedPtr readiness_timer_;
-
-  // Controller action clients (for readiness checking)
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr robot1_controller_client_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr robot2_controller_client_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_controller_client_;
 
-  // Application action clients
   rclcpp_action::Client<TriggerGripper>::SharedPtr gripper_client_;
   rclcpp_action::Client<TriggerWelder>::SharedPtr welder_client_;
 
-  // Manual trigger service
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_service_;
-
-  // Mutexes
-  std::mutex state_mutex_;
-
-  // Logger
   rclcpp::Logger logger_;
+
+  std::mutex state_mutex_;
 };
 
+}  // namespace application
 }  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__COORDINATOR__DUAL_ROBOT_COORDINATOR_HPP_

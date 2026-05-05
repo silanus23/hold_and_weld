@@ -27,13 +27,9 @@
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 #include <geometry_msgs/msg/pose.hpp>
 
-// Forward declaration to avoid circular dependency
-namespace hold_and_weld
-{
-struct WeldSeam;
-}
+#include "hold_and_weld_application/utils.hpp"
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -60,12 +56,12 @@ public:
    * @brief Construct approach validator
    * @param kin_solver Forward kinematics solver for Jacobian computation
    * @param ik_solver Inverse kinematics solver for trajectory following
-   * @param manipulatibility_threshold Minimum manipulability index (singularity threshold)
+   * @param manipulability_threshold Minimum manipulability index (singularity threshold)
    */
   explicit ApproachValidator(
     std::shared_ptr<KinematicsSolver> kin_solver,
     std::shared_ptr<CeresIKSolver> ik_solver,
-    double manipulatibility_threshold);
+    double manipulability_threshold);
 
   ~ApproachValidator() = default;
 
@@ -73,7 +69,7 @@ public:
    * @brief Set the weld seam to validate against.
    * @param seam Weld seam containing the target poses for the static-walk validation.
    */
-  void set_weld_seam(const hold_and_weld::WeldSeam & seam) {seam_ = &seam;}
+  void set_weld_seam(const hold_and_weld::WeldSeam & seam) {seam_ = seam;}
 
   /**
    * @brief Validate approach configuration through entire seam
@@ -97,16 +93,16 @@ private:
    * @param q Joint configuration
    * @return Manipulability index (sqrt(det(J*J^T)))
    */
-  double compute_manipulatibility(const Vector6d & q);
+  double compute_manipulability(const Vector6d & q) const;
 
   std::shared_ptr<KinematicsSolver> kinematics_solver_;
   std::shared_ptr<CeresIKSolver> ceres_ik_solver_;
 
-  double manipulatibility_threshold_;
-  const hold_and_weld::WeldSeam * seam_;
+  double manipulability_threshold_;
+  std::optional<hold_and_weld::WeldSeam> seam_;
 };
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__KINEMATICS__APPROACH_VALIDATOR_HPP_

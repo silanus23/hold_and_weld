@@ -149,6 +149,12 @@ class WeldPlanner:
         if sampled[-1] != len(points) - 1:
             sampled.append(len(points) - 1)
 
+        if len(sampled) == len(points):
+            logger.debug(
+                f'waypoint_spacing ({self.waypoint_spacing_m*1000:.1f}mm) is smaller than '
+                f'typical point spacing — all {len(points)} points sampled'
+            )
+
         return sampled
 
     def _compute_pose_at_index(

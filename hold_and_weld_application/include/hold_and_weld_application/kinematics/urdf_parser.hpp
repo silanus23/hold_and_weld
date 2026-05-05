@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -149,14 +149,14 @@ private:
      * @param path Path string (may be package:// URI or absolute path)
      * @return Resolved absolute path
      */
-  std::string resolve_package_path(const std::string & path);
+  static std::string resolve_package_path(const std::string & path);
 
     /**
      * @brief Load and parse URDF file
      * @param urdf_path Path to URDF file
      * @return Parsed URDF model
      */
-  urdf::ModelInterfaceSharedPtr load_urdf(const std::string & urdf_path);
+  static urdf::ModelInterfaceSharedPtr load_urdf(const std::string & urdf_path);
 
     /**
      * @brief Build kinematic chain from base to tip link
@@ -165,7 +165,7 @@ private:
      * @param tip_link Tip link name
      * @return Ordered vector of links from base to tip
      */
-  std::vector<urdf::LinkConstSharedPtr> build_link_chain(
+  static std::vector<urdf::LinkConstSharedPtr> build_link_chain(
     const urdf::ModelInterfaceSharedPtr & model,
     const std::string & base_link,
     const std::string & tip_link);
@@ -179,7 +179,7 @@ private:
      * @param link_chain Ordered vector of links
      * @return Vector of actuated joint information
      */
-  std::vector<JointInfo> extract_joints_from_chain(
+  static std::vector<JointInfo> extract_joints_from_chain(
     const std::vector<urdf::LinkConstSharedPtr> & link_chain);
 
     /**
@@ -192,7 +192,7 @@ private:
      * @param actuated_joints Vector of actuated joints (to find last one)
      * @return Accumulated tool transform
      */
-  Eigen::Isometry3d extract_tool_transform(
+  static Eigen::Isometry3d extract_tool_transform(
     const std::vector<urdf::LinkConstSharedPtr> & link_chain,
     const std::vector<JointInfo> & actuated_joints);
 
@@ -201,7 +201,7 @@ private:
      * @param pose URDF pose (position + quaternion)
      * @return Eigen isometry (4x4 homogeneous transform)
      */
-  Eigen::Isometry3d urdf_pose_to_eigen(const urdf::Pose & pose);
+  static Eigen::Isometry3d urdf_pose_to_eigen(const urdf::Pose & pose);
 
     /**
      * @brief Validate extracted joint chain
@@ -215,7 +215,7 @@ private:
      * @param joints Vector of joint information to validate
      * @throws std::runtime_error if validation fails
      */
-  void validate_chain(const std::vector<JointInfo> & joints);
+  static void validate_chain(const std::vector<JointInfo> & joints);
 
   /**
   * @brief Parses a raw URDF XML string into a urdf::Model object in memory.
@@ -224,10 +224,10 @@ private:
   * @return urdf::ModelInterfaceSharedPtr A shared pointer to the parsed URDF model.
   * @throws std::runtime_error If the URDF string is invalid or fails to parse.
   */
-  urdf::ModelInterfaceSharedPtr load_urdf_from_string(const std::string & urdf_string);
+  static urdf::ModelInterfaceSharedPtr load_urdf_from_string(const std::string & urdf_string);
 };
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__KINEMATICS__URDF_PARSER_HPP_

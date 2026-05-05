@@ -19,9 +19,14 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
-  auto move_to_pose_server = std::make_shared<hold_and_weld::MoveToPoseActionServer>();
+  auto move_to_pose_server = std::make_shared<hold_and_weld::application::MoveToPoseActionServer>();
 
   rclcpp::spin(move_to_pose_server);
+
+  // manual_shutdown() must be called while the ROS context is still valid:
+  // it calls stop() on all cached move groups so the controller can process
+  // the cancel before the context is torn down by rclcpp::shutdown().
+  move_to_pose_server->manual_shutdown();
 
   rclcpp::shutdown();
   return 0;

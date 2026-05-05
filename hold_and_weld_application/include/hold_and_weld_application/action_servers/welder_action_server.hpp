@@ -16,7 +16,9 @@
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__WELDER_ACTION_SERVER_HPP_
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,22 +42,12 @@
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
+#include "hold_and_weld_application/utils.hpp"
+
 namespace hold_and_weld
 {
-
-/**
- * @struct WeldSeam
- * @brief Represents a welding seam with geometric and pose information.
- */
-struct WeldSeam
+namespace application
 {
-  std::string seam_id;
-  double length_m = 0.0;
-  std::array<double, 3> start = {0.0, 0.0, 0.0};
-  std::array<double, 3> end = {0.0, 0.0, 0.0};
-  std::vector<geometry_msgs::msg::Pose> poses;
-  size_t num_poses = 0;
-};
 
 /**
  * @struct WelderConfig
@@ -74,6 +66,7 @@ struct WelderConfig
   int max_cartesian_retries = 2;
   bool use_approach_validator = true;
   std::string json_file;
+  double manipulability_threshold = 1e-6;
 };
 
 /**
@@ -141,8 +134,15 @@ public:
   rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
   on_shutdown(const rclcpp_lifecycle::State & state);
 
+  /**
+   * @brief Clean shutdown called from main() after spin() returns, before rclcpp::shutdown().
+   *
+   * Sets shutdown_requested_, calls stop() while the ROS context is still valid,
+   * then waits up to 2 s for the current execute() to return before giving up.
+   */
+  void manual_shutdown();
+
 private:
-    // Action server callbacks
   /**
    * @brief Handle incoming goal requests from action clients.
    * @param uuid Unique identifier for the goal.
@@ -167,8 +167,6 @@ private:
    */
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
-
-    // Initialization
   /**
    * @brief Initialize MoveIt interface and planning scene.
    */
@@ -183,17 +181,15 @@ private:
    * @brief Find the latest JSON file containing weld seam data.
    * @return Path to the latest JSON file, or empty string if not found.
    */
-  std::string find_latest_json();
+  std::string find_latest_json() const;
 
-    // JSON loading
   /**
    * @brief Load weld seams from a JSON file.
    * @param filepath Path to the JSON file containing seam definitions.
    * @return Vector of WeldSeam structures loaded from the file.
    */
-  std::vector<WeldSeam> load_seams_from_json(const std::string & filepath);
+  std::vector<WeldSeam> load_seams_from_json(const std::string & filepath) const;
 
-    // Worker thread
   /**
    * @brief Worker thread function for asynchronous goal execution.
    */
@@ -204,7 +200,6 @@ private:
    */
   void shutdown_worker();
 
-    // Execution
   /**
    * @brief Execute welding operation for a given goal.
    * @param goal_handle Handle to the goal being executed.
@@ -241,13 +236,13 @@ private:
     int32_t points_before_seam,
     int32_t total_waypoints);
 
-  // TODO(@silanus23): Put controls over this
   /**
    * @brief Convert a JSON pose object to a geometry_msgs::msg::Pose message.
+   * TODO(@silanus23): Put controls over this
    * @param pose_data JSON object containing position and quaternion arrays.
    * @return Converted Pose message.
    */
-  geometry_msgs::msg::Pose json_to_pose(const nlohmann::json & pose_data)
+  geometry_msgs::msg::Pose json_to_pose(const nlohmann::json & pose_data) const
   {
     // Validate required fields
     if (!pose_data.contains("position") || !pose_data.contains("quaternion")) {
@@ -288,45 +283,38 @@ private:
     pose.orientation.w = q.w();
 
     return pose;
-  }    // MoveIt interface
+  }
   /**
-   * Transforms a pose from the world frame to the robot's base frame.
-   * @param world_pose The pose in the world frame.
-   * @param base_to_world_transform The transform from base to world frame.
    * @return The pose in the robot's base frame.
    */
   geometry_msgs::msg::Pose transform_pose_to_base_frame(
     const geometry_msgs::msg::Pose & world_pose,
-    const Eigen::Isometry3d & base_to_world_transform);
+    const Eigen::Isometry3d & base_to_world_transform) const;
+
+  rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
-
-    // MoveIt internal node execution
   rclcpp::executors::SingleThreadedExecutor::SharedPtr moveit_executor_;
   std::thread moveit_thread_;
 
-    // Action server
-  rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
-
-  // Worker thread for asynchronous goal execution
   std::thread worker_thread_;
-  std::mutex work_mutex_;
-  std::condition_variable work_cv_;
+  std::mutex execution_mutex_;
+  std::condition_variable execution_cv_;
   std::shared_ptr<GoalHandleTriggerWelder> pending_goal_;
-  bool shutdown_requested_ = false;
+  std::atomic<bool> shutdown_requested_{false};
+  std::shared_future<void> execution_future_;
+  std::mutex execution_future_mutex_;
+  std::mutex move_group_mutex_;
 
-  // Kinematics calculators
-  std::shared_ptr<hold_and_weld_application::kinematics::CeresIKSolver> ceres_solver_;
-  std::shared_ptr<hold_and_weld_application::kinematics::KinematicsSolver> kinematics_solver_;
-  std::unique_ptr<hold_and_weld_application::kinematics::ApproachValidator> approach_validator_;
+  std::shared_ptr<hold_and_weld::kinematics::CeresIKSolver> ceres_solver_;
+  std::shared_ptr<hold_and_weld::kinematics::KinematicsSolver> kinematics_solver_;
+  std::unique_ptr<hold_and_weld::kinematics::ApproachValidator> approach_validator_;
 
-  // Configuration
   WelderConfig config_;
-
-  // Logger
   rclcpp::Logger logger_;
 };
 
+}  // namespace application
 }  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__WELDER_ACTION_SERVER_HPP_

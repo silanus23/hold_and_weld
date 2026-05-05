@@ -15,35 +15,35 @@
 #include "hold_and_weld_application/action_servers/move_to_pose_action_server.hpp"
 
 #include <chrono>
+#include <vector>
 
 namespace hold_and_weld
 {
+namespace application
+{
 
 MoveToPoseActionServer::MoveToPoseActionServer(const rclcpp::NodeOptions & options)
-: Node("move_to_pose_action_server", options)
+: Node("move_to_pose_action_server", options),
+  logger_(rclcpp::get_logger("application"))
 {
-  // Declare parameters
   declare_parameter("planning_time", 5.0);
   declare_parameter("max_planning_attempts", 10);
   declare_parameter("velocity_scaling", 0.3);
   declare_parameter("acceleration_scaling", 0.3);
   declare_parameter("goal_tolerance", 0.01);
 
-  // Load configuration
   config_.planning_time = get_parameter("planning_time").as_double();
   config_.max_planning_attempts = get_parameter("max_planning_attempts").as_int();
   config_.velocity_scaling = get_parameter("velocity_scaling").as_double();
   config_.acceleration_scaling = get_parameter("acceleration_scaling").as_double();
   config_.goal_tolerance = get_parameter("goal_tolerance").as_double();
 
-  RCLCPP_INFO(get_logger(), "MoveToPose Action Server starting");
-  RCLCPP_INFO(get_logger(), "  Planning time: %.1f s", config_.planning_time);
-  RCLCPP_INFO(get_logger(), "  Velocity scaling: %.2f", config_.velocity_scaling);
-  RCLCPP_INFO(get_logger(), "  Acceleration scaling: %.2f", config_.acceleration_scaling);
+  RCLCPP_INFO(logger_, "  Planning time: %.1f s", config_.planning_time);
+  RCLCPP_INFO(logger_, "  Velocity scaling: %.2f", config_.velocity_scaling);
+  RCLCPP_INFO(logger_, "  Acceleration scaling: %.2f", config_.acceleration_scaling);
 
   using namespace std::placeholders;
 
-  // Create action server
   action_server_ = rclcpp_action::create_server<MoveToPose>(
     this,
     "move_to_pose",
@@ -52,20 +52,74 @@ MoveToPoseActionServer::MoveToPoseActionServer(const rclcpp::NodeOptions & optio
     std::bind(&MoveToPoseActionServer::handle_accepted, this, _1)
   );
 
-  // Start worker thread
+  // Start the persistent worker thread after the action server is live
+  // so it cannot receive goals before the server is ready to handle them.
   worker_thread_ = std::thread(&MoveToPoseActionServer::worker_thread_func, this);
-
-  RCLCPP_INFO(get_logger(), "MoveToPose Action Server ready");
 }
 
 MoveToPoseActionServer::~MoveToPoseActionServer()
 {
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    shutdown_ = true;
-  }
-  queue_cv_.notify_all();
+  // manual_shutdown() should have already been called from main().
+  // This is a safety net for any path that bypasses main().
+  manual_shutdown();
+}
 
+void MoveToPoseActionServer::manual_shutdown()
+{
+  // Idempotent — safe to call multiple times (destructor calls it as a safety net).
+  if (shutdown_requested_.exchange(true)) {
+    return;
+  }
+
+  RCLCPP_DEBUG(logger_, "Manual shutdown: signalling stop");
+
+  // Snapshot the cache and call stop() on every move group while the ROS context
+  // is still valid, so the cancel request can reach the controller.
+  // move_group_cache_mutex_ is released before calling stop() to avoid holding
+  // the lock across any MoveIt internal callback processing.
+  std::vector<std::shared_ptr<moveit::planning_interface::MoveGroupInterface>> mg_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(move_group_cache_mutex_);
+    for (auto & [name, mg] : move_group_cache_) {
+      mg_snapshot.push_back(mg);
+    }
+  }
+  for (auto & mg : mg_snapshot) {
+    try {
+      mg->stop();
+    } catch (...) {
+      RCLCPP_WARN(logger_, "Exception caught while stopping a move group during shutdown");
+    }
+  }
+
+  // Poll until execute() returns or the ROS context dies — whichever comes first.
+  std::shared_future<void> future_copy;
+  {
+    std::lock_guard<std::mutex> lock(execution_future_mutex_);
+    future_copy = execution_future_;
+  }
+
+  if (future_copy.valid()) {
+    while (rclcpp::ok() &&
+      future_copy.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout)
+    {}
+
+    if (future_copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      RCLCPP_INFO(logger_, "Execution finished cleanly.");
+    } else {
+      // Context died before execute() returned — detach worker to avoid std::terminate().
+      RCLCPP_WARN(logger_, "ROS context shut down before execute() returned — detaching worker."
+                           " Move group cache kept alive by cached shared_ptrs.");
+      execution_cv_.notify_all();
+      if (worker_thread_.joinable()) {
+        worker_thread_.detach();
+      }
+      return;
+    }
+  }
+
+  // Worker is idle — wake it so it can see shutdown_requested_ and exit.
+  execution_cv_.notify_all();
   if (worker_thread_.joinable()) {
     worker_thread_.join();
   }
@@ -77,33 +131,33 @@ rclcpp_action::GoalResponse MoveToPoseActionServer::handle_goal(
 {
   (void)uuid;
 
-  RCLCPP_INFO(get_logger(), "Received goal request:");
-  RCLCPP_INFO(get_logger(), "  Mode: %s",
+  RCLCPP_INFO(logger_, "Received goal request:");
+  RCLCPP_INFO(logger_, "  Mode: %s",
               goal->mode == MoveToPose::Goal::JOINT_SPACE ? "JOINT_SPACE" : "CARTESIAN_SPACE");
-  RCLCPP_INFO(get_logger(), "  Move group: %s", goal->move_group_name.c_str());
+  RCLCPP_INFO(logger_, "  Move group: %s", goal->move_group_name.c_str());
 
   if (goal->move_group_name.empty()) {
-    RCLCPP_ERROR(get_logger(), "Move group name cannot be empty");
+    RCLCPP_ERROR(logger_, "Move group name cannot be empty");
     return rclcpp_action::GoalResponse::REJECT;
   }
 
   if (goal->mode == MoveToPose::Goal::JOINT_SPACE) {
     if (goal->joint_names.empty() || goal->joint_positions.empty()) {
-      RCLCPP_ERROR(get_logger(), "Joint names and positions cannot be empty for JOINT_SPACE mode");
+      RCLCPP_ERROR(logger_, "Joint names and positions cannot be empty for JOINT_SPACE mode");
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (goal->joint_names.size() != goal->joint_positions.size()) {
-      RCLCPP_ERROR(get_logger(), "Joint names and positions must have the same size");
+      RCLCPP_ERROR(logger_, "Joint names and positions must have the same size");
       return rclcpp_action::GoalResponse::REJECT;
     }
-    RCLCPP_INFO(get_logger(), "  Joint targets: %zu joints", goal->joint_names.size());
+    RCLCPP_INFO(logger_, "  Joint targets: %zu joints", goal->joint_names.size());
   } else if (goal->mode == MoveToPose::Goal::CARTESIAN_SPACE) {
-    RCLCPP_INFO(get_logger(), "  Cartesian target: [%.3f, %.3f, %.3f]",
+    RCLCPP_INFO(logger_, "  Cartesian target: [%.3f, %.3f, %.3f]",
                 goal->cartesian_target.position.x,
                 goal->cartesian_target.position.y,
                 goal->cartesian_target.position.z);
   } else {
-    RCLCPP_ERROR(get_logger(), "Invalid mode: %d", goal->mode);
+    RCLCPP_ERROR(logger_, "Invalid mode: %d", goal->mode);
     return rclcpp_action::GoalResponse::REJECT;
   }
 
@@ -113,8 +167,28 @@ rclcpp_action::GoalResponse MoveToPoseActionServer::handle_goal(
 rclcpp_action::CancelResponse MoveToPoseActionServer::handle_cancel(
   const std::shared_ptr<GoalHandleMoveToPose> goal_handle)
 {
-  RCLCPP_INFO(get_logger(), "Received request to cancel goal");
+  RCLCPP_INFO(logger_, "Received request to cancel goal");
   (void)goal_handle;
+
+  // Snapshot the cache under the lock, then call stop() without holding it.
+  // move_group_cache_mutex_ must not be held across stop() calls: stop() is a
+  // non-blocking publish but this keeps the pattern consistent with the rule
+  // that we never hold the cache lock across MoveIt calls.
+  std::vector<std::shared_ptr<moveit::planning_interface::MoveGroupInterface>> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(move_group_cache_mutex_);
+    for (auto & [name, mg] : move_group_cache_) {
+      snapshot.push_back(mg);
+    }
+  }
+  for (auto & mg : snapshot) {
+    try {
+      mg->stop();
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(logger_, "Failed to stop move group: %s", e.what());
+    }
+  }
+
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -122,22 +196,26 @@ void MoveToPoseActionServer::handle_accepted(
   const std::shared_ptr<GoalHandleMoveToPose> goal_handle)
 {
   {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::lock_guard<std::mutex> lock(execution_mutex_);
     pending_goal_ = goal_handle;
   }
-  queue_cv_.notify_one();
+  execution_cv_.notify_one();
 }
 
 void MoveToPoseActionServer::worker_thread_func()
 {
-  while (rclcpp::ok()) {
+  // TODO(berkan): Add a watchdog timeout on execute_goal() to prevent the worker from
+  // blocking indefinitely if the controller stops responding.
+  while (true) {
     std::shared_ptr<GoalHandleMoveToPose> goal_handle;
 
     {
-      std::unique_lock<std::mutex> lock(queue_mutex_);
-      queue_cv_.wait(lock, [this] {return pending_goal_ != nullptr || shutdown_;});
+      std::unique_lock<std::mutex> lock(execution_mutex_);
+      execution_cv_.wait(lock, [this] {
+          return pending_goal_ != nullptr || shutdown_requested_.load();
+        });
 
-      if (shutdown_) {
+      if (shutdown_requested_.load() && pending_goal_ == nullptr) {
         break;
       }
 
@@ -146,7 +224,13 @@ void MoveToPoseActionServer::worker_thread_func()
     }
 
     if (goal_handle) {
+      auto promise = std::make_shared<std::promise<void>>();
+      {
+        std::lock_guard<std::mutex> lock(execution_future_mutex_);
+        execution_future_ = promise->get_future().share();
+      }
       execute_goal(goal_handle);
+      promise->set_value();
     }
   }
 }
@@ -157,45 +241,60 @@ void MoveToPoseActionServer::execute_goal(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<MoveToPose::Result>();
 
-  RCLCPP_INFO(get_logger(), "Executing goal");
+  RCLCPP_INFO(logger_, "Executing goal");
 
   auto start_time = std::chrono::steady_clock::now();
 
-  // Get or create move group
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group;
   {
     std::lock_guard<std::mutex> lock(move_group_cache_mutex_);
     auto it = move_group_cache_.find(goal->move_group_name);
     if (it != move_group_cache_.end()) {
       move_group = it->second;
-      RCLCPP_INFO(get_logger(), "Using cached move group: %s", goal->move_group_name.c_str());
-    } else {
-      RCLCPP_INFO(get_logger(), "Creating new move group: %s", goal->move_group_name.c_str());
-      try {
-        move_group = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
-          shared_from_this(), goal->move_group_name);
+      RCLCPP_INFO(logger_, "Using cached move group: %s", goal->move_group_name.c_str());
+    }
+  }
 
-        // Configure move group
-        move_group->setPlanningTime(config_.planning_time);
-        move_group->setNumPlanningAttempts(config_.max_planning_attempts);
-        move_group->setMaxVelocityScalingFactor(config_.velocity_scaling);
-        move_group->setMaxAccelerationScalingFactor(config_.acceleration_scaling);
-        move_group->setGoalTolerance(config_.goal_tolerance);
+  if (!move_group) {
+    // MoveGroupInterface construction makes synchronous service calls that must
+    // be processed by the node's executor (running on the main thread via
+    // rclcpp::spin). The mutex MUST NOT be held during construction: handle_cancel
+    // also acquires move_group_cache_mutex_, and since handle_cancel runs on the
+    // same executor thread that needs to process those service responses, holding
+    // the lock here would deadlock.
+    RCLCPP_INFO(logger_, "Creating new move group: %s", goal->move_group_name.c_str());
+    try {
+      auto new_mg = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
+        shared_from_this(), goal->move_group_name);
 
-        move_group_cache_[goal->move_group_name] = move_group;
-      } catch (const std::exception & e) {
-        RCLCPP_ERROR(get_logger(), "Failed to create move group: %s", e.what());
-        result->success = false;
-        result->message = "Failed to create move group: " + std::string(e.what());
-        goal_handle->abort(result);
-        return;
+      new_mg->setPlanningTime(config_.planning_time);
+      new_mg->setNumPlanningAttempts(config_.max_planning_attempts);
+      new_mg->setMaxVelocityScalingFactor(config_.velocity_scaling);
+      new_mg->setMaxAccelerationScalingFactor(config_.acceleration_scaling);
+      new_mg->setGoalTolerance(config_.goal_tolerance);
+
+      // Re-acquire the lock only to insert the finished object into the cache.
+      // Check again in case a concurrent goal already inserted the same group.
+      std::lock_guard<std::mutex> lock(move_group_cache_mutex_);
+      auto it = move_group_cache_.find(goal->move_group_name);
+      if (it != move_group_cache_.end()) {
+        // Another goal won the race — use the already-cached instance.
+        move_group = it->second;
+      } else {
+        move_group_cache_[goal->move_group_name] = new_mg;
+        move_group = new_mg;
       }
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(logger_, "Failed to create move group: %s", e.what());
+      result->success = false;
+      result->message = "Failed to create move group: " + std::string(e.what());
+      goal_handle->abort(result);
+      return;
     }
   }
 
   bool success = false;
 
-  // Execute based on mode
   if (goal->mode == MoveToPose::Goal::JOINT_SPACE) {
     success = execute_joint_space_motion(goal_handle, goal, move_group);
   } else if (goal->mode == MoveToPose::Goal::CARTESIAN_SPACE) {
@@ -210,11 +309,11 @@ void MoveToPoseActionServer::execute_goal(
 
   if (success) {
     result->message = "Motion completed successfully";
-    RCLCPP_INFO(get_logger(), "Goal succeeded in %.2f seconds", result->execution_time_sec);
+    RCLCPP_INFO(logger_, "Goal succeeded in %.2f seconds", result->execution_time_sec);
     goal_handle->succeed(result);
   } else {
     result->message = "Motion failed";
-    RCLCPP_ERROR(get_logger(), "Goal failed after %.2f seconds", result->execution_time_sec);
+    RCLCPP_ERROR(logger_, "Goal failed after %.2f seconds", result->execution_time_sec);
     goal_handle->abort(result);
   }
 }
@@ -224,36 +323,31 @@ bool MoveToPoseActionServer::execute_joint_space_motion(
   const std::shared_ptr<const MoveToPose::Goal> goal,
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group)
 {
-  RCLCPP_INFO(get_logger(), "Executing joint space motion");
+  RCLCPP_INFO(logger_, "Executing joint space motion");
 
-  // Convert parallel arrays to std::map
   std::map<std::string, double> joint_targets;
   for (size_t i = 0; i < goal->joint_names.size(); ++i) {
     joint_targets[goal->joint_names[i]] = goal->joint_positions[i];
   }
 
-  // Set joint value target
   move_group->setJointValueTarget(joint_targets);
 
-  // Plan
   publish_feedback(goal_handle, "Planning joint space motion", 10.0);
   moveit::planning_interface::MoveGroupInterface::Plan plan;
   bool plan_success = (move_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
   if (!plan_success) {
-    RCLCPP_ERROR(get_logger(), "Planning failed");
+    RCLCPP_ERROR(logger_, "Planning failed");
     return false;
   }
 
-  RCLCPP_INFO(get_logger(), "Planning successful");
+  RCLCPP_INFO(logger_, "Planning successful");
 
-  // Check for cancellation
   if (goal_handle->is_canceling()) {
-    RCLCPP_WARN(get_logger(), "Goal cancelled during planning");
+    RCLCPP_WARN(logger_, "Goal cancelled during planning");
     return false;
   }
 
-  // Execute
   publish_feedback(goal_handle, "Executing joint space motion", 50.0);
   auto execute_result = move_group->execute(plan);
 
@@ -261,7 +355,7 @@ bool MoveToPoseActionServer::execute_joint_space_motion(
     publish_feedback(goal_handle, "Joint space motion complete", 100.0);
     return true;
   } else {
-    RCLCPP_ERROR(get_logger(), "Execution failed");
+    RCLCPP_ERROR(logger_, "Execution failed");
     return false;
   }
 }
@@ -271,30 +365,26 @@ bool MoveToPoseActionServer::execute_cartesian_space_motion(
   const std::shared_ptr<const MoveToPose::Goal> goal,
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group)
 {
-  RCLCPP_INFO(get_logger(), "Executing Cartesian space motion");
+  RCLCPP_INFO(logger_, "Executing Cartesian space motion");
 
-  // Set pose target
   move_group->setPoseTarget(goal->cartesian_target);
 
-  // Plan
   publish_feedback(goal_handle, "Planning Cartesian space motion", 10.0);
   moveit::planning_interface::MoveGroupInterface::Plan plan;
   bool plan_success = (move_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
   if (!plan_success) {
-    RCLCPP_ERROR(get_logger(), "Planning failed");
+    RCLCPP_ERROR(logger_, "Planning failed");
     return false;
   }
 
-  RCLCPP_INFO(get_logger(), "Planning successful");
+  RCLCPP_INFO(logger_, "Planning successful");
 
-  // Check for cancellation
   if (goal_handle->is_canceling()) {
-    RCLCPP_WARN(get_logger(), "Goal cancelled during planning");
+    RCLCPP_WARN(logger_, "Goal cancelled during planning");
     return false;
   }
 
-  // Execute
   publish_feedback(goal_handle, "Executing Cartesian space motion", 50.0);
   auto execute_result = move_group->execute(plan);
 
@@ -302,7 +392,7 @@ bool MoveToPoseActionServer::execute_cartesian_space_motion(
     publish_feedback(goal_handle, "Cartesian space motion complete", 100.0);
     return true;
   } else {
-    RCLCPP_ERROR(get_logger(), "Execution failed");
+    RCLCPP_ERROR(logger_, "Execution failed");
     return false;
   }
 }
@@ -318,4 +408,5 @@ void MoveToPoseActionServer::publish_feedback(
   goal_handle->publish_feedback(feedback);
 }
 
+}  // namespace application
 }  // namespace hold_and_weld

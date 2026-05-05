@@ -794,14 +794,32 @@ class PathCreator:
         circle_center, radius, circle_error = self._fit_circle(points)
 
         if line_error < tie_error_threshold and circle_error < tie_error_threshold:
-            # Large radius arc is geometrically indistinguishable from a line
+            # Both fits are excellent — distinguish by radius and relative error.
+            # Large radius: arc is geometrically indistinguishable from a line, prefer line.
             if radius is not None and radius > max_realistic_radius:
+                logger.debug(
+                    f'Tie-break: radius={radius:.3f}m exceeds max_realistic_radius, classifying as line'
+                )
+                return 'line', {
+                    'center': line_center,
+                    'direction': line_direction,
+                    'error': line_error,
+                }
+            # When both errors are tiny, prefer line unless circle fit is strictly better.
+            # Avoids misclassifying near-straight segments as arcs due to numerical noise.
+            elif line_error <= circle_error:
+                logger.debug(
+                    f'Tie-break: line_error={line_error:.6f} <= circle_error={circle_error:.6f}, classifying as line'
+                )
                 return 'line', {
                     'center': line_center,
                     'direction': line_direction,
                     'error': line_error,
                 }
             else:
+                logger.debug(
+                    f'Tie-break: circle_error={circle_error:.6f} < line_error={line_error:.6f}, classifying as arc'
+                )
                 return 'arc', {
                     'center': circle_center,
                     'radius': radius,

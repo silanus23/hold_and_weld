@@ -21,10 +21,10 @@
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
-using hold_and_weld_application::kinematics::CeresIKSolver;
-using hold_and_weld_application::kinematics::KinematicsSolver;
-using hold_and_weld_application::kinematics::URDFParser;
-using hold_and_weld_application::kinematics::ParsedChain;
+using hold_and_weld::kinematics::CeresIKSolver;
+using hold_and_weld::kinematics::KinematicsSolver;
+using hold_and_weld::kinematics::URDFParser;
+using hold_and_weld::kinematics::ParsedChain;
 
 namespace
 {

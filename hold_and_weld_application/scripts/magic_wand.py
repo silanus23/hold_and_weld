@@ -15,6 +15,7 @@
 # limitations under the License.
 """Magic wand to spawn child_link at end_pose and visualize JSON surfaces."""
 
+import colorsys
 import glob
 import json
 import os
@@ -262,10 +263,9 @@ class MagicWand(Node):
         """Load the latest trajectory JSON and create torch tip markers."""
         # Point directly to source trajectories directory
         # This works whether running from source or install
-        workspace_root = os.path.expanduser('~/ros2_yaskawa')
         trajectories_dir = os.path.join(
-            workspace_root,
-            'src/hold_and_weld/hold_and_weld_application/trajectories'
+            get_package_share_directory('hold_and_weld_application'),
+            'trajectories'
         )
 
         if not os.path.exists(trajectories_dir):
@@ -373,7 +373,7 @@ class MagicWand(Node):
                 # Color based on seam (rainbow effect)
                 color = ColorRGBA()
                 hue = (hash(seam_name) % 360) / 360.0
-                color.r, color.g, color.b = self.hsv_to_rgb(hue, 1.0, 1.0)
+                color.r, color.g, color.b = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
                 color.a = 0.8
                 axis_marker.color = color
 
@@ -402,11 +402,6 @@ class MagicWand(Node):
             'Check RViz InteractiveMarkers display with topic: '
             '/torch_tips/update'
         )
-
-    def hsv_to_rgb(self, h, s, v):
-        """Convert HSV to RGB."""
-        import colorsys
-        return colorsys.hsv_to_rgb(h, s, v)
 
     def marker_feedback(self, feedback):
         """Handle interactive marker feedback."""

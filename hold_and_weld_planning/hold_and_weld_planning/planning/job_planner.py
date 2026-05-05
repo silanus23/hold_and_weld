@@ -116,10 +116,12 @@ class JobPlanner:
         if main_ext in mesh_extensions and secondary_ext in mesh_extensions:
             return 'mesh'
 
-        logger.warning(
-            f"Unknown file extensions '{main_ext}'/'{secondary_ext}', defaulting to mesh mode"
+        raise ValueError(
+            f"Cannot auto-detect mode: unsupported file extension(s) '{main_ext}'/'{secondary_ext}'. "
+            f"Supported: {sorted(occt_extensions)} for OCCT mode, "
+            f"{sorted(mesh_extensions)} for mesh mode. "
+            f"Set mode explicitly via the 'mode' parameter."
         )
-        return 'mesh'
 
     def plan_job(self) -> list:
         """Execute complete planning pipeline.

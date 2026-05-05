@@ -10,7 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
-find_package(rclcpp_components REQUIRED)
+
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -177,6 +177,7 @@ ament_target_dependencies(dual_robot_coordinator
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(hold_and_weld_description REQUIRED)
   ament_lint_auto_find_test_dependencies()
   ament_add_gtest(kinematics_solver_test
     test/kinematics_solver_test.cpp
@@ -198,6 +199,17 @@ if(BUILD_TESTING)
   ament_target_dependencies(ceres_ik_solver_test
     rclcpp
     ament_index_cpp
+    hold_and_weld_description
+  )
+
+  ament_add_gtest(urdf_parser_test
+    test/urdf_parser_test.cpp
+  )
+  target_link_libraries(urdf_parser_test
+    hold_and_weld_kinematics
+  )
+  ament_target_dependencies(urdf_parser_test
+    rclcpp
     hold_and_weld_description
   )
 
@@ -224,10 +236,6 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY launch/
-  DESTINATION share/${PROJECT_NAME}/launch
-)
-
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
@@ -244,10 +252,6 @@ install(PROGRAMS
   scripts/visualize_grasps.py
   scripts/finger_visualizer.py
   DESTINATION lib/${PROJECT_NAME}
-)
-
-install(DIRECTORY trajectories/
-  DESTINATION share/${PROJECT_NAME}/trajectories
 )
 
 ament_export_dependencies(

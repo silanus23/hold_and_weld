@@ -20,9 +20,9 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
-  auto coordinator = std::make_shared<hold_and_weld::DualRobotCoordinator>();
+  auto coordinator = std::make_shared<hold_and_weld::application::DualRobotCoordinator>();
 
-  rclcpp::executors::MultiThreadedExecutor executor;
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
   executor.add_node(coordinator->get_node_base_interface());
 
   executor.spin();

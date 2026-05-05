@@ -15,15 +15,21 @@
 
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
-#include <algorithm>
-#include <cmath>
+#include <vector>
+
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-namespace hold_and_weld_application
+namespace hold_and_weld
 {
 namespace kinematics
 {
@@ -123,35 +129,62 @@ urdf::ModelInterfaceSharedPtr URDFParser::load_urdf(const std::string & urdf_pat
   if (resolved_path.substr(resolved_path.find_last_of(".") + 1) == "xacro") {
     RCLCPP_INFO(logger, "Processing xacro file: %s", resolved_path.c_str());
 
-    std::string command = "xacro " + resolved_path;
-    FILE * pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-      RCLCPP_ERROR(logger, "Failed to run xacro command: %s", command.c_str());
-      throw std::runtime_error("Failed to run xacro command: " + command);
+    // Run xacro without invoking a shell to avoid injection risks.
+    // pipe_fds[0] = read end, pipe_fds[1] = write end
+    int pipe_fds[2];
+    if (::pipe(pipe_fds) != 0) {
+      RCLCPP_ERROR(logger, "Failed to create pipe for xacro");
+      throw std::runtime_error("Failed to create pipe for xacro");
     }
 
-    char buffer[128];
-    std::stringstream result;
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-      result << buffer;
+    pid_t pid = ::fork();
+    if (pid < 0) {
+      ::close(pipe_fds[0]);
+      ::close(pipe_fds[1]);
+      RCLCPP_ERROR(logger, "Failed to fork for xacro");
+      throw std::runtime_error("Failed to fork for xacro");
     }
 
-    int return_code = pclose(pipe);
-    if (return_code != 0) {
-      RCLCPP_ERROR(logger, "Xacro command failed with return code: %d", return_code);
-      throw std::runtime_error("Xacro command failed with return code: " +
-            std::to_string(return_code));
+    if (pid == 0) {
+      // Child: redirect stdout to write end of pipe, then exec xacro
+      ::close(pipe_fds[0]);
+      if (::dup2(pipe_fds[1], STDOUT_FILENO) < 0) {::_exit(127);}
+      ::close(pipe_fds[1]);
+      // Build null-terminated arg list; resolved_path must be mutable for execvp
+      char arg0[] = "xacro";
+      std::vector<char> path_buf(resolved_path.begin(), resolved_path.end());
+      path_buf.push_back('\0');
+      char * argv_exec[] = {arg0, path_buf.data(), nullptr};
+      ::execvp("xacro", argv_exec);
+      ::_exit(127);  // execvp failed
     }
 
-    urdf_string = result.str();
+    // Parent: close write end and read from read end
+    ::close(pipe_fds[1]);
+    {
+      std::stringstream result;
+      char buffer[256];
+      ssize_t n;
+      while ((n = ::read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
+        result.write(buffer, n);
+      }
+      ::close(pipe_fds[0]);
+      urdf_string = result.str();
+    }
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      RCLCPP_ERROR(logger, "xacro failed (exit code %d) for: %s",
+                   WIFEXITED(status) ? WEXITSTATUS(status) : -1, resolved_path.c_str());
+      throw std::runtime_error("xacro failed for: " + resolved_path);
+    }
 
     if (urdf_string.empty()) {
-      RCLCPP_ERROR(logger, "Xacro processing resulted in empty URDF");
-      throw std::runtime_error("Xacro processing resulted in empty URDF");
+      RCLCPP_ERROR(logger, "Xacro produced empty output for: %s", resolved_path.c_str());
+      throw std::runtime_error("Xacro produced empty output for: " + resolved_path);
     }
-
-    RCLCPP_DEBUG(logger, "Xacro processing successful, generated URDF size: %zu bytes",
-          urdf_string.size());
+    RCLCPP_DEBUG(logger, "Xacro processed successfully (%zu bytes)", urdf_string.size());
   } else {
     std::ifstream file(resolved_path);
     if (!file.is_open()) {
@@ -161,6 +194,10 @@ urdf::ModelInterfaceSharedPtr URDFParser::load_urdf(const std::string & urdf_pat
 
     std::stringstream buffer;
     buffer << file.rdbuf();
+    if (file.bad()) {
+      RCLCPP_ERROR(logger, "I/O error while reading URDF file: %s", resolved_path.c_str());
+      throw std::runtime_error("I/O error while reading URDF file: " + resolved_path);
+    }
     file.close();
     urdf_string = buffer.str();
   }
@@ -205,6 +242,9 @@ std::vector<urdf::LinkConstSharedPtr> URDFParser::build_link_chain(
     reverse_chain.push_back(current);
 
     if (!current->parent_joint) {
+      RCLCPP_ERROR(
+        logger, "Cannot build chain: link '%s' has no parent joint — URDF topology may be broken",
+        current->name.c_str());
       throw std::runtime_error(
                 "Cannot build chain: link '" + current->name + "' has no parent joint");
     }
@@ -259,7 +299,7 @@ std::vector<JointInfo> URDFParser::extract_joints_from_chain(
     if (joint->type == urdf::Joint::FIXED) {
       RCLCPP_DEBUG(logger, "Joint '%s' is fixed, accumulating transform", joint->name.c_str());
       accumulated_fixed = accumulated_fixed * joint_transform;
-      continue;       // Don't add to actuated_joints
+      continue;
     }
 
     JointInfo info;
@@ -444,7 +484,7 @@ void URDFParser::validate_chain(const std::vector<JointInfo> & joints)
 urdf::ModelInterfaceSharedPtr URDFParser::load_urdf_from_string(const std::string & urdf_string)
 {
   auto logger = rclcpp::get_logger("urdf_parser");
-  RCLCPP_INFO(logger, "Parsing URDF directly from ROS 2 system string");
+  RCLCPP_DEBUG(logger, "Parsing URDF from string (%zu bytes)", urdf_string.size());
 
   auto model = urdf::parseURDF(urdf_string);
   if (!model) {
@@ -469,10 +509,15 @@ ParsedChain URDFParser::extract_joint_chain_from_string(
     throw std::invalid_argument("URDF string cannot be empty");
   }
 
-  // Use the new string parser
-  auto model = load_urdf_from_string(urdf_string);
+  if (base_link.empty()) {
+    throw std::invalid_argument("Base link name cannot be empty");
+  }
 
-  // Reuse all your existing robust logic
+  if (tip_link.empty()) {
+    throw std::invalid_argument("Tip link name cannot be empty");
+  }
+
+  auto model = load_urdf_from_string(urdf_string);
   auto link_chain = build_link_chain(model, base_link, tip_link);
   auto joints = extract_joints_from_chain(link_chain);
   auto tool_transform = extract_tool_transform(link_chain, joints);
@@ -488,4 +533,4 @@ ParsedChain URDFParser::extract_joint_chain_from_string(
 }
 
 }  // namespace kinematics
-}  // namespace hold_and_weld_application
+}  // namespace hold_and_weld
