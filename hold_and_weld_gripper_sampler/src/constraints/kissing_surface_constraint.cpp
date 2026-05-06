@@ -129,7 +129,8 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
   // not guaranteed to have triangulation until explicitly meshed here.
   for (const auto & surface : all_surfaces) {
     try {
-      BRepMesh_IncrementalMesh(surface.face, mesh_linear_deflection_, Standard_False, 0.5);
+      BRepMesh_IncrementalMesh(surface.face, mesh_linear_deflection_, Standard_False,
+            mesh_angular_deflection_);
     } catch (const Standard_Failure & e) {
       RCLCPP_WARN(logger_, "Failed to mesh surface %d - contact ratio may be zero",
             mapper_->find_topology_surface_id(surface.face));

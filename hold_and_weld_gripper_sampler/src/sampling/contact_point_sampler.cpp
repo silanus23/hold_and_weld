@@ -344,8 +344,8 @@ std::vector<gp_Pnt> ContactPointSampler::sample_full_face(const TopoDS_Face & fa
   double v_mid = v_min + v_range * 0.5;
   constexpr double kProbeEps = 1e-4;
   gp_Pnt p0 = surf->Value(u_mid, v_mid);
-  gp_Pnt pu = surf->Value(u_mid + kProbeEps, v_mid);
-  gp_Pnt pv = surf->Value(u_mid, v_mid + kProbeEps);
+  gp_Pnt pu = surf->Value(std::min(u_mid + kProbeEps, u_max), v_mid);
+  gp_Pnt pv = surf->Value(u_mid, std::min(v_mid + kProbeEps, v_max));
   double du_scale = p0.Distance(pu) / kProbeEps;   // metres per U-unit
   double dv_scale = p0.Distance(pv) / kProbeEps;   // metres per V-unit
   if (du_scale < 1e-9) {du_scale = 1.0;}
@@ -398,10 +398,10 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
   double v_mid = v_min + v_range * 0.5;
   constexpr double kProbeEps = 1e-4;
   gp_Pnt p0 = surf->Value(u_mid, v_mid);
-  gp_Pnt pu = surf->Value(u_mid + kProbeEps, v_mid);
-  gp_Pnt pv = surf->Value(u_mid, v_mid + kProbeEps);
-  double du_scale = p0.Distance(pu) / kProbeEps;
-  double dv_scale = p0.Distance(pv) / kProbeEps;
+  gp_Pnt pu = surf->Value(std::min(u_mid + kProbeEps, u_max), v_mid);
+  gp_Pnt pv = surf->Value(u_mid, std::min(v_mid + kProbeEps, v_max));
+  double du_scale = p0.Distance(pu) / kProbeEps;   // metres per U-unit
+  double dv_scale = p0.Distance(pv) / kProbeEps;   // metres per V-unit
   if (du_scale < 1e-9) {du_scale = 1.0;}
   if (dv_scale < 1e-9) {dv_scale = 1.0;}
 
