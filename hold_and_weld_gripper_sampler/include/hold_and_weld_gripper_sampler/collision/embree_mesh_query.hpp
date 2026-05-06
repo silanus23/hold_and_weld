@@ -38,20 +38,17 @@ namespace geometry
  *
  * Two primary operations are exposed:
  *
- *   ray_intersect  — shoot a single ray and return the nearest hit point.
- *                    Uses Embree's watertight Möller–Trumbore intersector, so
- *                    flat faces represented by only 2 triangles are handled
- *                    correctly regardless of grazing angles.  Replaces the
- *                    hand-rolled bvh_ray_cast inside FCLCollisionChecker.
+ *   ray_intersect — shoot a single ray and return the nearest hit point.
+ *     Uses Embree's watertight Möller–Trumbore intersector, so flat faces
+ *     represented by only 2 triangles are handled correctly regardless of
+ *     grazing angles.  Replaces bvh_ray_cast inside FCLCollisionChecker.
  *
- *   point_inside   — parity test: shoot a ray in a fixed direction from the
- *                    query point and count all forward intersections.  An odd
- *                    count means the point is inside the closed mesh.  Because
- *                    Embree's intersector is watertight there are no missed or
- *                    double-counted triangles on edges/vertices, so a single
- *                    direction suffices (no majority-vote hack needed).
- *                    Replaces the FCL containment blind-spot in
- *                    check_gripper_collision.
+ *   point_inside — parity test: shoot a ray in a fixed direction from the
+ *     query point and count all forward intersections.  An odd count means
+ *     the point is inside the closed mesh.  Embree's watertight intersector
+ *     guarantees no missed or double-counted triangles on edges/vertices,
+ *     so a single direction suffices (no majority-vote hack needed).
+ *     Replaces the FCL containment blind-spot in check_gripper_collision.
  *
  * Thread safety: after construction (i.e. after rtcCommitScene) the scene is
  * read-only and all query methods are safe to call concurrently.
@@ -103,10 +100,6 @@ public:
   EmbreeMeshQuery & operator=(EmbreeMeshQuery &&) noexcept;
 
   ~EmbreeMeshQuery();
-
-  // -------------------------------------------------------------------------
-  // Query API
-  // -------------------------------------------------------------------------
 
   /**
    * @brief Shoot a single ray and return the nearest intersection point.

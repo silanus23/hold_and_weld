@@ -413,11 +413,8 @@ TopoDS_Shape ShapeLoader::load_from_urdf_string(const std::string & urdf_string)
         if (rpy_str) {
           double r, p, yaw;
           if (sscanf(rpy_str, "%lf %lf %lf", &r, &p, &yaw) == 3) {
-            // URDF uses fixed-axis ZYX Euler angles (roll-pitch-yaw)
-            origin_rot = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-              Eigen::AngleAxisd(p, Eigen::Vector3d::UnitY()) *
-              Eigen::AngleAxisd(r, Eigen::Vector3d::UnitX());
-            origin_rot.normalize();
+            gp_Quaternion q = geometry::rpy_to_quaternion(r, p, yaw);
+            origin_rot = Eigen::Quaterniond(q.W(), q.X(), q.Y(), q.Z()).normalized();
           } else {
             RCLCPP_WARN(logger_, "Failed to parse rpy attribute: %s", rpy_str);
           }

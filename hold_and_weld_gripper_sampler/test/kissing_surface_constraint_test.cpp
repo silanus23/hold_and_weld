@@ -34,6 +34,7 @@
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
+#include "test_helpers.hpp"
 
 
 using namespace hold_and_weld_gripper_sampler;  // NOLINT
@@ -41,47 +42,6 @@ using namespace hold_and_weld_gripper_sampler::constraints;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::core;  // NOLINT
 
-namespace
-{
-
-ParsedGripper create_mock_gripper()
-{
-  ParsedGripper gripper;
-
-  gp_Trsf f1_pos;
-  f1_pos.SetTranslation(gp_Vec(0.0, 0.015, 0.0));
-  TopoDS_Shape f1_box = BRepPrimAPI_MakeBox(0.02, 0.01, 0.05).Shape();
-  gripper.finger_1 = BRepBuilderAPI_Transform(f1_box, f1_pos, Standard_True).Shape();
-
-  gp_Trsf f2_pos;
-  f2_pos.SetTranslation(gp_Vec(0.0, -0.025, 0.0));
-  TopoDS_Shape f2_box = BRepPrimAPI_MakeBox(0.02, 0.01, 0.05).Shape();
-  gripper.finger_2 = BRepBuilderAPI_Transform(f2_box, f2_pos, Standard_True).Shape();
-
-  gp_Trsf base_pos;
-  base_pos.SetTranslation(gp_Vec(-0.01, -0.03, 0.05));
-  TopoDS_Shape base_box = BRepPrimAPI_MakeBox(0.06, 0.06, 0.03).Shape();
-  gripper.base = BRepBuilderAPI_Transform(base_box, base_pos, Standard_True).Shape();
-
-  gripper.finger_1_axis = Eigen::Vector3d(0.0, 1.0, 0.0);
-  gripper.finger_2_axis = Eigen::Vector3d(0.0, -1.0, 0.0);
-
-  gripper.max_opening = 0.1;
-
-  gripper.gripper_type = "parallel";
-  gripper.tcp_offset = Eigen::Vector3d(0.0, 0.0, -0.05);
-  gripper.tcp_rpy = Eigen::Vector3d(0.0, 0.0, 0.0);
-
-  gripper.base_link_name = "mock_gripper_base";
-  gripper.finger_1_link_name = "mock_left_finger";
-  gripper.finger_2_link_name = "mock_right_finger";
-  gripper.finger_1_joint_name = "mock_left_finger_joint";
-  gripper.finger_2_joint_name = "mock_right_finger_joint";
-
-  return gripper;
-}
-
-}  // namespace
 
 class KissingSurfaceConstraintTest : public ::testing::Test
 {
@@ -99,8 +59,7 @@ protected:
     const std::vector<TopoDS_Shape> & secondaries,
     const TopoDS_Shape & primary_for_fcl)
   {
-    auto fcl = std::make_shared<geometry::FCLCollisionChecker>(
-      gripper_, primary_for_fcl);
+    auto fcl = make_fcl_checker(gripper_, primary_for_fcl);
     fcl->add_secondary_shapes(secondaries);
     constraint.set_fcl_checker(fcl);
   }
@@ -296,8 +255,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
     mapper_, flat_gripper, secondaries, 0.8, 0.010);
   constraint_loose.analyze_constraints(topology);
   {
-    auto fcl_loose = std::make_shared<geometry::FCLCollisionChecker>(
-      flat_gripper, primary);
+    auto fcl_loose = make_fcl_checker(flat_gripper, primary);
     fcl_loose->add_secondary_shapes(secondaries);
     constraint_loose.set_fcl_checker(fcl_loose);
   }
@@ -309,8 +267,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
     mapper_, flat_gripper, secondaries, 0.8, 0.001);
   constraint_tight.analyze_constraints(topology);
   {
-    auto fcl_tight = std::make_shared<geometry::FCLCollisionChecker>(
-      flat_gripper, primary);
+    auto fcl_tight = make_fcl_checker(flat_gripper, primary);
     fcl_tight->add_secondary_shapes(secondaries);
     constraint_tight.set_fcl_checker(fcl_tight);
   }
@@ -371,7 +328,7 @@ TEST_F(KissingSurfaceConstraintTest, EmptySecondaryShapesVectorProducesNoResults
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
 
-  auto fcl = std::make_shared<geometry::FCLCollisionChecker>(gripper_, primary);
+  auto fcl = make_fcl_checker(gripper_, primary);
   constraint.set_fcl_checker(fcl);
 
   EXPECT_TRUE(constraint.get_banned_surface_ids().empty());
@@ -433,7 +390,8 @@ TEST_F(KissingSurfaceConstraintTest, HighThresholdBansFewerSurfaces)
   constraint_low.analyze_constraints(topology);
   constraint_high.analyze_constraints(topology);
 
-  // High threshold should ban the same or fewer surfaces
+  EXPECT_GE(constraint_low.get_banned_surface_ids().size(), 1u)
+    << "Low threshold (50%) must ban at least the bottom face touching the ground secondary";
   EXPECT_LE(
     constraint_high.get_banned_surface_ids().size(),
     constraint_low.get_banned_surface_ids().size());

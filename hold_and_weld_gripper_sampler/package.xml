@@ -15,12 +15,14 @@
   <depend>rclcpp</depend>
   <depend>ament_index_cpp</depend>
   <depend>eigen</depend>
-  <depend>libeigen3-dev</depend>
   <depend>yaml-cpp</depend>
-  <depend>pluginlib</depend>
   <depend>tinyxml2</depend>
-  <depend>libtinyxml2-dev</depend>
-  <depend>libfcl-dev</depend>
+  <!-- Embree 4: no standard rosdep key exists. Install manually:
+       Ubuntu: sudo apt install libembree-dev  (or build from source for Embree 4)
+       The CMakeLists.txt uses find_package(embree 4.0 REQUIRED) -->
+  <depend>libembree-dev</depend>
+  <depend>fcl</depend>
+  <depend>opencascade</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

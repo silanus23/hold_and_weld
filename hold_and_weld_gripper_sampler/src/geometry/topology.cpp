@@ -73,37 +73,25 @@ const std::vector<Surface> & Topology::get_all_surfaces() const
   return surfaces_;
 }
 
-void Topology::add_corner(int id, const Corner & corner)
+int Topology::add_corner(const Corner & corner)
 {
-  if (id < 0) {
-    throw std::out_of_range("Corner ID must be non-negative");
-  }
-  if (id >= static_cast<int>(corners_.size())) {
-    corners_.resize(id + 1);
-  }
-  corners_[id] = corner;
+  int id = static_cast<int>(corners_.size());
+  corners_.push_back(corner);
+  return id;
 }
 
-void Topology::add_edge(int id, const Edge & edge)
+int Topology::add_edge(const Edge & edge)
 {
-  if (id < 0) {
-    throw std::out_of_range("Edge ID must be non-negative");
-  }
-  if (id >= static_cast<int>(edges_.size())) {
-    edges_.resize(id + 1);
-  }
-  edges_[id] = edge;
+  int id = static_cast<int>(edges_.size());
+  edges_.push_back(edge);
+  return id;
 }
 
-void Topology::add_surface(int id, const Surface & surface)
+int Topology::add_surface(const Surface & surface)
 {
-  if (id < 0) {
-    throw std::out_of_range("Surface ID must be non-negative");
-  }
-  if (id >= static_cast<int>(surfaces_.size())) {
-    surfaces_.resize(id + 1);
-  }
-  surfaces_[id] = surface;
+  int id = static_cast<int>(surfaces_.size());
+  surfaces_.push_back(surface);
+  return id;
 }
 
 void Topology::clear()

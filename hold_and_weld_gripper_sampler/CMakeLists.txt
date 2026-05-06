@@ -5,17 +5,12 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(pluginlib REQUIRED)
+
 find_package(tinyxml2 REQUIRED)
 
 # Find FCL (Flexible Collision Library)
@@ -77,6 +72,8 @@ target_link_libraries(${PROJECT_NAME}_core
     tinyxml2::tinyxml2
 )
 
+target_compile_features(${PROJECT_NAME}_core PUBLIC cxx_std_17)
+
 ament_target_dependencies(${PROJECT_NAME}_core
   PUBLIC
     rclcpp
@@ -95,6 +92,8 @@ target_include_directories(grasp_finder_node PRIVATE
 target_link_libraries(grasp_finder_node
   ${PROJECT_NAME}_core
 )
+
+target_compile_features(grasp_finder_node PUBLIC cxx_std_17)
 
 ament_target_dependencies(grasp_finder_node
   rclcpp
@@ -128,7 +127,6 @@ ament_export_dependencies(
   ament_index_cpp
   Eigen3
   yaml-cpp
-  pluginlib
   tinyxml2
   fcl
   embree
@@ -178,6 +176,7 @@ if(BUILD_TESTING)
   add_sampler_test(grasp_orientation_finder_test test/grasp_orientation_finder_test.cpp)
   add_sampler_test(shape_loader_test test/shape_loader_test.cpp)
   add_sampler_test(collision_checker_test test/collision_checker_test.cpp)
+  add_sampler_test(math_unit_test test/math_unit_test.cpp)
 
 endif()
 

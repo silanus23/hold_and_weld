@@ -15,6 +15,9 @@
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <rclcpp/rclcpp.hpp>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRep_Builder.hxx>
 #include <gp_Trsf.hxx>
@@ -23,34 +26,45 @@
 
 namespace hold_and_weld_gripper_sampler
 {
-namespace core
-{
 
-TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distance)
+TopoDS_Shape ParsedGripper::configure(double grip_distance) const
 {
-  if (gripper.finger_1.IsNull() || gripper.finger_2.IsNull() || gripper.base.IsNull()) {
+  if (finger_1.IsNull() || finger_2.IsNull() || base.IsNull()) {
     throw std::runtime_error("configure_gripper: Input shapes are null");
   }
 
   const double finger_travel = std::max(0.0,
-    std::min(grip_distance / 2.0, gripper.max_opening / 2.0));
+    std::min(grip_distance / 2.0, max_opening / 2.0));
+
+  // Normalise: a non-unit axis would silently scale finger_travel.
+  auto safe_unit_vec = [](const Eigen::Vector3d & ax, const char * name) -> gp_Vec {
+      const double mag = ax.norm();
+      if (mag < 1e-9) {
+        throw std::runtime_error(
+        std::string("configure_gripper: ") + name + " has zero magnitude");
+      }
+      if (std::abs(mag - 1.0) > 1e-3) {
+        RCLCPP_WARN(
+        rclcpp::get_logger("gripper_sampler"),
+        "configure_gripper: %s has non-unit magnitude %.6f, normalising", name, mag);
+      }
+      return gp_Vec(ax.x() / mag, ax.y() / mag, ax.z() / mag);
+    };
 
   try {
     gp_Trsf f1_trsf;
-    f1_trsf.SetTranslation(gp_Vec(gripper.finger_1_axis.x(),
-                                  gripper.finger_1_axis.y(),
-                                  gripper.finger_1_axis.z()) * finger_travel);
+    f1_trsf.SetTranslation(
+      safe_unit_vec(finger_1_axis, "finger_1_axis") * finger_travel);
 
     gp_Trsf f2_trsf;
-    f2_trsf.SetTranslation(gp_Vec(gripper.finger_2_axis.x(),
-                                  gripper.finger_2_axis.y(),
-                                  gripper.finger_2_axis.z()) * finger_travel);
+    f2_trsf.SetTranslation(
+      safe_unit_vec(finger_2_axis, "finger_2_axis") * finger_travel);
 
-    BRepBuilderAPI_Transform f1_transformer(gripper.finger_1, f1_trsf, Standard_True);
+    BRepBuilderAPI_Transform f1_transformer(finger_1, f1_trsf, Standard_True);
     if (!f1_transformer.IsDone()) {
       throw std::runtime_error("configure_gripper: BRepBuilderAPI_Transform failed for finger_1");
     }
-    BRepBuilderAPI_Transform f2_transformer(gripper.finger_2, f2_trsf, Standard_True);
+    BRepBuilderAPI_Transform f2_transformer(finger_2, f2_trsf, Standard_True);
     if (!f2_transformer.IsDone()) {
       throw std::runtime_error("configure_gripper: BRepBuilderAPI_Transform failed for finger_2");
     }
@@ -66,7 +80,7 @@ TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distan
     builder.MakeCompound(compound);
     builder.Add(compound, f1_opened);
     builder.Add(compound, f2_opened);
-    builder.Add(compound, gripper.base);
+    builder.Add(compound, base);
 
     return compound;
   } catch (const Standard_Failure & e) {
@@ -74,5 +88,4 @@ TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distan
   }
 }
 
-}  // namespace core
 }  // namespace hold_and_weld_gripper_sampler

@@ -147,7 +147,6 @@ private:
     const std::string & urdf_string,
     const std::string & joint_name);
 
-  /// Overload accepting a pre-parsed <robot> element.
   std::pair<double, double> extract_joint_limits(
     tinyxml2::XMLElement * robot,
     const std::string & joint_name);
@@ -164,7 +163,6 @@ private:
     const std::string & urdf_string,
     const std::string & joint_name);
 
-  /// Overload accepting a pre-parsed <robot> element.
   gp_Trsf extract_joint_origin(
     tinyxml2::XMLElement * robot,
     const std::string & joint_name);

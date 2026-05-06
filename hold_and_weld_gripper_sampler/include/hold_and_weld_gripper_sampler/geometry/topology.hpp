@@ -243,26 +243,26 @@ public:
   /**
    * @brief Add a corner to the topology
    *
-   * @param id Sequential ID (0-indexed)
    * @param corner Corner data
+   * @return Assigned corner ID (0-indexed)
    */
-  void add_corner(int id, const Corner & corner);
+  int add_corner(const Corner & corner);
 
   /**
    * @brief Add an edge to the topology
    *
-   * @param id Sequential ID (0-indexed)
    * @param edge Edge data
+   * @return Assigned edge ID (0-indexed)
    */
-  void add_edge(int id, const Edge & edge);
+  int add_edge(const Edge & edge);
 
   /**
    * @brief Add a surface to the topology
    *
-   * @param id Sequential ID (0-indexed)
    * @param surface Surface data
+   * @return Assigned surface ID (0-indexed)
    */
-  void add_surface(int id, const Surface & surface);
+  int add_surface(const Surface & surface);
 
   /**
    * @brief Clear all topology data

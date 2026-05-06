@@ -171,20 +171,17 @@ inline void sort_by_diversity(
     return;
   }
 
-  // Extract approach direction (gripper Z-axis = third column of rotation matrix).
   std::vector<Eigen::Vector3d> approach(n);
   for (std::size_t i = 0; i < n; ++i) {
     approach[i] = grasps[i].tcp_orientation.toRotationMatrix().col(2);
   }
 
-  // min-distance from each candidate to the already-selected set
   std::vector<double> min_dist(n, std::numeric_limits<double>::max());
   std::vector<bool> selected(n, false);
 
   std::vector<Grasp> result;
   result.reserve(n);
 
-  // Seed with index 0 (highest-quality grasp; caller should quality-sort first).
   std::size_t pick = 0;
 
   for (std::size_t step = 0; step < n; ++step) {
@@ -194,7 +191,6 @@ inline void sort_by_diversity(
     const Eigen::Vector3d & p_pick = grasps[pick].tcp_position;
     const Eigen::Vector3d & a_pick = approach[pick];
 
-    // Update min_dist for all remaining candidates
     double best_dist = -1.0;
     std::size_t next_pick = 0;
     bool found_next = false;
@@ -204,7 +200,6 @@ inline void sort_by_diversity(
         continue;
       }
 
-      // Euclidean distance in TCP position space [m]
       double d_pos = pos_weight * (grasps[i].tcp_position - p_pick).norm();
 
       // Angular distance between approach directions [rad], clamped to [0, π]

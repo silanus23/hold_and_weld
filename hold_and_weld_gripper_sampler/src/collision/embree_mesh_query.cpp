@@ -189,11 +189,11 @@ void EmbreeMeshQuery::commit_scene()
     rtcSetSharedGeometryBuffer(
       geom,
       RTC_BUFFER_TYPE_VERTEX,
-      0,                                  // slot
+      0,
       RTC_FORMAT_FLOAT3,
       vertex_buf_.data(),
-      0,                                  // byte offset
-      sizeof(std::array<float, 3>),       // byte stride
+      0,
+      sizeof(std::array<float, 3>),
       num_vertices_);
     check_embree_error(device_, "rtcSetSharedGeometryBuffer(vertex)");
 
@@ -271,9 +271,8 @@ std::optional<gp_Pnt> EmbreeMeshQuery::ray_intersect(
     origin.Z() + t * direction.Z());
 }
 
-// point_inside: parity test — shoot +X ray, count hits via repeated rtcIntersect1.
-// Can't count hits in one traversal (RTCFilterFunctionNArguments uses packet type, casting is UB).
-// Odd hit count = inside. Convex shapes loop at most twice; concave more but always terminates.
+// Hits are counted via repeated rtcIntersect1 because RTCFilterFunctionNArguments
+// uses a packet type; casting it to a scalar hit struct is UB.  Odd count = inside.
 bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
 {
   if (!valid_) {return false;}

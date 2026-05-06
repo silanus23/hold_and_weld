@@ -51,6 +51,17 @@ struct SampleArea
    * utility function to get corner positions when needed.
    */
   TopoDS_Wire wire;
+
+  /**
+   * @brief Whether this area is an exclusion zone (true) or an inclusion zone (false).
+   *
+   * Exclusion zone:  points inside the wire boundary are rejected.
+   * Inclusion zone:  points outside the wire boundary are rejected.
+   *
+   * Replaces the previous convention of encoding zone type via wire orientation
+   * (TopAbs_REVERSED = exclusion, TopAbs_FORWARD = inclusion).
+   */
+  bool is_exclusion = false;
 };
 
 /**

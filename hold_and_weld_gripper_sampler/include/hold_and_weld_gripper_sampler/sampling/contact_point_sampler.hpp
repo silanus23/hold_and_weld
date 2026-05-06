@@ -16,6 +16,7 @@
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__SAMPLING__CONTACT_POINT_SAMPLER_HPP_
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <Geom_Surface.hxx>
@@ -60,7 +61,6 @@ struct SurfacePair
   TopoDS_Face face_2;
   gp_Vec normal_1;
   gp_Vec normal_2;
-  double min_distance;  // Minimum distance between the two faces [m]
 };
 
 /**
@@ -76,7 +76,7 @@ struct ContactPair
   TopoDS_Face face_2;
   gp_Vec normal_1;
   gp_Vec normal_2;
-  double grip_distance;  // Distance between contact points [m]
+  double grip_distance;
 };
 
 /**
@@ -144,13 +144,16 @@ private:
   /**
    * @brief Sample points on a face filtered by inclusion/exclusion wires.
    *
+   * Each entry is a (wire, is_exclusion) pair: when is_exclusion is true,
+   * points inside the wire are rejected; when false, points outside are rejected.
+   *
    * @param face Face to sample
-   * @param wires Inclusion or exclusion wires
+   * @param wires_with_flags Wires paired with their exclusion/inclusion flag
    * @return Sampled 3D points
    */
   std::vector<gp_Pnt> sample_with_exclusions(
     const TopoDS_Face & face,
-    const std::vector<TopoDS_Wire> & wires) const;
+    const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags) const;
 
   /**
    * @brief Check if a 2D UV point is inside a wire using ray casting.
@@ -164,6 +167,20 @@ private:
     const gp_Pnt2d & point_2d,
     const TopoDS_Wire & wire,
     const TopoDS_Face & face) const;
+
+  /**
+   * @brief Check if a 2D UV point is inside a pre-built wire face.
+   *
+   * Prefer this overload when testing many points against the same wire:
+   * build the face once with BRepBuilderAPI_MakeFace and reuse it across calls.
+   *
+   * @param point_2d UV point to test
+   * @param wire_face Pre-built TopoDS_Face constructed from the wire
+   * @return true if point is inside the wire face
+   */
+  bool is_point_inside_wire(
+    const gp_Pnt2d & point_2d,
+    const TopoDS_Face & wire_face) const;
 
   /**
    * @brief Check if a 3D point falls within any exclusion zone on a surface.
@@ -255,20 +272,26 @@ private:
   /**
    * @brief Sample surface normals from the allowed region on a face.
    *
+   * Each entry is a (wire, is_exclusion) pair: when is_exclusion is true,
+   * points inside the wire are excluded; when false, points outside are excluded.
+   *
    * @param face Face to sample
    * @param surf Geometric surface handle
-   * @param wires Inclusion/exclusion wires defining allowed region
+   * @param wires_with_flags Wires paired with their exclusion/inclusion flag
    * @param target_samples Number of grid points to place (caller is responsible for sizing)
    * @return Sampled normal vectors
    */
   std::vector<gp_Vec> sample_normals_from_allowed_region(
     const TopoDS_Face & face,
     const Handle(Geom_Surface) & surf,
-    const std::vector<TopoDS_Wire> & wires,
+    const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags,
     int target_samples) const;
 
   /**
    * @brief Remove spatially duplicate contact pairs using grid-based bucketing.
+   *
+   * Deduplication is symmetric: a pair (A→B) and its reverse (B→A) are treated
+   * as the same pair. Whichever direction is encountered first is kept.
    *
    * @param pairs Input contact pairs
    * @param tolerance Grid cell size for deduplication [m]

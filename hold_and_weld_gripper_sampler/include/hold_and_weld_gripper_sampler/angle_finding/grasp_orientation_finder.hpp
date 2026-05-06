@@ -29,6 +29,7 @@
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/collision/embree_mesh_query.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
@@ -61,12 +62,11 @@ struct OrientationConfig
   double flat_detection_tolerance_m = 0.003;
   double cliff_merge_tolerance_deg = 2.0;
   double min_cliff_width_deg = 5.0;
+  double ray_lift_offset = 0.010;
+  double seed_step_deg = 15.0;
 
   bool randomize_seeds = false;
 
-  // When true, bypass the radial map entirely and test all angles at debug_sweep_step_deg
-  // intervals across the full 360°. Every contact pair gets the same uniform sweep.
-  // Use this to diagnose whether the collision checker accepts/rejects at all orientations.
   bool debug_full_sweep = false;
   double debug_sweep_step_deg = 10.0;
 
@@ -121,7 +121,7 @@ struct RadialMaps
   }
 };
 
-static constexpr std::array<SurfaceState, 3> kAllSurfaceStates = {
+inline constexpr std::array<SurfaceState, 3> kAllSurfaceStates = {
   SurfaceState::FLAT, SurfaceState::HIGH, SurfaceState::LOW};
 
 /**
@@ -143,7 +143,24 @@ struct GraspCandidate
 /**
  * @brief Convert GraspCandidate (OCCT types) to Grasp (Eigen types)
  */
-Grasp to_grasp(const GraspCandidate & candidate);
+inline Grasp to_grasp(const GraspCandidate & candidate)
+{
+  gp_Pnt tcp(
+    (candidate.contact_1.X() + candidate.contact_2.X()) / 2.0,
+    (candidate.contact_1.Y() + candidate.contact_2.Y()) / 2.0,
+    (candidate.contact_1.Z() + candidate.contact_2.Z()) / 2.0);
+
+  return Grasp::create(
+    geometry::to_eigen(tcp),
+    geometry::extract_quaternion(candidate.gripper_transform),
+    candidate.grip_distance,
+    geometry::to_eigen(candidate.contact_1),
+    geometry::to_eigen(candidate.contact_2),
+    candidate.surface_id_1,
+    candidate.surface_id_2,
+    candidate.quality_score
+  );
+}
 
 /**
  * @brief Finds valid gripper orientations for contact point pairs

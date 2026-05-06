@@ -32,53 +32,12 @@
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
+#include "test_helpers.hpp"
 
 using namespace hold_and_weld_gripper_sampler;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::constraints;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 
-namespace
-{
-ParsedGripper create_mock_gripper()
-{
-  ParsedGripper gripper;
-
-  gp_Trsf f1_pos;
-  f1_pos.SetTranslation(gp_Vec(0.0, 0.015, 0.0));
-  TopoDS_Shape f1_box = BRepPrimAPI_MakeBox(0.02, 0.01, 0.05).Shape();
-  gripper.finger_1 = BRepBuilderAPI_Transform(f1_box, f1_pos, Standard_True).Shape();
-
-  gp_Trsf f2_pos;
-  f2_pos.SetTranslation(gp_Vec(0.0, -0.025, 0.0));
-  TopoDS_Shape f2_box = BRepPrimAPI_MakeBox(0.02, 0.01, 0.05).Shape();
-  gripper.finger_2 = BRepBuilderAPI_Transform(f2_box, f2_pos, Standard_True).Shape();
-
-  gp_Trsf base_pos;
-  base_pos.SetTranslation(gp_Vec(-0.01, -0.03, 0.05));
-  TopoDS_Shape base_box = BRepPrimAPI_MakeBox(0.06, 0.06, 0.03).Shape();
-  gripper.base = BRepBuilderAPI_Transform(base_box, base_pos, Standard_True).Shape();
-
-  gripper.finger_1_axis = Eigen::Vector3d(0.0, 1.0, 0.0);   // +Y
-  gripper.finger_2_axis = Eigen::Vector3d(0.0, -1.0, 0.0);  // -Y
-
-  gripper.max_opening = 0.1;
-
-  // Metadata fields
-  gripper.gripper_type = "parallel";
-  gripper.tcp_offset = Eigen::Vector3d(0.0, 0.0, -0.05);
-  gripper.tcp_rpy = Eigen::Vector3d(0.0, 0.0, 0.0);
-
-  // Link/joint names (for mock gripper)
-  gripper.base_link_name = "mock_gripper_base";
-  gripper.finger_1_link_name = "mock_left_finger";
-  gripper.finger_2_link_name = "mock_right_finger";
-  gripper.finger_1_joint_name = "mock_left_finger_joint";
-  gripper.finger_2_joint_name = "mock_right_finger_joint";
-
-  return gripper;
-}
-
-}  // namespace
 
 class ExclusionZoneConstraintTest : public ::testing::Test
 {
@@ -97,7 +56,7 @@ protected:
     const ParsedGripper & gripper,
     const TopoDS_Shape & primary_shape)
   {
-    auto fcl = std::make_shared<geometry::FCLCollisionChecker>(gripper, primary_shape);
+    auto fcl = make_fcl_checker(gripper, primary_shape);
     fcl->add_exclusion_volumes(constraint.get_collision_volumes());
     constraint.set_fcl_checker(fcl);
   }

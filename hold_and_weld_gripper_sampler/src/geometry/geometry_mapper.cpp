@@ -66,22 +66,6 @@ static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 GeometryMapper::GeometryMapper() {}
 GeometryMapper::~GeometryMapper() {}
 
-// URDF uses intrinsic XYZ RPY; OCCT has no direct RPY constructor.
-static gp_Quaternion rpy_to_quat(double r, double p, double y)
-{
-  double cy = std::cos(y * 0.5);
-  double sy = std::sin(y * 0.5);
-  double cp = std::cos(p * 0.5);
-  double sp = std::sin(p * 0.5);
-  double cr = std::cos(r * 0.5);
-  double sr = std::sin(r * 0.5);
-  return gp_Quaternion(
-    sr * cp * cy - cr * sp * sy,
-    cr * sp * cy + sr * cp * sy,
-    cr * cp * sy - sr * sp * cy,
-    cr * cp * cy + sr * sp * sy);
-}
-
 TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & urdf_string)
 {
   RCLCPP_DEBUG(logger_, "Parsing URDF string for geometry extraction");
@@ -142,7 +126,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
         double roll, pitch, yaw;
         if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
           gp_Trsf rot_transform;
-          rot_transform.SetRotation(rpy_to_quat(roll, pitch, yaw));
+          rot_transform.SetRotation(rpy_to_quaternion(roll, pitch, yaw));
           transform = transform * rot_transform;
         } else {
           RCLCPP_WARN(logger_, "Failed to parse rpy attribute for link '%s'",
@@ -294,7 +278,7 @@ Topology GeometryMapper::create_topology_from_shape(
   try {
     TopTools_IndexedMapOfShape vertex_map;
     TopTools_IndexedMapOfShape edge_map;
-    face_map_.Clear();  // member — reset so find_topology_surface_id stays valid on re-use
+    face_map_.Clear();
 
     TopExp::MapShapes(shape, TopAbs_VERTEX, vertex_map);
     TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
@@ -400,13 +384,13 @@ Topology GeometryMapper::create_topology_from_shape(
 
     Topology topology;
     for (size_t i = 0; i < corners.size(); i++) {
-      topology.add_corner(i, corners[i]);
+      topology.add_corner(corners[i]);
     }
     for (size_t i = 0; i < edges.size(); i++) {
-      topology.add_edge(i, edges[i]);
+      topology.add_edge(edges[i]);
     }
     for (size_t i = 0; i < surfaces.size(); i++) {
-      topology.add_surface(i, surfaces[i]);
+      topology.add_surface(surfaces[i]);
     }
 
     RCLCPP_DEBUG(logger_, "Topology extraction complete: %zu corners, %zu edges, %zu surfaces",

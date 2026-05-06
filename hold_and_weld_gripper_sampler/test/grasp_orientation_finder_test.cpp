@@ -56,6 +56,7 @@
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/sampling/contact_point_sampler.hpp"
+#include "test_helpers.hpp"
 
 using namespace hold_and_weld_gripper_sampler::angle_finding;  // NOLINT
 using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
@@ -67,74 +68,6 @@ namespace
 TopoDS_Shape create_box(double width, double depth, double height)
 {
   return BRepPrimAPI_MakeBox(width, depth, height).Shape();
-}
-
-
-TopoDS_Shape create_box_at(
-  double width, double depth, double height,
-  double x, double y, double z)
-{
-  gp_Trsf transform;
-  transform.SetTranslation(gp_Vec(x, y, z));
-  TopoDS_Shape box = BRepPrimAPI_MakeBox(width, depth, height).Shape();
-  return BRepBuilderAPI_Transform(box, transform, Standard_True).Shape();
-}
-
-ParsedGripper create_mock_gripper()
-{
-  ParsedGripper gripper;
-
-  gripper.base = create_box(0.08, 0.12, 0.04);
-
-  // Position them at their closed state positions
-  gripper.finger_1 = create_box_at(0.03, 0.04, 0.20, -0.015, 0.01, -0.20);
-  gripper.finger_2 = create_box_at(0.03, 0.04, 0.20, -0.015, 0.07, -0.20);
-
-  gripper.finger_1_axis = Eigen::Vector3d(0, -1, 0);  // Moves in -Y
-  gripper.finger_2_axis = Eigen::Vector3d(0, 1, 0);   // Moves in +Y
-
-
-  gripper.max_opening = 0.32;
-
-  gripper.gripper_type = "parallel";
-  gripper.tcp_offset = Eigen::Vector3d(0, 0.04, -0.10);
-  gripper.tcp_rpy = Eigen::Vector3d(0, 0, 0);
-
-  gripper.base_link_name = "gripper_base";
-  gripper.finger_1_link_name = "finger_1";
-  gripper.finger_2_link_name = "finger_2";
-  gripper.finger_1_joint_name = "finger_1_joint";
-  gripper.finger_2_joint_name = "finger_2_joint";
-
-  return gripper;
-}
-
-ParsedGripper create_small_gripper()
-{
-  ParsedGripper gripper;
-
-  gripper.base = create_box_at(0.02, 0.02, 0.01, -0.01, -0.01, -0.005);
-
-  gripper.finger_1 = create_box_at(0.01, 0.005, 0.03, -0.005, -0.0025, -0.03);
-  gripper.finger_2 = create_box_at(0.01, 0.005, 0.03, -0.005, 0.0175, -0.03);
-
-  gripper.finger_1_axis = Eigen::Vector3d(0, -1, 0);
-  gripper.finger_2_axis = Eigen::Vector3d(0, 1, 0);
-
-
-  gripper.max_opening = 0.10;
-
-  gripper.gripper_type = "parallel";
-  gripper.tcp_offset = Eigen::Vector3d(0, 0.01, -0.02);
-  gripper.tcp_rpy = Eigen::Vector3d(0, 0, 0);
-
-  gripper.base_link_name = "gripper_base";
-  gripper.finger_1_link_name = "finger_1";
-  gripper.finger_2_link_name = "finger_2";
-  gripper.finger_1_joint_name = "finger_1_joint";
-  gripper.finger_2_joint_name = "finger_2_joint";
-
-  return gripper;
 }
 
 
@@ -232,7 +165,7 @@ protected:
     const ParsedGripper & gripper,
     const TopoDS_Shape & primary_shape)
   {
-    auto fcl = std::make_shared<geometry::FCLCollisionChecker>(gripper, primary_shape);
+    auto fcl = make_fcl_checker(gripper, primary_shape);
     finder.set_fcl_checker(fcl);
   }
 
@@ -385,6 +318,9 @@ TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceReducesOrientations)
 // Three angle offsets must produce at least as many candidates as one offset.
 TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates)
 {
+  // Gripper approaches from +Z, fingers straddle in Y, grips across X.
+  // Box is 0.1 m wide in X (within max_opening=0.18 m).
+  // Fingers (100 mm long in Z) swing in the Y/Z plane with clearance.
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
   Topology topology = mapper_->load_from_shape(box, "test_box");
 
@@ -393,14 +329,12 @@ TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates
   OrientationConfig config_single;
   config_single.angle_offsets = {0.0};
   config_single.max_edge_candidates = 1;
-
   config_single.finger_length = 0.08;
   config_single.collision_tolerance = 0.0001;
 
   OrientationConfig config_triple;
   config_triple.angle_offsets = {-30.0, 0.0, 30.0};
   config_triple.max_edge_candidates = 1;
-
   config_triple.finger_length = 0.08;
   config_triple.collision_tolerance = 0.0001;
 
@@ -415,15 +349,19 @@ TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates
   pair.grip_distance = 0.1;
   pair.surface_id_1 = 0;
   pair.surface_id_2 = 1;
+  pair.face_1 = topology.get_surface(0).face;
+  pair.face_2 = topology.get_surface(1).face;
+  pair.normal_1 = topology.get_surface(0).normal;
+  pair.normal_2 = topology.get_surface(1).normal;
 
   std::vector<ContactPair> pairs = {pair};
 
   auto grasps_single = finder_single.find_valid_grasps(pairs, topology);
   auto grasps_triple = finder_triple.find_valid_grasps(pairs, topology);
 
-  if (!grasps_single.empty()) {
-    EXPECT_GE(grasps_triple.size(), grasps_single.size());
-  }
+  ASSERT_FALSE(grasps_single.empty())
+    << "Single angle offset must produce at least one grasp for a valid contact pair";
+  EXPECT_GE(grasps_triple.size(), grasps_single.size());
 }
 
 // Empty angle_offsets must behave identically to an explicit {0.0} offset.
@@ -721,11 +659,13 @@ TEST_F(GraspOrientationFinderTest, CurvedEdgeHasMultipleMinima)
 
   EXPECT_GE(grasps.size(), 1) << "Should find at least one grasp from the arc";
 
-  if (grasps.size() >= 2) {
+  ASSERT_GE(grasps.size(), 2u)
+    << "Curved arc boundary should produce at least 2 grasps with distinct approaches";
+  {
     gp_Vec approach1 = grasps[0].approach_direction;
     gp_Vec approach2 = grasps[1].approach_direction;
     double dot = approach1.Dot(approach2);
-    EXPECT_LT(std::abs(dot), 0.99) << "Multiple grasps should have different approaches";
+    EXPECT_LT(std::abs(dot), 0.99) << "Multiple grasps must have distinct approach directions";
   }
 }
 

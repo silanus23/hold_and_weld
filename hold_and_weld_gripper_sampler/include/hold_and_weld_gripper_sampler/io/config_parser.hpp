@@ -51,22 +51,17 @@ struct SecondaryConfig
   std::string id;
   std::string type;  // "step", "urdf", "box", "cylinder", "ground_plane"
 
-  // For STEP/URDF
   std::string file_path;
 
-  // For box
   Eigen::Vector3d dimensions = Eigen::Vector3d::Zero();
 
-  // For cylinder
   double radius = 0.0;
   double height = 0.0;
 
-  // For ground_plane
   double size_x = 2.0;
   double size_y = 2.0;
   double z_position = 0.0;
 
-  // Transform (for all types)
   Eigen::Vector3d translation = Eigen::Vector3d::Zero();
   Eigen::Quaterniond rotation = Eigen::Quaterniond::Identity();
 };
@@ -88,10 +83,8 @@ struct ParsedConfig
 {
   std::string frame_id = "world";
 
-  // Primary workpiece
   PrimaryConfig primary;
 
-  // Gripper
   std::string gripper_urdf_path;
   std::optional<double> gripper_max_opening;
 
@@ -101,16 +94,11 @@ struct ParsedConfig
   std::vector<constraints::exclusion_polygon> exclusion_polygons;
   std::vector<constraints::exclusion_line> exclusion_lines;
 
-  // Mesh deflection parameters for OCCT triangulation
-  // Linear deflection: maximum distance between mesh edge and actual curve
-  // Angular deflection: maximum angular deviation in radians
   double mesh_linear_deflection = 0.001;
   double mesh_angular_deflection = 0.1;
 
-  // GraspFinder configuration
   core::GraspFinderConfig finder_config;
 
-  // Output settings
   OutputConfig output;
 };
 
@@ -257,7 +245,7 @@ private:
   /**
    * @brief Resolve file path (handle relative paths and package:// URLs)
    */
-  std::string resolve_path(const std::string & path) const;
+  std::string resolve_path(const std::string & path, const std::string & base_dir) const;
 
   /**
    * @brief Set error message

@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 #include <fcl/fcl.h>
 #include <atomic>
+#include <climits>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -267,27 +268,22 @@ private:
   {
     uint64_t total_checks{0};
 
-    // primary
     uint64_t primary_base{0};
     uint64_t primary_f1{0};
     uint64_t primary_f2{0};
 
-    // ground plane
     uint64_t ground_base{0};
     uint64_t ground_f1{0};
     uint64_t ground_f2{0};
 
-    // secondaries — per-index vectors; resized once when secondary_bvhs_ is populated
     std::vector<uint64_t> sec_base;
     std::vector<uint64_t> sec_f1;
     std::vector<uint64_t> sec_f2;
 
-    // exclusions — per-index vectors; resized once when exclusion_bvhs_ is populated
     std::vector<uint64_t> exc_base;
     std::vector<uint64_t> exc_f1;
     std::vector<uint64_t> exc_f2;
 
-    // ground pass/fail Z tracking in microns (z * 1e6)
     int64_t ground_pass_count{0};
     int64_t ground_fail_count{0};
     int64_t ground_sum_z_pass_um{0};
@@ -301,6 +297,11 @@ public:
    * @brief Log per-part collision statistics accumulated since construction.
    */
   void log_collision_stats() const;
+
+  /**
+   * @brief Get the Embree primary query engine (for reuse in orientation finder)
+   */
+  std::shared_ptr<EmbreeMeshQuery> get_embree_primary() const {return embree_primary_;}
 
   /**
    * @brief Get the primary shape BVH model (for diagnostics only)

@@ -139,10 +139,12 @@ void FCLCollisionChecker::add_exclusion_volumes(
     }
   }
 
+  // Extend (never shrink) stats vectors so existing counters are preserved
+  // if add_exclusion_volumes() is called more than once.
   const size_t n = exclusion_bvhs_.size();
-  stats_.exc_base = std::vector<uint64_t>(n);
-  stats_.exc_f1 = std::vector<uint64_t>(n);
-  stats_.exc_f2 = std::vector<uint64_t>(n);
+  stats_.exc_base.resize(n, 0);
+  stats_.exc_f1.resize(n, 0);
+  stats_.exc_f2.resize(n, 0);
 }
 
 void FCLCollisionChecker::add_secondary_shapes(
@@ -170,10 +172,12 @@ void FCLCollisionChecker::add_secondary_shapes(
     }
   }
 
+  // Extend (never shrink) stats vectors so existing counters are preserved
+  // if add_secondary_shapes() is called more than once.
   const size_t n = secondary_bvhs_.size();
-  stats_.sec_base = std::vector<uint64_t>(n);
-  stats_.sec_f1 = std::vector<uint64_t>(n);
-  stats_.sec_f2 = std::vector<uint64_t>(n);
+  stats_.sec_base.resize(n, 0);
+  stats_.sec_f1.resize(n, 0);
+  stats_.sec_f2.resize(n, 0);
 }
 
 void FCLCollisionChecker::add_ground_plane(
@@ -191,7 +195,7 @@ void FCLCollisionChecker::add_ground_plane(
 
   Eigen::Vector3d unit_normal = normal / norm_mag;
 
-  // FCL Halfspace(n, d): solid is n·x < d — pass plane_offset directly, no negation needed.
+  // FCL Halfspace(n, d): solid is n·x < d — pass plane_offset directly
   ground_halfspace_ = std::make_shared<Halfspace>(
     fcl::Vector3<FCLScalar>(unit_normal.x(), unit_normal.y(), unit_normal.z()),
     plane_offset);
@@ -278,32 +282,59 @@ bool FCLCollisionChecker::has_ground_plane() const
 
 void FCLCollisionChecker::log_collision_stats() const
 {
-  RCLCPP_INFO(logger_, "[FCL collision stats] total_checks=%lu", stats_.total_checks);
-  RCLCPP_INFO(logger_, "  primary  : base=%lu  f1=%lu  f2=%lu",
-    stats_.primary_base, stats_.primary_f1, stats_.primary_f2);
-  RCLCPP_INFO(logger_, "  ground   : base=%lu  f1=%lu  f2=%lu",
-    stats_.ground_base, stats_.ground_f1, stats_.ground_f2);
+  // Use snprintf so we control the full format string — RCLCPP_INFO prepends
+  // its own args, which breaks PRI* macro string-concatenation.
+  char buf[256];
+
+  std::snprintf(buf, sizeof(buf), "[FCL collision stats] total_checks=%zu",
+    static_cast<size_t>(stats_.total_checks));
+  RCLCPP_INFO(logger_, "%s", buf);
+
+  std::snprintf(buf, sizeof(buf), "  primary  : base=%zu  f1=%zu  f2=%zu",
+    static_cast<size_t>(stats_.primary_base),
+    static_cast<size_t>(stats_.primary_f1),
+    static_cast<size_t>(stats_.primary_f2));
+  RCLCPP_INFO(logger_, "%s", buf);
+
+  std::snprintf(buf, sizeof(buf), "  ground   : base=%zu  f1=%zu  f2=%zu",
+    static_cast<size_t>(stats_.ground_base),
+    static_cast<size_t>(stats_.ground_f1),
+    static_cast<size_t>(stats_.ground_f2));
+  RCLCPP_INFO(logger_, "%s", buf);
 
   for (size_t i = 0; i < stats_.exc_base.size(); ++i) {
-    RCLCPP_INFO(logger_, "  exclusion[%zu]: base=%lu  f1=%lu  f2=%lu",
-      i, stats_.exc_base[i], stats_.exc_f1[i], stats_.exc_f2[i]);
+    std::snprintf(buf, sizeof(buf), "  exclusion[%zu]: base=%zu  f1=%zu  f2=%zu",
+      i,
+      static_cast<size_t>(stats_.exc_base[i]),
+      static_cast<size_t>(stats_.exc_f1[i]),
+      static_cast<size_t>(stats_.exc_f2[i]));
+    RCLCPP_INFO(logger_, "%s", buf);
   }
 
   for (size_t i = 0; i < stats_.sec_base.size(); ++i) {
-    RCLCPP_INFO(logger_, "  secondary[%zu]: base=%lu  f1=%lu  f2=%lu",
-      i, stats_.sec_base[i], stats_.sec_f1[i], stats_.sec_f2[i]);
+    std::snprintf(buf, sizeof(buf), "  secondary[%zu]: base=%zu  f1=%zu  f2=%zu",
+      i,
+      static_cast<size_t>(stats_.sec_base[i]),
+      static_cast<size_t>(stats_.sec_f1[i]),
+      static_cast<size_t>(stats_.sec_f2[i]));
+    RCLCPP_INFO(logger_, "%s", buf);
   }
 
-  const int64_t gpass = stats_.ground_pass_count;
-  const int64_t gfail = stats_.ground_fail_count;
+  const int64_t gpass = static_cast<int64_t>(stats_.ground_pass_count);
+  const int64_t gfail = static_cast<int64_t>(stats_.ground_fail_count);
   const double avg_z_pass = gpass > 0 ? (stats_.ground_sum_z_pass_um / 1e6 / gpass) : 0.0;
   const double avg_z_fail = gfail > 0 ? (stats_.ground_sum_z_fail_um / 1e6 / gfail) : 0.0;
   const double min_z_pass = stats_.ground_min_z_pass_um != INT64_MAX ?
     stats_.ground_min_z_pass_um / 1e6 : 0.0;
-  RCLCPP_INFO(logger_, "  ground pass: count=%ld  avg_base_z=%.4fm  min_base_z=%.4fm",
-    gpass, avg_z_pass, min_z_pass);
-  RCLCPP_INFO(logger_, "  ground fail: count=%ld  avg_base_z=%.4fm",
-    gfail, avg_z_fail);
+
+  std::snprintf(buf, sizeof(buf),
+    "  ground pass: count=%zd  avg_base_z=%.4fm  min_base_z=%.4fm",
+    static_cast<ssize_t>(gpass), avg_z_pass, min_z_pass);
+  RCLCPP_INFO(logger_, "%s", buf);
+
+  std::snprintf(buf, sizeof(buf), "  ground fail: count=%zd  avg_base_z=%.4fm",
+    static_cast<ssize_t>(gfail), avg_z_fail);
+  RCLCPP_INFO(logger_, "%s", buf);
 }
 
 std::shared_ptr<FCLCollisionChecker::BVHModel> FCLCollisionChecker::shape_to_bvh(
@@ -398,7 +429,7 @@ std::shared_ptr<FCLCollisionChecker::BVHModel> FCLCollisionChecker::shape_to_bvh
       vmax[i] = std::max(vmax[i], v[i]);
     }
   }
-  RCLCPP_INFO(logger_,
+  RCLCPP_DEBUG(logger_,
     "shape_to_bvh: built BVH — %zu vertices, %zu triangles, %d faces skipped. "
     "AABB x=[%.4f, %.4f] y=[%.4f, %.4f] z=[%.4f, %.4f]",
     vertices.size(), triangles.size(), faces_with_no_triangulation,

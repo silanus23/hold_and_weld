@@ -37,6 +37,8 @@
 #include <Standard_Failure.hxx>
 #include <TopoDS_Compound.hxx>
 
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
+
 namespace hold_and_weld_gripper_sampler
 {
 namespace io
@@ -44,22 +46,8 @@ namespace io
 
 gp_Trsf rpy_to_transform(double roll, double pitch, double yaw)
 {
-  // ZYX Euler angles (aerospace convention)
-  double cy = std::cos(yaw * 0.5);
-  double sy = std::sin(yaw * 0.5);
-  double cp = std::cos(pitch * 0.5);
-  double sp = std::sin(pitch * 0.5);
-  double cr = std::cos(roll * 0.5);
-  double sr = std::sin(roll * 0.5);
-
-  double qw = cr * cp * cy + sr * sp * sy;
-  double qx = sr * cp * cy - cr * sp * sy;
-  double qy = cr * sp * cy + sr * cp * sy;
-  double qz = cr * cp * sy - sr * sp * cy;
-
-  gp_Quaternion quat(qx, qy, qz, qw);
   gp_Trsf transform;
-  transform.SetRotation(quat);
+  transform.SetRotation(geometry::rpy_to_quaternion(roll, pitch, yaw));
   return transform;
 }
 
@@ -520,8 +508,6 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
     gripper.tcp_rpy = Eigen::Vector3d::Zero();
   }
 
-  // Re-use the already-parsed robot element for all subsequent extractions
-  // — avoids re-parsing the URDF string 8+ times.
   gripper.base = extract_link_shape(robot, gripper.base_link_name);
 
   TopoDS_Shape finger_1_raw = extract_link_shape(robot, gripper.finger_1_link_name);

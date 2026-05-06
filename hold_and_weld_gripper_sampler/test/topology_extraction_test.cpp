@@ -61,7 +61,6 @@ TEST_F(TopologyExtractionTest, LoadFromUrdfString_WithBoxGeometry_ExtractsCorrec
   EXPECT_EQ(topology.num_surfaces(), test_constants::kBoxSurfaces);
 
   // Check that all surfaces have valid normals
-  EXPECT_EQ(topology.num_surfaces(), test_constants::kBoxSurfaces);
 
   const auto & all_surfaces = topology.get_all_surfaces();
   for (size_t i = 0; i < all_surfaces.size(); i++) {

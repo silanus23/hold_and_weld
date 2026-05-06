@@ -24,7 +24,6 @@
 #include <BRepBndLib.hxx>
 
 using hold_and_weld_gripper_sampler::ParsedGripper;
-using hold_and_weld_gripper_sampler::core::configure_gripper;
 using hold_and_weld_gripper_sampler::io::GripperParser;
 
 namespace test_constants
@@ -402,16 +401,16 @@ TEST_F(GripperParserTest, ConfigureGripper_WithValidGripper_CreatesCompoundShape
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
 
   // Configure gripper at min opening (closed) — min is always 0
-  TopoDS_Shape closed_gripper = configure_gripper(gripper, 0.0);
+  TopoDS_Shape closed_gripper = gripper.configure(0.0);
   EXPECT_FALSE(closed_gripper.IsNull());
 
   // Configure gripper at mid opening
   double mid_opening = gripper.max_opening / 2.0;
-  TopoDS_Shape mid_gripper = configure_gripper(gripper, mid_opening);
+  TopoDS_Shape mid_gripper = gripper.configure(mid_opening);
   EXPECT_FALSE(mid_gripper.IsNull());
 
   // Configure gripper at max opening
-  TopoDS_Shape open_gripper = configure_gripper(gripper, gripper.max_opening);
+  TopoDS_Shape open_gripper = gripper.configure(gripper.max_opening);
   EXPECT_FALSE(open_gripper.IsNull());
 
   // Verify bounding boxes increase as gripper opens
@@ -443,10 +442,10 @@ TEST_F(GripperParserTest, ConfigureGripper_WithExcessiveOpening_ClampsToMaxOpeni
 
   // Request opening beyond max
   double excessive_opening = gripper.max_opening + 0.5;
-  TopoDS_Shape clamped_gripper = configure_gripper(gripper, excessive_opening);
+  TopoDS_Shape clamped_gripper = gripper.configure(excessive_opening);
 
   // Should clamp to max opening
-  TopoDS_Shape max_gripper = configure_gripper(gripper, gripper.max_opening);
+  TopoDS_Shape max_gripper = gripper.configure(gripper.max_opening);
 
   Bnd_Box clamped_bbox, max_bbox;
   BRepBndLib::Add(clamped_gripper, clamped_bbox);

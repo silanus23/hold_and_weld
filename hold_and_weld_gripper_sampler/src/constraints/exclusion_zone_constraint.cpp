@@ -17,12 +17,14 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <BRepAlgoAPI_Section.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -299,27 +301,46 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
       return sample_areas;
     }
 
-    TopTools_IndexedDataMapOfShapeListOfShape edge_to_faces;
-    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_to_faces);
+    std::vector<TopoDS_Edge> section_edges;
+    for (TopExp_Explorer exp(section.Shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
+      section_edges.push_back(TopoDS::Edge(exp.Current()));
+    }
 
+    if (section_edges.empty()) {
+      return sample_areas;
+    }
+
+    std::vector<TopoDS_Face> primary_faces;
+    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
+      primary_faces.push_back(TopoDS::Face(exp.Current()));
+    }
+
+    if (primary_faces.empty()) {
+      return sample_areas;
+    }
+
+    // For each section edge, find the closest primary face geometrically
+    // (section edges are new OCCT objects — pointer identity lookup does not work)
     std::map<int, std::vector<TopoDS_Edge>> surface_edges;
 
-    for (TopExp_Explorer exp(section.Shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
-      TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+    for (const auto & section_edge : section_edges) {
+      int best_surface_id = -1;
+      double best_dist = std::numeric_limits<double>::max();
 
-      if (!edge_to_faces.Contains(edge)) {
-        continue;
-      }
-
-      for (TopTools_ListIteratorOfListOfShape it(edge_to_faces.FindFromKey(edge));
-        it.More(); it.Next())
-      {
+      for (const auto & face : primary_faces) {
         try {
-          int surface_id = mapper_->find_topology_surface_id(TopoDS::Face(it.Value()));
-          surface_edges[surface_id].push_back(edge);
-        } catch (const std::runtime_error &) {
+          BRepExtrema_DistShapeShape dist(section_edge, face);
+          if (dist.IsDone() && dist.Value() < best_dist) {
+            best_dist = dist.Value();
+            best_surface_id = mapper_->find_topology_surface_id(face);
+          }
+        } catch (const std::exception &) {
           continue;
         }
+      }
+
+      if (best_surface_id >= 0 && best_dist < 1e-4) {
+        surface_edges[best_surface_id].push_back(section_edge);
       }
     }
 
@@ -329,23 +350,28 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
         wire_builder.Add(edge);
       }
 
-      TopoDS_Wire wire = wire_builder.Wire();
+      if (!wire_builder.IsDone()) {
+        RCLCPP_WARN(logger_,
+          "MakeWire failed for surface %d (%zu edges) — skipping exclusion wire",
+          surface_id, edges.size());
+        continue;
+      }
 
-      // Critical: Reversed orientation marks the interior of the loop as the exclusion area
-      wire.Reverse();
+      TopoDS_Wire wire = wire_builder.Wire();
 
       core::SampleArea area;
       area.surface_id = surface_id;
       area.wire = wire;
+      area.is_exclusion = true;
       sample_areas.push_back(area);
 
       RCLCPP_DEBUG(logger_, "Exclusion wire created for surface %d (%zu edges)",
-                    surface_id, edges.size());
+        surface_id, edges.size());
     }
   } catch (const Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT Section operation or mapping failed: %s", e.GetMessageString());
+    RCLCPP_ERROR(logger_, "OCCT Section operation failed: %s", e.GetMessageString());
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Standard exception in constraint processing: %s", e.what());
+    RCLCPP_ERROR(logger_, "Exception in constraint processing: %s", e.what());
   }
 
   return sample_areas;
@@ -374,8 +400,9 @@ void ExclusionZoneConstraint::analyze_constraints(
 
   for (size_t i = 0; i < lines_.size(); ++i) {
     const auto & line = lines_[i];
-    RCLCPP_DEBUG(logger_, "Line exclusion %zu: start=(%.4f,%.4f,%.4f) end=(%.4f,%.4f,%.4f)",
-      i, line.start.x(), line.start.y(), line.start.z(),
+    RCLCPP_DEBUG(logger_, "Line exclusion %zu%s: start=(%.4f,%.4f,%.4f) end=(%.4f,%.4f,%.4f)",
+      i, line.id.empty() ? "" : (" '" + line.id + "'").c_str(),
+      line.start.x(), line.start.y(), line.start.z(),
       line.end.x(), line.end.y(), line.end.z());
 
     TopoDS_Shape proj = create_tube_from_line(line, false);
@@ -393,8 +420,9 @@ void ExclusionZoneConstraint::analyze_constraints(
 
   for (size_t i = 0; i < circles_.size(); ++i) {
     const auto & circle = circles_[i];
-    RCLCPP_DEBUG(logger_, "Circle exclusion %zu: center=(%.4f,%.4f,%.4f) r=%.4f m",
-      i, circle.center.x(), circle.center.y(), circle.center.z(), circle.radius);
+    RCLCPP_DEBUG(logger_, "Circle exclusion %zu%s: center=(%.4f,%.4f,%.4f) r=%.4f m",
+      i, circle.id.empty() ? "" : (" '" + circle.id + "'").c_str(),
+      circle.center.x(), circle.center.y(), circle.center.z(), circle.radius);
 
     TopoDS_Shape proj = create_volume_from_circle(circle, false);
     TopoDS_Shape coll = create_volume_from_circle(circle, true);
@@ -413,8 +441,9 @@ void ExclusionZoneConstraint::analyze_constraints(
 
   for (size_t i = 0; i < polygons_.size(); ++i) {
     const auto & polygon = polygons_[i];
-    RCLCPP_DEBUG(logger_, "Polygon exclusion %zu: %zu corners, depth=%.4f m",
-      i, polygon.exclusion_corners.size(), polygon.projection_depth);
+    RCLCPP_DEBUG(logger_, "Polygon exclusion %zu%s: %zu corners, depth=%.4f m",
+      i, polygon.id.empty() ? "" : (" '" + polygon.id + "'").c_str(),
+      polygon.exclusion_corners.size(), polygon.projection_depth);
 
     TopoDS_Shape proj = create_prism_from_polygon(polygon, false);
     TopoDS_Shape coll = create_prism_from_polygon(polygon, true);

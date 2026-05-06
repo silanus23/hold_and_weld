@@ -13,9 +13,11 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -39,19 +41,15 @@ namespace hold_and_weld_gripper_sampler
 namespace angle_finding
 {
 
-// ray origin lifted above surface to avoid self-intersection
-static constexpr double kCeilingOffset = 0.010;
-static constexpr double kSeedStepRad = 15.0 * M_PI / 180.0;  // seed spacing within a graspable arc
-
 // Finds all overlapping pieces between two arcs, each of which may wrap the 0/2pi seam.
 static bool angular_overlap(
   double a_start, double a_end,
   double b_start, double b_end,
   std::vector<std::pair<double, double>> & out_overlaps)
 {
-  auto split = [](double s, double e) -> std::array<std::pair<double, double>, 2> {
-      if (s <= e) {return {{{s, e}, {e, e}}};}
-      return {{{s, 2.0 * M_PI}, {0.0, e}}};
+  auto split = [](double s, double e) -> std::vector<std::pair<double, double>> {
+      if (s <= e) {return {{s, e}};}
+      return {{s, 2.0 * M_PI}, {0.0, e}};
     };
 
   bool found = false;
@@ -70,7 +68,7 @@ static bool angular_overlap(
   return found;
 }
 
-// Orthonormal basis — stable for all normal orientations including +-Z.
+// Orthonormal basis so stable for all normal orientations including +-Z.
 static void build_tangent_frame(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec & out_ly)
 {
   const double sign = (normal.Z() >= 0.0) ? 1.0 : -1.0;
@@ -102,7 +100,11 @@ static gp_Pnt compute_ring_point(
         sin_angle);
 }
 
-// Merges a seam-split arc: if the first and last segments in a state share the
+// Merges a seam-split arc: the first and last segments of a sweep that
+// started and ended in the same state are one arc split across the 0/2π seam.
+// Extend front's end_rad by the back segment's width, then discard the back.
+// Example: back=[350°,360°], front=[0°,10°] → front becomes [0°,20°].
+// end_rad > 2π is fine; the sweep loop condition handles it correctly.
 static void rejoin_wraparound_arc(
   RadialMaps & maps,
   SurfaceState first_state,
@@ -111,14 +113,13 @@ static void rejoin_wraparound_arc(
   for (const SurfaceState state : kAllSurfaceStates) {
     auto & segs = maps.segs_for(state);
     if (segs.size() < 2) {continue;}
-    const SurfaceState front_state = segs.front().state;
-    const SurfaceState back_state = segs.back().state;
-    const double       front_start = segs.front().start_rad;
-    const double       back_start = segs.back().start_rad;
-    if (back_state != state || front_state != state) {continue;}
+    const double front_start = segs.front().start_rad;
+    const double back_start = segs.back().start_rad;
+    const double back_end = segs.back().end_rad;
     if (front_start < wrap_tol && first_state == state) {
+      const double back_arc = back_end - back_start;
+      segs.front().end_rad += back_arc;
       segs.pop_back();
-      segs.front().start_rad = back_start;
     }
   }
 }
@@ -166,24 +167,6 @@ SurfaceState GraspOrientationFinder::classify_hit(
   return SurfaceState::FLAT;
 }
 
-Grasp to_grasp(const GraspCandidate & candidate)
-{
-  gp_Pnt tcp(
-    (candidate.contact_1.X() + candidate.contact_2.X()) / 2.0,
-    (candidate.contact_1.Y() + candidate.contact_2.Y()) / 2.0,
-    (candidate.contact_1.Z() + candidate.contact_2.Z()) / 2.0);
-
-  return Grasp::create(
-    geometry::to_eigen(tcp),
-    geometry::extract_quaternion(candidate.gripper_transform),
-    candidate.grip_distance,
-    geometry::to_eigen(candidate.contact_1),
-    geometry::to_eigen(candidate.contact_2),
-    candidate.surface_id_1,
-    candidate.surface_id_2,
-    candidate.quality_score
-  );
-}
 
 RadialMaps GraspOrientationFinder::create_radial_maps(
   const gp_Pnt & contact,
@@ -220,9 +203,16 @@ RadialMaps GraspOrientationFinder::create_radial_maps(
     // Avoids spurious LOW classifications from rays falling short at grazing angles.
     gp_Pnt hit_point;
     bool hit = false;
+    static std::once_flag embree_null_warned;
     if (embree_checker_ && embree_checker_->is_valid()) {
       auto embree_hit = embree_checker_->ray_intersect(lifted_center, gp_Dir(ray_vec), ray_length);
       if (embree_hit.has_value()) {hit_point = embree_hit.value(); hit = true;}
+    } else if (!embree_checker_) {
+      std::call_once(embree_null_warned, [this]() {
+          RCLCPP_WARN(logger_,
+          "GraspOrientationFinder: Embree checker is null — all radial directions "
+          "classified as unobstructed. Quality scores will be 1.0 for all candidates.");
+      });
     }
 
     const SurfaceState state = classify_hit(hit, hit_point, contact, normal_vec, flat_tol);
@@ -283,6 +273,7 @@ RadialMaps GraspOrientationFinder::create_radial_maps(
             lifted_center, gp_Dir(ray_vec), ray_length);
           if (embree_hit.has_value()) {hit_point = embree_hit.value(); hit = true;}
         }
+        // Note: null embree_checker_ already warned in the outer ring loop above.
         const SurfaceState current_state = classify_hit(
           hit, hit_point, contact, normal_vec, flat_tol);
 
@@ -342,6 +333,9 @@ std::vector<std::vector<RadialSegment>> GraspOrientationFinder::cluster_and_filt
   double cluster_end = segments.front().end_rad;
 
   // assumes segments are sorted by start_rad — guaranteed by the sweep order in create_radial_maps
+  assert(std::is_sorted(segments.begin(), segments.end(),
+    [](const auto & a, const auto & b) {return a.start_rad < b.start_rad;}) &&
+    "cluster_and_filter: segments must be sorted by start_rad");
   for (size_t seg_idx = 1; seg_idx < segments.size(); ++seg_idx) {
     const RadialSegment & seg = segments[seg_idx];
     if (seg.start_rad - cluster_end <= merge_tol) {
@@ -513,14 +507,14 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       double offset_2 = std::atan2(cal_ref.Dot(tangent_y_2), cal_ref.Dot(tangent_x_2));
 
       gp_Pnt lifted_1(
-        pair.contact_1.X() + normal_1.X() * kCeilingOffset,
-        pair.contact_1.Y() + normal_1.Y() * kCeilingOffset,
-        pair.contact_1.Z() + normal_1.Z() * kCeilingOffset);
+        pair.contact_1.X() + normal_1.X() * config_.ray_lift_offset,
+        pair.contact_1.Y() + normal_1.Y() * config_.ray_lift_offset,
+        pair.contact_1.Z() + normal_1.Z() * config_.ray_lift_offset);
 
       gp_Pnt lifted_2(
-        pair.contact_2.X() + normal_2.X() * kCeilingOffset,
-        pair.contact_2.Y() + normal_2.Y() * kCeilingOffset,
-        pair.contact_2.Z() + normal_2.Z() * kCeilingOffset);
+        pair.contact_2.X() + normal_2.X() * config_.ray_lift_offset,
+        pair.contact_2.Y() + normal_2.Y() * config_.ray_lift_offset,
+        pair.contact_2.Z() + normal_2.Z() * config_.ray_lift_offset);
 
       auto maps_1 = create_radial_maps(
       pair.contact_1, gp_Dir(normal_1), tangent_x_1, tangent_y_1, lifted_1, offset_1);
@@ -535,6 +529,10 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
 
     // Reused for both quality scoring and seed generation.
       auto merged = merge_low_segments(maps_1, maps_2);
+      std::sort(merged.begin(), merged.end(),
+        [](const RadialSegment & a, const RadialSegment & b) {
+          return a.start_rad < b.start_rad;
+        });
 
       double grippable_rad = 0.0;
       for (const auto & seg : merged) {
@@ -579,11 +577,12 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
                   seeds.push_back(span_start + dist(rng));
                 }
               } else {
-                if (cluster_arc_span <= kSeedStepRad) {
+                const double seed_step_rad = config_.seed_step_deg * M_PI / 180.0;
+                if (cluster_arc_span <= seed_step_rad) {
                   seeds.push_back(span_start + cluster_arc_span * 0.5);
                 } else {
-                  const int    num_steps = static_cast<int>(std::floor(cluster_arc_span /
-                      kSeedStepRad));
+                  const int num_steps = static_cast<int>(std::floor(cluster_arc_span /
+                      seed_step_rad));
                   const double actual_step = cluster_arc_span / num_steps;
                   for (int step_idx = 0; step_idx < num_steps; ++step_idx) {
                     seeds.push_back(span_start + (step_idx + 0.5) * actual_step);
@@ -687,7 +686,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     pairs_skipped_flat, pairs_no_seeds, total_orientations_tested,
     rejected_by_primary, rejected_by_exclusion, rejected_by_secondary);
 
-  RCLCPP_INFO(logger_,
+  RCLCPP_DEBUG(logger_,
     "[Radial pipeline] flat=%.1f%%  merged_empty=%.1f%%  "
     "killed_cluster=%.1f%%  no_seeds=%.1f%%  with_seeds=%.1f%%  "
     "avg_seeds=%.2f (capped=%.2f)",

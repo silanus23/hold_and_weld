@@ -53,24 +53,33 @@ struct ParsedGripper
   std::string finger_2_link_name;
   std::string finger_1_joint_name;
   std::string finger_2_joint_name;
+
+  /**
+   * @brief Configure the gripper to a specified grip distance
+   *
+   * Translates each finger along its opening axis by the amount needed to
+   * achieve the requested grip distance. Clamps to [0, max_opening].
+   * Both fingers move symmetrically from their closed (reference) positions,
+   * which are defined by the joint origin transforms baked into finger_1/finger_2.
+   *
+   * @param grip_distance Target distance between finger contact points (meters)
+   * @return Compound shape: finger_1 + finger_2 + base at configured state
+   */
+  TopoDS_Shape configure(double grip_distance) const;
 };
 
-/**
- * @brief Configure gripper to a specified grip distance
- *
- * Translates each finger along its opening axis by the amount needed to
- * achieve the requested grip distance. Clamps to [0, max_opening].
- * Both fingers move symmetrically from their closed (reference) positions,
- * which are defined by the joint origin transforms baked into finger_1/finger_2.
- *
- * @param gripper Parsed gripper data
- * @param grip_distance Target distance between finger contact points (meters)
- * @return Compound shape: finger_1 + finger_2 + base at configured state
- */
 namespace core
 {
 
-TopoDS_Shape configure_gripper(const ParsedGripper & gripper, double grip_distance);
+/**
+ * @deprecated Use ParsedGripper::configure() instead.
+ */
+[[deprecated("Use ParsedGripper::configure() instead")]]
+inline TopoDS_Shape configure_gripper(
+  const ParsedGripper & gripper, double grip_distance)
+{
+  return gripper.configure(grip_distance);
+}
 
 }  // namespace core
 }  // namespace hold_and_weld_gripper_sampler

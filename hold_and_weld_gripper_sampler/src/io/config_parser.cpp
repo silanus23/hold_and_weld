@@ -152,6 +152,30 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
         config.finder_config.collision_tolerance =
           params["kissing"]["collision_tolerance"].as<double>();
       }
+      if (params["kissing"]["contact_distance_threshold"]) {
+        config.finder_config.kissing_contact_distance_threshold =
+          params["kissing"]["contact_distance_threshold"].as<double>();
+      }
+    }
+
+    if (params["shape_refiner"]) {
+      auto & sr = config.finder_config.shape_refiner;
+      const auto & sr_node = params["shape_refiner"];
+      if (sr_node["enabled"]) {
+        sr.enabled = sr_node["enabled"].as<bool>();
+      }
+      if (sr_node["max_cylinder_radius"]) {
+        sr.max_cylinder_radius = sr_node["max_cylinder_radius"].as<double>();
+      }
+      if (sr_node["max_arc_length"]) {
+        sr.max_arc_length = sr_node["max_arc_length"].as<double>();
+      }
+      if (sr_node["enclave_area_ratio"]) {
+        sr.enclave_area_ratio = sr_node["enclave_area_ratio"].as<double>();
+      }
+      if (sr_node["enclave_angle_threshold"]) {
+        sr.enclave_angle_threshold = sr_node["enclave_angle_threshold"].as<double>();
+      }
     }
 
     if (params["fcl"]) {
@@ -202,9 +226,9 @@ YAML::Node ConfigParser::get_parameters_node(const YAML::Node & root) const
 bool ConfigParser::parse_primary(const YAML::Node & node, PrimaryConfig & config)
 {
   if (node["step_path"]) {
-    config.step_path = resolve_path(node["step_path"].as<std::string>());
+    config.step_path = resolve_path(node["step_path"].as<std::string>(), base_dir_);
   } else if (node["urdf_path"]) {
-    config.urdf_path = resolve_path(node["urdf_path"].as<std::string>());
+    config.urdf_path = resolve_path(node["urdf_path"].as<std::string>(), base_dir_);
   } else {
     set_error("Primary must have either 'step_path' or 'urdf_path'");
     return false;
@@ -224,7 +248,7 @@ bool ConfigParser::parse_gripper(const YAML::Node & node, ParsedConfig & config)
     return false;
   }
 
-  config.gripper_urdf_path = resolve_path(node["urdf_path"].as<std::string>());
+  config.gripper_urdf_path = resolve_path(node["urdf_path"].as<std::string>(), base_dir_);
 
   if (node["max_opening"]) {
     config.gripper_max_opening = node["max_opening"].as<double>();
@@ -268,9 +292,9 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
 
   if (config.type == "step" || config.type == "urdf") {
     if (node["step_path"]) {
-      config.file_path = resolve_path(node["step_path"].as<std::string>());
+      config.file_path = resolve_path(node["step_path"].as<std::string>(), base_dir_);
     } else if (node["urdf_path"]) {
-      config.file_path = resolve_path(node["urdf_path"].as<std::string>());
+      config.file_path = resolve_path(node["urdf_path"].as<std::string>(), base_dir_);
     } else {
       set_error("Secondary shape of type '" + config.type + "' must have file path");
       return false;
@@ -365,6 +389,10 @@ bool ConfigParser::parse_exclusion_circle(
     circle.clearance = node["clearance"].as<double>();
   }
 
+  if (node["id"]) {
+    circle.id = node["id"].as<std::string>();
+  }
+
   return true;
 }
 
@@ -387,6 +415,10 @@ bool ConfigParser::parse_exclusion_polygon(
     polygon.clearance = node["clearance"].as<double>();
   }
 
+  if (node["id"]) {
+    polygon.id = node["id"].as<std::string>();
+  }
+
   return true;
 }
 
@@ -406,6 +438,10 @@ bool ConfigParser::parse_exclusion_line(
 
   if (node["clearance"]) {
     line.clearance = node["clearance"].as<double>();
+  }
+
+  if (node["id"]) {
+    line.id = node["id"].as<std::string>();
   }
 
   return true;
@@ -484,6 +520,12 @@ bool ConfigParser::parse_orientation(
   if (node["debug_sweep_step_deg"]) {
     config.debug_sweep_step_deg = node["debug_sweep_step_deg"].as<double>();
   }
+  if (node["ray_lift_offset"]) {
+    config.ray_lift_offset = node["ray_lift_offset"].as<double>();
+  }
+  if (node["seed_step_deg"]) {
+    config.seed_step_deg = node["seed_step_deg"].as<double>();
+  }
 
   return true;
 }
@@ -530,7 +572,13 @@ Eigen::Quaterniond ConfigParser::parse_quaternion(const YAML::Node & node) const
 {
   Eigen::Quaterniond quat = Eigen::Quaterniond::Identity();
 
-  if (node.IsSequence() && node.size() >= 4) {
+  if (node.IsSequence()) {
+    if (node.size() < 4) {
+      RCLCPP_WARN(rclcpp::get_logger("gripper_sampler"),
+        "parse_quaternion: sequence has %zu elements, expected 4 [x,y,z,w]. Using identity.",
+        node.size());
+      return Eigen::Quaterniond::Identity();
+    }
     // Assume order: x, y, z, w
     quat.x() = node[0].as<double>();
     quat.y() = node[1].as<double>();
@@ -551,6 +599,14 @@ Eigen::Quaterniond ConfigParser::parse_quaternion(const YAML::Node & node) const
     }
   }
 
+  if (quat.norm() < 1e-6) {
+    RCLCPP_WARN(rclcpp::get_logger("gripper_sampler"),
+      "parse_quaternion: quaternion has near-zero norm \u2014 "
+      "check YAML input (expected sequence [x,y,z,w] or map with x/y/z/w keys). "
+      "Falling back to identity.");
+    return Eigen::Quaterniond::Identity();
+  }
+
   return quat.normalized();
 }
 
@@ -567,7 +623,9 @@ void ConfigParser::parse_transform(
   }
 }
 
-std::string ConfigParser::resolve_path(const std::string & path) const
+std::string ConfigParser::resolve_path(
+  const std::string & path,
+  const std::string & base_dir) const
 {
   if (path.empty()) {
     return path;
@@ -592,7 +650,7 @@ std::string ConfigParser::resolve_path(const std::string & path) const
     return path;
   }
 
-  return base_dir_ + "/" + path;
+  return base_dir + "/" + path;
 }
 
 void ConfigParser::set_error(const std::string & message)

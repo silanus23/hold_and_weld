@@ -44,6 +44,21 @@ namespace geometry
 
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
+gp_Quaternion rpy_to_quaternion(double roll, double pitch, double yaw)
+{
+  double cy = std::cos(yaw * 0.5);
+  double sy = std::sin(yaw * 0.5);
+  double cp = std::cos(pitch * 0.5);
+  double sp = std::sin(pitch * 0.5);
+  double cr = std::cos(roll * 0.5);
+  double sr = std::sin(roll * 0.5);
+  return gp_Quaternion(
+    sr * cp * cy - cr * sp * sy,
+    cr * sp * cy + sr * cp * sy,
+    cr * cp * sy - sr * sp * cy,
+    cr * cp * cy + sr * sp * sy);
+}
+
 Eigen::Vector3d to_eigen(const gp_Pnt & pnt)
 {
   return Eigen::Vector3d(pnt.X(), pnt.Y(), pnt.Z());
@@ -184,13 +199,16 @@ Eigen::Vector3d extract_translation(const gp_Trsf & transform)
 
 Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform)
 {
-  gp_Mat r = transform.VectorialPart();
-  // Matrix is built directly via SetValues (gripper→world, no Invert()), so
-  // Value(row, col) is already the correct R — read straight, no transpose needed.
+  // gp_Mat::Value(row, col) returns elements in mathematical row-major order.
+  // The rotation matrix was built via SetValues which stores gripper->world directly,
+  // so we read it straight into Eigen without transposing.
   Eigen::Matrix3d eigen_rot;
-  eigen_rot(0, 0) = r.Value(1, 1); eigen_rot(0, 1) = r.Value(1, 2); eigen_rot(0, 2) = r.Value(1, 3);
-  eigen_rot(1, 0) = r.Value(2, 1); eigen_rot(1, 1) = r.Value(2, 2); eigen_rot(1, 2) = r.Value(2, 3);
-  eigen_rot(2, 0) = r.Value(3, 1); eigen_rot(2, 1) = r.Value(3, 2); eigen_rot(2, 2) = r.Value(3, 3);
+  const gp_Mat & m = transform.VectorialPart();
+  for (int row = 1; row <= 3; ++row) {
+    for (int col = 1; col <= 3; ++col) {
+      eigen_rot(row - 1, col - 1) = m.Value(row, col);
+    }
+  }
   return Eigen::Quaterniond(eigen_rot).normalized();
 }
 
@@ -220,15 +238,13 @@ std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS
 
   GeomAPI_ProjectPointOnSurf projector(point, surf);
 
-  double u, v;
   if (projector.NbPoints() == 0) {
-    Standard_Real u_min, u_max, v_min, v_max;
-    BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-    u = (u_min + u_max) / 2.0;
-    v = (v_min + v_max) / 2.0;
-  } else {
-    projector.Parameters(1, u, v);
+    // Projection failed — caller must handle this case
+    return std::nullopt;
   }
+
+  double u, v;
+  projector.Parameters(1, u, v);
 
   GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
 

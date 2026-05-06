@@ -27,15 +27,10 @@ namespace filters
 {
 
 /**
- * @brief Filters surfaces based on minimum dimension using oriented bounding box
+ * @brief Filters surfaces by minimum oriented bounding box dimension.
  *
- * For each surface:
- * 1. Creates local coordinate frame aligned with surface normal
- * 2. Transforms surface to local frame (centered at origin)
- * 3. Computes axis-aligned bounding box in local frame
- * 4. Checks if minimum dimension (width/height/depth) exceeds threshold
- *
- * This approach works for planar and curved surfaces.
+ * Rejects surfaces whose smallest local-frame extent is below the threshold.
+ * Works for both planar and curved surfaces.
  */
 class SurfaceDimensionFilter : public core::SurfaceFilter
 {

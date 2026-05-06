@@ -37,7 +37,6 @@ struct ResultMetadata
   std::string gripper_source;
   std::string config_source;
 
-  // Pipeline statistics
   size_t num_surfaces_total = 0;
   size_t num_surfaces_valid = 0;
   size_t num_surfaces_banned = 0;
@@ -45,12 +44,10 @@ struct ResultMetadata
   size_t num_candidates = 0;
   size_t num_grasps_output = 0;
 
-  // Timing (optional)
   double total_time_seconds = 0.0;
   double sampling_time_seconds = 0.0;
   double orientation_time_seconds = 0.0;
 
-  // Gripper geometry (for visualization)
   double finger_length = 0.0;
 };
 
@@ -200,6 +197,13 @@ private:
    * @brief Set error message
    */
   void set_error(const std::string & message);
+
+  /**
+   * @brief Escape a string for safe embedding in JSON
+   *
+   * Handles quotes, backslashes, and control characters.
+   */
+  static std::string escape_json_string(const std::string & s);
 };
 
 }  // namespace io

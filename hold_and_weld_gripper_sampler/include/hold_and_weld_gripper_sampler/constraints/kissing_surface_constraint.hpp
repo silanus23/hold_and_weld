@@ -83,7 +83,10 @@ public:
     const ParsedGripper & gripper,
     const std::vector<TopoDS_Shape> & secondary_shapes,
     double contact_threshold = 0.8,
-    double collision_tolerance = 1e-6
+    double collision_tolerance = 1e-6,
+    double contact_distance_threshold = 0.005,
+    double mesh_linear_deflection = 0.001,
+    double mesh_angular_deflection = 0.1
   );
 
   /**
@@ -169,14 +172,15 @@ private:
   std::vector<TopoDS_Shape> secondary_shapes_;
   double contact_threshold_;
   double collision_tolerance_;
+  double contact_distance_threshold_;
+  double mesh_linear_deflection_;
+  double mesh_angular_deflection_;
 
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
 
-  // Results from analysis
   std::vector<int> banned_surface_ids_;
   std::vector<core::SampleArea> partial_exclusions_;
 
-  // Collision rejection telemetry (mutable for const methods)
   mutable GraspCollisionStats collision_stats_;
 
   // Logger

@@ -45,6 +45,7 @@ struct exclusion_line
   Eigen::Vector3d end;
   double exclusion_radius;
   double clearance = 0.01;
+  std::string id;
 };
 
 /**
@@ -57,6 +58,7 @@ struct exclusion_circle
   double radius;
   double projection_depth;
   double clearance = 0.01;
+  std::string id;
 };
 
 /**
@@ -67,6 +69,7 @@ struct exclusion_polygon
   std::vector<Eigen::Vector3d> exclusion_corners;
   double projection_depth;
   double clearance = 0.01;
+  std::string id;
 };
 
 /**

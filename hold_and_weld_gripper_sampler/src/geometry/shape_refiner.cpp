@@ -19,7 +19,10 @@
 #include <stdexcept>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRep_Tool.hxx>
+#include <Geom2d_Curve.hxx>
 #include <GeomAdaptor_Curve.hxx>
+#include <gp_Pnt2d.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -102,214 +105,10 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
       }
     }
 
-    // Pre-split U-periodic faces: BRepFeat_SplitShape silently fails on them because it
-    // cannot insert ISO edges without an existing seam. ShapeUpgrade_ShapeDivideClosed opens it.
-    int nb_split_points = 0;
-    for (TopExp_Explorer periodic_exp(current_shape, TopAbs_FACE); periodic_exp.More();
-      periodic_exp.Next())
-    {
-      BRepAdaptor_Surface adaptor(TopoDS::Face(periodic_exp.Current()));
-      if (!adaptor.IsUPeriodic()) {continue;}
-
-      // Estimate full U-period arc length:
-      // exact formula for analytics, mid-V isocurve for BSpline/Bezier.
-      double u_arc_length = 0.0;
-      const GeomAbs_SurfaceType stype = adaptor.GetType();
-      if (stype == GeomAbs_Cylinder) {
-        u_arc_length = 2.0 * M_PI * adaptor.Cylinder().Radius();
-      } else if (stype == GeomAbs_Cone) {
-        // Approximate via the reference radius of the cone
-        u_arc_length = 2.0 * M_PI * adaptor.Cone().RefRadius();
-      } else if (stype == GeomAbs_Sphere) {
-        u_arc_length = 2.0 * M_PI * adaptor.Sphere().Radius();
-      } else if (stype == GeomAbs_Torus) {
-        u_arc_length = 2.0 * M_PI * (adaptor.Torus().MajorRadius() +
-          adaptor.Torus().MinorRadius());
-      } else {
-        // BSpline, Bezier or other — sample the mid-V isocurve length as an estimate
-        try {
-          Handle(Geom_Curve) iso = adaptor.Surface().Surface()->UIso(
-            (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2.0);
-          if (!iso.IsNull()) {
-            GeomAdaptor_Curve iso_adaptor(iso,
-              adaptor.FirstVParameter(), adaptor.LastVParameter());
-            u_arc_length = GCPnts_AbscissaPoint::Length(iso_adaptor);
-          }
-        } catch (const Standard_Failure & e) {
-          RCLCPP_DEBUG(logger_,
-                "UIso arc length estimation failed: %s - face deferred to area ratio pass",
-            e.GetMessageString());
-        }
-      }
-
-      if (u_arc_length > max_arc_length_) {
-        int pieces = static_cast<int>(std::ceil(u_arc_length / max_arc_length_));
-        nb_split_points = std::max(nb_split_points, pieces - 1);
-      }
-    }
-
-    if (nb_split_points > 0) {
-      RCLCPP_INFO(logger_,
-        "U-periodic face(s) exceed arc length limit - "
-        "pre-splitting to open seam before surface splitter (%d point(s)).",
-        nb_split_points);
-      try {
-        ShapeUpgrade_ShapeDivideClosed divider(current_shape);
-        divider.SetNbSplitPoints(nb_split_points);
-        divider.Perform();
-        TopoDS_Shape divided = divider.Result();
-        if (!divided.IsNull()) {
-          current_shape = divided;
-        }
-      } catch (const Standard_Failure & e) {
-        RCLCPP_WARN(logger_,
-          "ShapeDivideClosed failed: %s - continuing without pre-split",
-          e.GetMessageString());
-      } catch (const std::exception & e) {
-        RCLCPP_WARN(logger_, "ShapeDivideClosed exception: %s - continuing without pre-split",
-          e.what());
-      }
-    }
-    RCLCPP_DEBUG(logger_, "Phase 1 (periodic pre-split) complete: %d split point(s)",
-          nb_split_points);
-
-    BRepFeat_SplitShape splitter(current_shape);
-    bool needs_split = false;
-
-    TopExp_Explorer face_exp(current_shape, TopAbs_FACE);
-    for (; face_exp.More(); face_exp.Next()) {
-      const TopoDS_Face & face = TopoDS::Face(face_exp.Current());
-
-      if (is_physically_planar(face)) {continue;}
-
-      BRepAdaptor_Surface adaptor(face);
-      GeomAbs_SurfaceType type = adaptor.GetType();
-
-      // Skip U-periodic faces — already handled by ShapeUpgrade_ShapeDivideClosed above
-      if (adaptor.IsUPeriodic()) {continue;}
-      std::vector<double> u_splits, v_splits;
-
-      // For freeform surfaces, detect inflection points by sampling curvature
-      if (type == GeomAbs_BSplineSurface || type == GeomAbs_BezierSurface) {
-        find_inflections(adaptor, true, u_splits);
-        find_inflections(adaptor, false, v_splits);
-      }
-
-      // Always check boundary arc lengths — handles all surface types including
-      // distorted/exported cylinders and edgeless closed surfaces
-      std::vector<double> edge_u_splits, edge_v_splits;
-      check_edge_arc_lengths(face, edge_u_splits, edge_v_splits);
-      u_splits.insert(u_splits.end(), edge_u_splits.begin(), edge_u_splits.end());
-      v_splits.insert(v_splits.end(), edge_v_splits.begin(), edge_v_splits.end());
-
-      if (u_splits.empty() && v_splits.empty()) {continue;}
-
-      Handle(Geom_Surface) surf = adaptor.Surface().Surface();
-      double u_min = adaptor.FirstUParameter();
-      double u_max = adaptor.LastUParameter();
-      double v_min = adaptor.FirstVParameter();
-      double v_max = adaptor.LastVParameter();
-
-      for (double u : u_splits) {
-        Handle(Geom_Curve) u_iso = surf->UIso(u);
-        BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
-        splitter.Add(edge_maker.Edge(), face);
-        needs_split = true;
-      }
-
-      for (double v : v_splits) {
-        Handle(Geom_Curve) v_iso = surf->VIso(v);
-        BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
-        splitter.Add(edge_maker.Edge(), face);
-        needs_split = true;
-      }
-    }
-
-    if (needs_split) {
-      splitter.Build();
-      if (!splitter.IsDone()) {
-        RCLCPP_WARN(logger_, "BRepFeat_SplitShape IsDone() false - skipping surface split");
-      } else {
-        current_shape = splitter.Shape();
-      }
-    }
-    RCLCPP_DEBUG(logger_, "Phase 2 (arc length + inflection split) complete");
-
-    BRepFeat_SplitShape final_splitter(current_shape);
-    bool needs_final_split = false;
-
-    TopExp_Explorer final_exp(current_shape, TopAbs_FACE);
-    for (; final_exp.More(); final_exp.Next()) {
-      const TopoDS_Face & face = TopoDS::Face(final_exp.Current());
-
-      GProp_GProps face_props;
-      try {
-        BRepGProp::SurfaceProperties(face, face_props);
-      } catch (const Standard_Failure &) {
-        continue;
-      }
-
-      double area_ratio = face_props.Mass() / global_total_area;
-      if (area_ratio <= max_face_area_ratio_) {continue;}
-
-      BRepAdaptor_Surface adaptor(face);
-      const char * type_str = "Other";
-      switch (adaptor.GetType()) {
-        case GeomAbs_Plane:          type_str = "Plane"; break;
-        case GeomAbs_Cylinder:       type_str = "Cylinder"; break;
-        case GeomAbs_Cone:           type_str = "Cone"; break;
-        case GeomAbs_Sphere:         type_str = "Sphere"; break;
-        case GeomAbs_Torus:          type_str = "Torus"; break;
-        case GeomAbs_BSplineSurface: type_str = "BSpline"; break;
-        case GeomAbs_BezierSurface:  type_str = "Bezier"; break;
-        default: break;
-      }
-
-      RCLCPP_WARN(logger_,
-        "Face still exceeds area ratio (%.1f%% > %.1f%%) after splitting - "
-        "forcing edge-based split. Surface type: %s",
-        area_ratio * 100.0, max_face_area_ratio_ * 100.0, type_str);
-
-      std::vector<double> u_splits, v_splits;
-      check_edge_arc_lengths(face, u_splits, v_splits);
-
-      Handle(Geom_Surface) surf = adaptor.Surface().Surface();
-      double u_min = adaptor.FirstUParameter();
-      double u_max = adaptor.LastUParameter();
-      double v_min = adaptor.FirstVParameter();
-      double v_max = adaptor.LastVParameter();
-
-      for (double u : u_splits) {
-        Handle(Geom_Curve) u_iso = surf->UIso(u);
-        BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
-        final_splitter.Add(edge_maker.Edge(), face);
-        needs_final_split = true;
-      }
-
-      for (double v : v_splits) {
-        Handle(Geom_Curve) v_iso = surf->VIso(v);
-        BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
-        final_splitter.Add(edge_maker.Edge(), face);
-        needs_final_split = true;
-      }
-    }
-
-    if (needs_final_split) {
-      final_splitter.Build();
-      if (!final_splitter.IsDone()) {
-        RCLCPP_WARN(logger_, "BRepFeat_SplitShape (final) IsDone() false - skipping final split");
-      } else {
-        current_shape = final_splitter.Shape();
-      }
-    }
-    RCLCPP_DEBUG(logger_, "Phase 3 (area ratio split) complete");
-
-    // true/false = unify edges but NOT faces — merging faces would undo the splits above.
-    ShapeUpgrade_UnifySameDomain final_unifier(current_shape, true, false);
-    final_unifier.Build();
-
-    RCLCPP_DEBUG(logger_, "Phase 4 (edge unification) complete");
-    return final_unifier.Shape();
+    TopoDS_Shape s = refine_phase1_periodic_split(current_shape);
+    s = refine_phase2_arc_length_split(s, global_total_area);
+    s = refine_phase3_area_ratio_split(s, global_total_area);
+    return refine_phase4_unify(s);
   } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "OCCT error in shape refinement: %s - returning original shape",
       e.GetMessageString());
@@ -319,6 +118,236 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
       e.what());
     return raw_shape;
   }
+}
+
+TopoDS_Shape ShapeRefiner::refine_phase1_periodic_split(const TopoDS_Shape & shape) const
+{
+  // Pre-split U-periodic faces: BRepFeat_SplitShape silently fails on them because it
+  // cannot insert ISO edges without an existing seam. ShapeUpgrade_ShapeDivideClosed opens it.
+  int nb_split_points = 0;
+  for (TopExp_Explorer periodic_exp(shape, TopAbs_FACE); periodic_exp.More();
+    periodic_exp.Next())
+  {
+    BRepAdaptor_Surface adaptor(TopoDS::Face(periodic_exp.Current()));
+    if (!adaptor.IsUPeriodic()) {continue;}
+
+    // Estimate full U-period arc length:
+    // exact formula for analytics, mid-V isocurve for BSpline/Bezier.
+    double u_arc_length = 0.0;
+    const GeomAbs_SurfaceType stype = adaptor.GetType();
+    if (stype == GeomAbs_Cylinder) {
+      u_arc_length = 2.0 * M_PI * adaptor.Cylinder().Radius();
+    } else if (stype == GeomAbs_Cone) {
+      // Approximate via the reference radius of the cone
+      u_arc_length = 2.0 * M_PI * adaptor.Cone().RefRadius();
+    } else if (stype == GeomAbs_Sphere) {
+      u_arc_length = 2.0 * M_PI * adaptor.Sphere().Radius();
+    } else if (stype == GeomAbs_Torus) {
+      u_arc_length = 2.0 * M_PI * (adaptor.Torus().MajorRadius() +
+        adaptor.Torus().MinorRadius());
+    } else {
+      // BSpline, Bezier or other — sample the mid-V isocurve length as an estimate
+      try {
+        Handle(Geom_Curve) iso = adaptor.Surface().Surface()->UIso(
+          (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2.0);
+        if (!iso.IsNull()) {
+          GeomAdaptor_Curve iso_adaptor(iso,
+            adaptor.FirstVParameter(), adaptor.LastVParameter());
+          u_arc_length = GCPnts_AbscissaPoint::Length(iso_adaptor);
+        }
+      } catch (const Standard_Failure & e) {
+        RCLCPP_DEBUG(logger_,
+              "UIso arc length estimation failed: %s - face deferred to area ratio pass",
+          e.GetMessageString());
+      }
+    }
+
+    if (u_arc_length > max_arc_length_) {
+      int pieces = static_cast<int>(std::ceil(u_arc_length / max_arc_length_));
+      nb_split_points = std::max(nb_split_points, pieces - 1);
+    }
+  }
+
+  TopoDS_Shape result = shape;
+  if (nb_split_points > 0) {
+    RCLCPP_INFO(logger_,
+      "U-periodic face(s) exceed arc length limit - "
+      "pre-splitting to open seam before surface splitter (%d point(s)).",
+      nb_split_points);
+    try {
+      ShapeUpgrade_ShapeDivideClosed divider(shape);
+      divider.SetNbSplitPoints(nb_split_points);
+      divider.Perform();
+      TopoDS_Shape divided = divider.Result();
+      if (!divided.IsNull()) {
+        result = divided;
+      }
+    } catch (const Standard_Failure & e) {
+      RCLCPP_WARN(logger_,
+        "ShapeDivideClosed failed: %s - continuing without pre-split",
+        e.GetMessageString());
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(logger_, "ShapeDivideClosed exception: %s - continuing without pre-split",
+        e.what());
+    }
+  }
+  RCLCPP_DEBUG(logger_, "Phase 1 (periodic pre-split) complete: %d split point(s)",
+        nb_split_points);
+  return result;
+}
+
+TopoDS_Shape ShapeRefiner::refine_phase2_arc_length_split(
+  const TopoDS_Shape & shape, double global_total_area) const
+{
+  (void)global_total_area;  // reserved for future diagnostics
+
+  BRepFeat_SplitShape splitter(shape);
+  bool needs_split = false;
+
+  TopExp_Explorer face_exp(shape, TopAbs_FACE);
+  for (; face_exp.More(); face_exp.Next()) {
+    const TopoDS_Face & face = TopoDS::Face(face_exp.Current());
+
+    if (is_physically_planar(face)) {continue;}
+
+    BRepAdaptor_Surface adaptor(face);
+    GeomAbs_SurfaceType type = adaptor.GetType();
+
+    // Skip U-periodic faces — already handled by ShapeUpgrade_ShapeDivideClosed above
+    if (adaptor.IsUPeriodic()) {continue;}
+    std::vector<double> u_splits, v_splits;
+
+    // For freeform surfaces, detect inflection points by sampling curvature
+    if (type == GeomAbs_BSplineSurface || type == GeomAbs_BezierSurface) {
+      find_inflections(adaptor, true, u_splits);
+      find_inflections(adaptor, false, v_splits);
+    }
+
+    // Always check boundary arc lengths — handles all surface types including
+    // distorted/exported cylinders and edgeless closed surfaces
+    std::vector<double> edge_u_splits, edge_v_splits;
+    check_edge_arc_lengths(face, edge_u_splits, edge_v_splits);
+    u_splits.insert(u_splits.end(), edge_u_splits.begin(), edge_u_splits.end());
+    v_splits.insert(v_splits.end(), edge_v_splits.begin(), edge_v_splits.end());
+
+    if (u_splits.empty() && v_splits.empty()) {continue;}
+
+    Handle(Geom_Surface) surf = adaptor.Surface().Surface();
+    double u_min = adaptor.FirstUParameter();
+    double u_max = adaptor.LastUParameter();
+    double v_min = adaptor.FirstVParameter();
+    double v_max = adaptor.LastVParameter();
+
+    for (double u : u_splits) {
+      Handle(Geom_Curve) u_iso = surf->UIso(u);
+      BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
+      splitter.Add(edge_maker.Edge(), face);
+      needs_split = true;
+    }
+
+    for (double v : v_splits) {
+      Handle(Geom_Curve) v_iso = surf->VIso(v);
+      BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
+      splitter.Add(edge_maker.Edge(), face);
+      needs_split = true;
+    }
+  }
+
+  TopoDS_Shape result = shape;
+  if (needs_split) {
+    splitter.Build();
+    if (!splitter.IsDone()) {
+      RCLCPP_WARN(logger_, "BRepFeat_SplitShape IsDone() false - skipping surface split");
+    } else {
+      result = splitter.Shape();
+    }
+  }
+  RCLCPP_DEBUG(logger_, "Phase 2 (arc length + inflection split) complete");
+  return result;
+}
+
+TopoDS_Shape ShapeRefiner::refine_phase3_area_ratio_split(
+  const TopoDS_Shape & shape, double global_total_area) const
+{
+  BRepFeat_SplitShape final_splitter(shape);
+  bool needs_final_split = false;
+
+  TopExp_Explorer final_exp(shape, TopAbs_FACE);
+  for (; final_exp.More(); final_exp.Next()) {
+    const TopoDS_Face & face = TopoDS::Face(final_exp.Current());
+
+    GProp_GProps face_props;
+    try {
+      BRepGProp::SurfaceProperties(face, face_props);
+    } catch (const Standard_Failure &) {
+      continue;
+    }
+
+    double area_ratio = face_props.Mass() / global_total_area;
+    if (area_ratio <= max_face_area_ratio_) {continue;}
+
+    BRepAdaptor_Surface adaptor(face);
+    const char * type_str = "Other";
+    switch (adaptor.GetType()) {
+      case GeomAbs_Plane:          type_str = "Plane"; break;
+      case GeomAbs_Cylinder:       type_str = "Cylinder"; break;
+      case GeomAbs_Cone:           type_str = "Cone"; break;
+      case GeomAbs_Sphere:         type_str = "Sphere"; break;
+      case GeomAbs_Torus:          type_str = "Torus"; break;
+      case GeomAbs_BSplineSurface: type_str = "BSpline"; break;
+      case GeomAbs_BezierSurface:  type_str = "Bezier"; break;
+      default: break;
+    }
+
+    RCLCPP_WARN(logger_,
+      "Face still exceeds area ratio (%.1f%% > %.1f%%) after splitting - "
+      "forcing edge-based split. Surface type: %s",
+      area_ratio * 100.0, max_face_area_ratio_ * 100.0, type_str);
+
+    std::vector<double> u_splits, v_splits;
+    check_edge_arc_lengths(face, u_splits, v_splits);
+
+    Handle(Geom_Surface) surf = adaptor.Surface().Surface();
+    double u_min = adaptor.FirstUParameter();
+    double u_max = adaptor.LastUParameter();
+    double v_min = adaptor.FirstVParameter();
+    double v_max = adaptor.LastVParameter();
+
+    for (double u : u_splits) {
+      Handle(Geom_Curve) u_iso = surf->UIso(u);
+      BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
+      final_splitter.Add(edge_maker.Edge(), face);
+      needs_final_split = true;
+    }
+
+    for (double v : v_splits) {
+      Handle(Geom_Curve) v_iso = surf->VIso(v);
+      BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
+      final_splitter.Add(edge_maker.Edge(), face);
+      needs_final_split = true;
+    }
+  }
+
+  TopoDS_Shape result = shape;
+  if (needs_final_split) {
+    final_splitter.Build();
+    if (!final_splitter.IsDone()) {
+      RCLCPP_WARN(logger_, "BRepFeat_SplitShape (final) IsDone() false - skipping final split");
+    } else {
+      result = final_splitter.Shape();
+    }
+  }
+  RCLCPP_DEBUG(logger_, "Phase 3 (area ratio split) complete");
+  return result;
+}
+
+TopoDS_Shape ShapeRefiner::refine_phase4_unify(const TopoDS_Shape & shape) const
+{
+  // true/false = unify edges but NOT faces — merging faces would undo the splits above.
+  ShapeUpgrade_UnifySameDomain final_unifier(shape, true, false);
+  final_unifier.Build();
+  RCLCPP_DEBUG(logger_, "Phase 4 (edge unification) complete");
+  return final_unifier.Shape();
 }
 
 void ShapeRefiner::identify_enclave_features(
@@ -499,10 +528,24 @@ void ShapeRefiner::check_edge_arc_lengths(
   for (TopExp_Explorer edge_exp(face, TopAbs_EDGE); edge_exp.More(); edge_exp.Next()) {
     has_edges = true;
     try {
-      BRepAdaptor_Curve curve(TopoDS::Edge(edge_exp.Current()));
+      const TopoDS_Edge & edge = TopoDS::Edge(edge_exp.Current());
+      BRepAdaptor_Curve curve(edge);
       double length = GCPnts_AbscissaPoint::Length(curve);
-      max_u_edge_length = std::max(max_u_edge_length, length);
-      max_v_edge_length = std::max(max_v_edge_length, length);
+      Standard_Real p_first, p_last;
+      Handle(Geom2d_Curve) pcurve = BRep_Tool::CurveOnSurface(edge, face, p_first, p_last);
+      if (!pcurve.IsNull()) {
+        gp_Pnt2d uv1 = pcurve->Value(p_first);
+        gp_Pnt2d uv2 = pcurve->Value(p_last);
+        if (std::abs(uv2.X() - uv1.X()) >= std::abs(uv2.Y() - uv1.Y())) {
+          max_u_edge_length = std::max(max_u_edge_length, length);
+        } else {
+          max_v_edge_length = std::max(max_v_edge_length, length);
+        }
+      } else {
+        // No pcurve available — conservatively assign to U only.
+        // Assigning to both would trigger unnecessary splits in both directions.
+        max_u_edge_length = std::max(max_u_edge_length, length);
+      }
     } catch (const Standard_Failure & e) {
       RCLCPP_DEBUG(logger_, "Failed to compute edge length: %s", e.GetMessageString());
     } catch (const std::exception & e) {

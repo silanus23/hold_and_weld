@@ -104,11 +104,8 @@ private:
   /**
    * @brief Determine if an enclave should be suppressed.
    *
-   * Suppressed if:
-   * 1. Total area < enclave_area_ratio of global area, AND
-   * 2. ALL wall faces have shallow angles (< enclave_angle_threshold) to parent.
-   *
-   * If ANY wall is steep, the enclave is kept as a real feature.
+   * Suppressed when area < enclave_area_ratio of global area and all walls
+   * are shallow (< enclave_angle_threshold). Any steep wall keeps the enclave.
    *
    * @param parent_face Face containing the enclave
    * @param enclave_faces Faces forming the enclave
@@ -192,6 +189,58 @@ private:
    * @return Normal direction
    */
   gp_Dir calculate_safe_normal(const TopoDS_Face & face) const;
+
+  /**
+   * @brief Phase 1: pre-split U-periodic faces with ShapeUpgrade_ShapeDivideClosed.
+   *
+   * Opens seams on periodic surfaces whose full U arc-length exceeds
+   * max_arc_length_. BRepFeat_SplitShape (phase 2) silently fails on
+   * unseamed periodic faces, so this must run first.
+   *
+   * @param shape Input shape (post-heal, post-enclave-removal)
+   * @return Shape with periodic faces opened
+   */
+  TopoDS_Shape refine_phase1_periodic_split(const TopoDS_Shape & shape) const;
+
+  /**
+   * @brief Phase 2: split non-periodic faces at inflection points and where
+   *        edge arc-lengths exceed max_arc_length_.
+   *
+   * Uses BRepFeat_SplitShape with ISO-curve edges inserted at the computed
+   * parameter values.
+   *
+   * @param shape Input shape (output of phase 1)
+   * @param global_total_area Total surface area used for diagnostics
+   * @return Shape with oversized/inflected faces split
+   */
+  TopoDS_Shape refine_phase2_arc_length_split(
+    const TopoDS_Shape & shape, double global_total_area) const;
+
+  /**
+   * @brief Phase 3: force-split any face still exceeding max_face_area_ratio_
+   *        of the total surface area.
+   *
+   * Emits a WARN log for each such face and attempts an additional
+   * edge-arc-length-based split via BRepFeat_SplitShape.
+   *
+   * @param shape Input shape (output of phase 2)
+   * @param global_total_area Total surface area used for ratio check
+   * @return Shape with oversized faces further subdivided
+   */
+  TopoDS_Shape refine_phase3_area_ratio_split(
+    const TopoDS_Shape & shape, double global_total_area) const;
+
+  /**
+   * @brief Phase 4: unify co-planar edges (but NOT faces) with
+   *        ShapeUpgrade_UnifySameDomain.
+   *
+   * Merging faces is intentionally disabled so the splits from phases 1–3
+   * are preserved.
+   *
+   * @param shape Input shape (output of phase 3)
+   * @return Shape with redundant edges unified
+   */
+  TopoDS_Shape refine_phase4_unify(const TopoDS_Shape & shape) const;
 };
 
 }  // namespace geometry

@@ -54,6 +54,14 @@ gp_Vec to_occt_vec(const Eigen::Vector3d & vec);
 /** @brief Convert OCCT direction to Eigen unit vector */
 Eigen::Vector3d to_eigen(const gp_Dir & dir);
 
+/**
+ * @brief Convert ZYX Euler angles (roll, pitch, yaw) to a gp_Quaternion.
+ *
+ * Uses the aerospace (ZYX) convention: yaw applied first, then pitch, then roll.
+ * Shared by geometry_mapper and gripper_parser to avoid duplication.
+ */
+gp_Quaternion rpy_to_quaternion(double roll, double pitch, double yaw);
+
 /** @brief Create OCCT transform from translation and quaternion */
 gp_Trsf create_transform(
   const Eigen::Vector3d & translation,

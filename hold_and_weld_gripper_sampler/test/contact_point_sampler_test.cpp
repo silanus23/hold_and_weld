@@ -256,28 +256,29 @@ TEST_F(ContactPointSamplerTest, ExclusionZoneReducesPairs)
 
   std::vector<int> z_surfaces = get_surfaces_by_normal(topology, gp_Vec(0, 0, 1));
 
-  if (!z_surfaces.empty() && pairs_full.size() > 0) {
-    gp_Pnt p1(0.03, 0.03, 0);
-    gp_Pnt p2(0.07, 0.03, 0);
-    gp_Pnt p3(0.07, 0.07, 0);
-    gp_Pnt p4(0.03, 0.07, 0);
+  ASSERT_FALSE(z_surfaces.empty()) << "Box must have at least one Z-normal surface";
+  ASSERT_GT(pairs_full.size(), 0u) << "Full sampling must produce at least one pair";
 
-    BRepBuilderAPI_MakeWire wire_builder;
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p2, p3).Edge());
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
-    wire_builder.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
+  gp_Pnt p1(0.03, 0.03, 0);
+  gp_Pnt p2(0.07, 0.03, 0);
+  gp_Pnt p3(0.07, 0.07, 0);
+  gp_Pnt p4(0.03, 0.07, 0);
 
-    SampleArea exclusion;
-    exclusion.surface_id = z_surfaces[0];
-    exclusion.wire = wire_builder.Wire();
-    exclusion.wire.Reverse();
+  BRepBuilderAPI_MakeWire wire_builder;
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p2, p3).Edge());
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
+  wire_builder.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
 
-    std::vector<SampleArea> exclusions = {exclusion};
-    auto pairs_excluded = sampler.generate_contact_pairs(topology, all_ids, exclusions);
+  SampleArea exclusion;
+  exclusion.surface_id = z_surfaces[0];
+  exclusion.wire = wire_builder.Wire();
+  exclusion.is_exclusion = true;
 
-    EXPECT_LT(pairs_excluded.size(), pairs_full.size());
-  }
+  std::vector<SampleArea> exclusions = {exclusion};
+  auto pairs_excluded = sampler.generate_contact_pairs(topology, all_ids, exclusions);
+
+  EXPECT_LT(pairs_excluded.size(), pairs_full.size());
 }
 
 // Inclusion zone wire on one face: any contact point on that surface must lie within bounds.
@@ -476,7 +477,7 @@ TEST_F(ContactPointSamplerTest, AllSurfacesExcluded)
     SampleArea exclusion;
     exclusion.surface_id = id;
     exclusion.wire = wire_builder.Wire();
-    exclusion.wire.Reverse();
+    exclusion.is_exclusion = true;
 
     exclusions.push_back(exclusion);
   }

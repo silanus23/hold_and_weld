@@ -55,7 +55,6 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       }
       z_axis.Normalize();
 
-      // Fallback to X when normal is nearly parallel to Z — avoids degenerate cross product.
       gp_Vec ref_vec(0, 0, 1);
       if (std::abs(z_axis.Dot(ref_vec)) > 0.9) {
         ref_vec = gp_Vec(1, 0, 0);
@@ -91,7 +90,6 @@ std::vector<int> SurfaceDimensionFilter::evaluate(const geometry::Topology & top
       double dim_x = xmax - xmin;
       double dim_y = ymax - ymin;
 
-      // Both planar dimensions must meet the threshold — smallest side determines graspability.
       if (std::min(dim_x, dim_y) >= min_dimension_) {
         valid_surface_ids.push_back(static_cast<int>(i));
       }

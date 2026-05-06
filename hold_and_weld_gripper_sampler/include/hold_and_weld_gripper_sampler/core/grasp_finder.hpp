@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -46,11 +47,11 @@ namespace core
  */
 struct GraspFinderResult
 {
-  std::vector<Grasp> grasps;  // sorted by quality descending
+  std::vector<Grasp> grasps;
   size_t num_contact_pairs = 0;
   size_t num_valid_surfaces = 0;
   size_t num_banned_surfaces = 0;
-  size_t num_exclusion_areas = 0;  // exclusion wires passed to contact sampler
+  size_t num_exclusion_areas = 0;
   size_t num_candidates = 0;
   bool success = false;
   std::string error_message;
@@ -98,6 +99,7 @@ struct GraspFinderConfig
   ShapeRefinerConfig shape_refiner;
 
   double kissing_contact_threshold = 0.8;
+  double kissing_contact_distance_threshold = 0.005;
 
   // TODO(@silanus23): unused — preserved for future auto-detection of ground-facing surfaces
   // from primary shape topology (surfaces with normal.z < ground_normal_z_threshold).
@@ -114,7 +116,6 @@ struct GraspFinderConfig
 
   // Collision tolerance for secondary/fixture checks. Kept tight (1e-6 m) — pre-computed
   // queries against known geometry. Separate from orientation.collision_tolerance (1mm)
-  // which is looser to avoid false rejections during pose sampling.
   double collision_tolerance = 0.000001;
   std::vector<TopoDS_Shape> ground_shapes;
 
@@ -199,7 +200,7 @@ public:
 private:
   std::shared_ptr<const geometry::GeometryMapper> mapper_;
   TopoDS_Shape primary_shape_;
-  TopoDS_Shape fcl_primary_shape_;  // pre-refiner copy for FCL — cleaner mesh
+  TopoDS_Shape fcl_primary_shape_;
   geometry::Topology primary_topology_;
   ParsedGripper gripper_;
   std::vector<TopoDS_Shape> secondary_shapes_;
@@ -211,8 +212,14 @@ private:
   GraspFinderConfig config_;
   rclcpp::Logger logger_;
 
-  // Lazily initialized on first find() call
-  bool initialized_ = false;
+  // NOTE: GraspFinder is not thread-safe. find() must not be called
+  // concurrently. init_flag_ and init_error_ are accessed from a single
+  // thread only.
+  mutable std::once_flag init_flag_;
+  mutable std::string init_error_;
+  // Result cache: populated on the first successful find() call so that
+  // find_top() / find_best() do not re-run the full pipeline.
+  mutable std::optional<GraspFinderResult> cached_result_;
   std::shared_ptr<constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<constraints::KissingSurfaceConstraint> kissing_constraint_;
   std::shared_ptr<geometry::FCLCollisionChecker> fcl_checker_;

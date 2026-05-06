@@ -27,11 +27,9 @@ namespace filters
 {
 
 /**
- * @brief Filters surfaces based on area and curvature
+ * @brief Filters surfaces by area and curvature.
  *
- * Accepts surfaces that:
- * - Have sufficient area (>= min_area)
- * - Are not too curved (mean curvature <= max_mean_curvature)
+ * Accepts surfaces with area >= min_area and mean curvature <= max_mean_curvature.
  */
 class SurfaceGeometryFilter : public core::SurfaceFilter
 {

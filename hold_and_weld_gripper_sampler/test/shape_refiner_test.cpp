@@ -193,12 +193,12 @@ TEST_F(ShapeRefinerTest, Refine_WithPartialCylinder_SplitsDueToArcLength)
 {
   double angle_rad = M_PI;
   TopoDS_Shape input = BRepPrimAPI_MakeCylinder(0.08, 0.1, angle_rad).Shape();
-  int input_cyl_faces = count_cylindrical_faces(input);
+  int input_total_faces = count_faces(input);
 
   TopoDS_Shape output = refiner_->refine(input);
   int output_faces = count_faces(output);
 
-  EXPECT_GT(output_faces, input_cyl_faces + 2) << "251mm arc must split";
+  EXPECT_GT(output_faces, input_total_faces) << "251mm arc must produce more faces than input";
 }
 
 // 2 m radius cylinder has a 12.5 m circumference; expects many splits.
@@ -274,7 +274,8 @@ TEST_F(ShapeRefinerTest, Refine_WithComplexPart_ProducesReasonableFaceCount)
   int output_faces = count_faces(output);
 
   EXPECT_GT(output_faces, 0);
-  EXPECT_LT(output_faces, input_faces * 3);
+  EXPECT_LT(output_faces, input_faces * 2)
+    << "Refinement should not more than double the face count";
 }
 
 int main(int argc, char ** argv)

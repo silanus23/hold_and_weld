@@ -47,12 +47,15 @@ bool ResultWriter::write_to_file(
     }
 
     file << json_content;
-    file.close();
+    file.flush();
 
     if (file.fail()) {
+      file.close();
       set_error("Failed to write to file: " + output_path);
       return false;
     }
+
+    file.close();
 
     RCLCPP_INFO(logger_, "Wrote %zu grasps to %s", grasps.size(), output_path.c_str());
     return true;
@@ -81,6 +84,27 @@ bool ResultWriter::write_to_file(
   return write_to_file(result.grasps, output_path, merged_metadata, options);
 }
 
+std::string ResultWriter::escape_json_string(const std::string & s)
+{
+  std::ostringstream out;
+  for (unsigned char c : s) {
+    switch (c) {
+      case '"':  out << "\\\""; break;
+      case '\\': out << "\\\\"; break;
+      case '\n': out << "\\n";  break;
+      case '\r': out << "\\r";  break;
+      case '\t': out << "\\t";  break;
+      default:
+        if (c < 0x20) {
+          out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
+        } else {
+          out << c;
+        }
+    }
+  }
+  return out.str();
+}
+
 std::string ResultWriter::to_json_string(
   const std::vector<Grasp> & grasps,
   const ResultMetadata & metadata,
@@ -103,22 +127,23 @@ std::string ResultWriter::to_json_string(
 
       std::string generated_at = metadata.generated_at.empty() ?
         generate_timestamp() : metadata.generated_at;
-      json << indent << indent << "\"generated_at\":" << sep << "\"" << generated_at << "\"," <<
+      json << indent << indent << "\"generated_at\":" << sep << "\"" <<
+        escape_json_string(generated_at) << "\"," <<
         newline;
       json << indent << indent << "\"coordinate_frame\":" << sep << "\"" <<
-        metadata.coordinate_frame << "\"," << newline;
+        escape_json_string(metadata.coordinate_frame) << "\"," << newline;
 
       if (!metadata.primary_source.empty()) {
         json << indent << indent << "\"primary_source\":" << sep << "\"" <<
-          metadata.primary_source << "\"," << newline;
+          escape_json_string(metadata.primary_source) << "\"," << newline;
       }
       if (!metadata.gripper_source.empty()) {
         json << indent << indent << "\"gripper_source\":" << sep << "\"" <<
-          metadata.gripper_source << "\"," << newline;
+          escape_json_string(metadata.gripper_source) << "\"," << newline;
       }
       if (!metadata.config_source.empty()) {
         json << indent << indent << "\"config_source\":" << sep << "\"" <<
-          metadata.config_source << "\"," << newline;
+          escape_json_string(metadata.config_source) << "\"," << newline;
       }
 
       json << indent << indent << "\"num_surfaces_total\":" << sep <<

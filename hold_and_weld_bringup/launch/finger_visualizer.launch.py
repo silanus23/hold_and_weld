@@ -126,7 +126,6 @@ def generate_launch_description():
         'move_group': {'planning_plugins': ['ompl_interface/OMPLPlanner']}
     }
 
-
     # Robot state publisher
     robot_state_publisher = Node(
         package='robot_state_publisher',
