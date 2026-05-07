@@ -446,7 +446,7 @@ int GeometryMapper::find_topology_surface_id(const TopoDS_Face & occt_face) cons
 
 TopoDS_Face GeometryMapper::get_occt_face(int surface_id) const
 {
-  int occt_index = surface_id + 1;  // 0-based → 1-based
+  int occt_index = surface_id + 1;  // 0-based -> 1-based
   if (occt_index < 1 || occt_index > face_map_.Extent()) {
     throw std::out_of_range(
       "Surface ID " + std::to_string(surface_id) +

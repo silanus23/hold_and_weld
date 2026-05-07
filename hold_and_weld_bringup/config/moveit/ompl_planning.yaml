@@ -25,12 +25,12 @@
           type: geometric::EST
           range: 0.0
           goal_bias: 0.05
-      robot1_gp25_arm:
+      robot1_arm:
         planner_configs:
           - RRTConnect
           - RRT
           - EST
-        projection_evaluator: joints(robot1_joint_1_s,robot1_joint_2_l,robot1_joint_3_u)
+        projection_evaluator: joints(robot1_joint_1,robot1_joint_2,robot1_joint_3)
         longest_valid_segment_fraction: 0.005
       robot1_gripper:
         planner_configs:
@@ -38,12 +38,12 @@
           - RRT
         projection_evaluator: joints(robot1_left_finger_joint,robot1_right_finger_joint)
         longest_valid_segment_fraction: 0.005
-      robot2_gp25_welder_arm:
+      robot2_welder_arm:
         planner_configs:
           - RRTConnect
           - RRT
           - EST
-        projection_evaluator: joints(robot2_joint_1_s,robot2_joint_2_l,robot2_joint_3_u)
+        projection_evaluator: joints(robot2_joint_1,robot2_joint_2,robot2_joint_3)
         longest_valid_segment_fraction: 0.005
         default_planner_config: RRTConnect
         enforce_constrained_state_space: true

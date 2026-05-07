@@ -315,7 +315,7 @@ bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
     tnear = rayhit.ray.tfar + kEps;
   }
 
-  // Odd intersection count → point is inside the closed mesh (Jordan theorem).
+  // Odd intersection count -> point is inside the closed mesh (Jordan theorem).
   return (hit_count % 2) == 1;
 }
 

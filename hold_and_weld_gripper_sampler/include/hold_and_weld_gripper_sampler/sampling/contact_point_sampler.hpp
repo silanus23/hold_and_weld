@@ -290,7 +290,7 @@ private:
   /**
    * @brief Remove spatially duplicate contact pairs using grid-based bucketing.
    *
-   * Deduplication is symmetric: a pair (A→B) and its reverse (B→A) are treated
+   * Deduplication is symmetric: a pair (A->B) and its reverse (B->A) are treated
    * as the same pair. Whichever direction is encountered first is kept.
    *
    * @param pairs Input contact pairs

@@ -1,4 +1,4 @@
-welder_group_name: "robot2_gp25_welder_arm"
+welder_group_name: "robot2_welder_arm"
 
 # Safety position the welder arm moves to before the gripper executes its
 # pick-and-place sequence.  Tune joint values (radians) to match the cell.
@@ -6,12 +6,12 @@ safety_pose:
   velocity_scaling:  0.3
   planning_time_sec: 5.0
   joint_positions:
-    robot2_joint_1_s:  0.02367382699844696
-    robot2_joint_2_l: -0.26463564871997514
-    robot2_joint_3_u:  0.6452811253697497
-    robot2_joint_4_r:  0.02990070287091831
-    robot2_joint_5_b: -0.9101291555788971
-    robot2_joint_6_t:  6.26474330075644
+    robot2_joint_1: -0.6076018459527827
+    robot2_joint_2:  0.07845401252928996
+    robot2_joint_3:  1.2010573857146185
+    robot2_joint_4: -0.6572224510385283
+    robot2_joint_5: -1.2070303622385175
+    robot2_joint_6:  0.26797901772444627
 
 # Motion parameters
 approach_offset_z: 0.1          # Offset above seam start for approach (meters)

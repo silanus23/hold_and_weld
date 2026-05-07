@@ -28,6 +28,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.actions import Node
 import yaml
 
 
@@ -51,15 +52,13 @@ def generate_launch_description():
         welding_yaml.get('safety_pose', {}).get('joint_positions', {})
         if welding_yaml else {}
     )
-    # Build xacro args string for robot2 initial joint positions.
-    # Joint order in gp25_arm_prefix.xacro: j1=joint_1_s, j2=joint_2_l, ...
     joint_index_map = {
-        'robot2_joint_1_s': 'robot2_initial_pos_j1',
-        'robot2_joint_2_l': 'robot2_initial_pos_j2',
-        'robot2_joint_3_u': 'robot2_initial_pos_j3',
-        'robot2_joint_4_r': 'robot2_initial_pos_j4',
-        'robot2_joint_5_b': 'robot2_initial_pos_j5',
-        'robot2_joint_6_t': 'robot2_initial_pos_j6',
+        'robot2_joint_1': 'robot2_initial_pos_j1',
+        'robot2_joint_2': 'robot2_initial_pos_j2',
+        'robot2_joint_3': 'robot2_initial_pos_j3',
+        'robot2_joint_4': 'robot2_initial_pos_j4',
+        'robot2_joint_5': 'robot2_initial_pos_j5',
+        'robot2_joint_6': 'robot2_initial_pos_j6',
     }
     robot2_initial_positions = ' '.join(
         f'{xacro_arg}:={safety_joints[joint_name]}'
@@ -103,14 +102,13 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_gazebo.launch.py']),
         launch_arguments={
             'use_gazebo_gui': use_gazebo_gui,
-            'robot_name': 'dual_gp25_system',
+            'robot_name': 'dual_robot_system',
             'urdf_file': 'dual_robot.xacro',
             'controller_config': 'controllers.yaml',
             'robot2_initial_positions': robot2_initial_positions,
         }.items(),
     )
 
-    # Spawn objects in Gazebo (parallel with Gazebo startup)
     spawn_objects = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_spawn_objects.launch.py']),
         launch_arguments={
@@ -120,7 +118,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Controllers (will wait for controller_manager via internal timeout)
     controllers = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/controllers_spawn.launch.py']),
         launch_arguments={
@@ -130,7 +127,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # MoveIt move_group (will wait for robot_description and joint_states internally)
     move_group = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_move_group.launch.py']),
         launch_arguments={
@@ -139,7 +135,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # RViz (will connect when move_group is available)
     rviz = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_rviz.launch.py']),
         condition=IfCondition(use_rviz),
@@ -149,7 +144,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Add collision objects to planning scene (will wait for planning_scene service)
     add_collision_objects = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_spawn_objects.launch.py']),
         launch_arguments={
@@ -159,7 +153,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Application servers (lifecycle nodes that will wait for their dependencies)
     welder_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_welder_server.launch.py']),
         launch_arguments={
@@ -175,7 +168,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Coordinator (lifecycle node that orchestrates the system)
     coordinator = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_coordinator.launch.py']),
         launch_arguments={
@@ -184,7 +176,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Launch everything in parallel - nodes will handle their own dependencies
     nodes = [
         gazebo,
         spawn_objects,

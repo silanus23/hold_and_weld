@@ -163,7 +163,7 @@ class FingerVisualizer(Node):
         """Parse a xacro/URDF, extract collision geometry, publish to MoveIt."""
         full_urdf_path = os.path.join(self._desc_pkg, urdf_rel)
 
-        # xacro → plain URDF string
+        # xacro -> plain URDF string
         try:
             result = subprocess.run(
                 ['xacro', full_urdf_path],
@@ -405,7 +405,7 @@ class FingerVisualizer(Node):
             root is at z=0.00 relative to the joint.
 
         # In the gripper frame built by compute_gripper_transform:
-          Y = grip axis (contact_1 → contact_2)
+          Y = grip axis (contact_1 -> contact_2)
           Z = approach direction (outward from workpiece face, away from palm)
           X = Y × Z
 
@@ -576,7 +576,7 @@ class FingerVisualizer(Node):
         )
 
     def _quality_color(self, quality: float) -> ColorRGBA:
-        """Map quality ∈ [0, 1] to a red→yellow→green color."""
+        """Map quality ∈ [0, 1] to a red->yellow->green color."""
         q = max(0.0, min(1.0, quality))
         r, g, b = colorsys.hsv_to_rgb(q * 0.33, 1.0, 1.0)
         return ColorRGBA(r=r, g=g, b=b, a=0.9)

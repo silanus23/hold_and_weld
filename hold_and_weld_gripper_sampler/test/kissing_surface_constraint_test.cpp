@@ -250,7 +250,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
   Topology topology = mapper_->load_from_shape(primary);
 
-  // Loose tolerance (10 mm) > gap (5 mm) → collision must be reported.
+  // Loose tolerance (10 mm) > gap (5 mm) -> collision must be reported.
   KissingSurfaceConstraint constraint_loose(
     mapper_, flat_gripper, secondaries, 0.8, 0.010);
   constraint_loose.analyze_constraints(topology);
@@ -262,7 +262,7 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
   EXPECT_TRUE(constraint_loose.intersects_secondary(0.03, pose))
     << "10 mm tolerance must detect gripper whose bottom face is 5 mm above secondary";
 
-  // Tight tolerance (1 mm) < gap (5 mm) → no collision must be reported.
+  // Tight tolerance (1 mm) < gap (5 mm) -> no collision must be reported.
   KissingSurfaceConstraint constraint_tight(
     mapper_, flat_gripper, secondaries, 0.8, 0.001);
   constraint_tight.analyze_constraints(topology);

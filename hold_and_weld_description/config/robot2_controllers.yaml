@@ -14,12 +14,12 @@ controller_manager:
 robot2_arm_controller:
   ros__parameters:
     joints:
-      - robot2_joint_1_s
-      - robot2_joint_2_l
-      - robot2_joint_3_u
-      - robot2_joint_4_r
-      - robot2_joint_5_b
-      - robot2_joint_6_t
+      - robot2_joint_1
+      - robot2_joint_2
+      - robot2_joint_3
+      - robot2_joint_4
+      - robot2_joint_5
+      - robot2_joint_6
     command_interfaces:
       - position
     state_interfaces:

@@ -18,12 +18,12 @@ robot1_arm_controller:
   ros__parameters:
     joints:
       - robot1_rail_joint
-      - robot1_joint_1_s
-      - robot1_joint_2_l
-      - robot1_joint_3_u
-      - robot1_joint_4_r
-      - robot1_joint_5_b
-      - robot1_joint_6_t
+      - robot1_joint_1
+      - robot1_joint_2
+      - robot1_joint_3
+      - robot1_joint_4
+      - robot1_joint_5
+      - robot1_joint_6
     command_interfaces:
       - position
     state_interfaces:

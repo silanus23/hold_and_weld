@@ -1,16 +1,17 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_welder_system">
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="welder_system">
   <xacro:arg name="controller_config_file" default=""/>
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
   <!-- Include all macro files -->
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_arm_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/welding_torch_prefix.xacro"/>
 
   <link name="world"/>
 
   <!-- Robot 2: Welder System (standalone) -->
-  <xacro:gp25_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'/>
+  <xacro:ar2010_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
+    controller_config_file="${controller_config_file}"/>
   <xacro:welding_torch_macro prefix="robot2_"/>
 
   <joint name="robot2_tool0_to_torch" type="fixed">

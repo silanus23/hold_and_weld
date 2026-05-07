@@ -173,13 +173,13 @@ inline Grasp to_grasp(const GraspCandidate & candidate)
  *    diagnostics; only LOW segments survive as grasp candidates.
  * 3. Calibrate each contact's angular segments to a shared reference frame
  *    before merging.
- * 4. If no LOW arcs on the outer ring → skip this contact pair (fully flat).
+ * 4. If no LOW arcs on the outer ring -> skip this contact pair (fully flat).
  * 5. Sweep inner rings (r = finger_length - ring_step_size down to
  *    finger_radius, stepping by ring_step_size). Only angles within surviving
  *    LOW segments are tested. A HIGH hit at any inner radius trims or splits
  *    the containing LOW segment; FLAT/LOW hits leave it unchanged. Segments
  *    too narrow after trimming (< min_cliff_width_deg) are discarded.
- * 6. Intersect surviving LOW arcs from both contacts, then cluster → one
+ * 6. Intersect surviving LOW arcs from both contacts, then cluster -> one
  *    approach seed per cliff.
  * 7. Validate each seed against primary collision, exclusion zones, and
  *    secondary shapes via FCL.

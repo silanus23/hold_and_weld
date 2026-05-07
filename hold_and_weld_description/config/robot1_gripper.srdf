@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<robot name="gp25_gripper_system">
+<robot name="gripper_system">
   <!-- Robot 1: Gripper System -->
-  <group name="robot1_gp25_arm">
+  <group name="robot1_arm">
     <joint name="robot1_rail_joint"/>
-    <joint name="robot1_joint_1_s"/>
-    <joint name="robot1_joint_2_l"/>
-    <joint name="robot1_joint_3_u"/>
-    <joint name="robot1_joint_4_r"/>
-    <joint name="robot1_joint_5_b"/>
-    <joint name="robot1_joint_6_t"/>
+    <joint name="robot1_joint_1"/>
+    <joint name="robot1_joint_2"/>
+    <joint name="robot1_joint_3"/>
+    <joint name="robot1_joint_4"/>
+    <joint name="robot1_joint_5"/>
+    <joint name="robot1_joint_6"/>
   </group>
 
   <group name="robot1_gripper">
@@ -23,33 +23,33 @@
   <disable_collisions link1="robot1_rail_base" link2="robot1_rail_carriage" reason="Adjacent"/>
   <disable_collisions link1="robot1_rail_carriage" link2="robot1_base_link" reason="Adjacent"/>
   <disable_collisions link1="robot1_rail_base" link2="robot1_base_link" reason="User"/>
-  <disable_collisions link1="robot1_base_link" link2="robot1_link_1_s" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_1_s" link2="robot1_link_2_l" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_2_l" link2="robot1_link_3_u" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_3_u" link2="robot1_link_4_r" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_4_r" link2="robot1_link_5_b" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_5_b" link2="robot1_link_6_t" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_4_r" link2="robot1_link_6_t" reason="ExpectedContact"/>
-  <disable_collisions link1="robot1_link_4_r" link2="robot1_gripper_base" reason="ExpectedContact"/>
-  <disable_collisions link1="robot1_link_5_b" link2="robot1_gripper_base" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_6_t" link2="robot1_gripper_base" reason="Adjacent"/>
+  <disable_collisions link1="robot1_base_link" link2="robot1_link_1" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_1" link2="robot1_link_2" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_2" link2="robot1_link_3" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_3" link2="robot1_link_4" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_4" link2="robot1_link_5" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_5" link2="robot1_link_6" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_4" link2="robot1_link_6" reason="ExpectedContact"/>
+  <disable_collisions link1="robot1_link_4" link2="robot1_gripper_base" reason="ExpectedContact"/>
+  <disable_collisions link1="robot1_link_5" link2="robot1_gripper_base" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_6" link2="robot1_gripper_base" reason="Adjacent"/>
   <disable_collisions link1="robot1_gripper_base" link2="robot1_left_finger" reason="Adjacent"/>
   <disable_collisions link1="robot1_gripper_base" link2="robot1_right_finger" reason="Adjacent"/>
   <disable_collisions link1="robot1_left_finger" link2="robot1_right_finger" reason="Never"/>
-  <disable_collisions link1="robot1_link_6_t" link2="robot1_left_finger" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_6_t" link2="robot1_right_finger" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_5_b" link2="robot1_left_finger" reason="Adjacent"/>
-  <disable_collisions link1="robot1_link_5_b" link2="robot1_right_finger" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_6" link2="robot1_left_finger" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_6" link2="robot1_right_finger" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_5" link2="robot1_left_finger" reason="Adjacent"/>
+  <disable_collisions link1="robot1_link_5" link2="robot1_right_finger" reason="Adjacent"/>
 
   <!-- Group states -->
-  <group_state name="home" group="robot1_gp25_arm">
+  <group_state name="home" group="robot1_arm">
     <joint name="robot1_rail_joint" value="0.0"/>
-    <joint name="robot1_joint_1_s" value="0"/>
-    <joint name="robot1_joint_2_l" value="0"/>
-    <joint name="robot1_joint_3_u" value="0"/>
-    <joint name="robot1_joint_4_r" value="0"/>
-    <joint name="robot1_joint_5_b" value="0"/>
-    <joint name="robot1_joint_6_t" value="0"/>
+    <joint name="robot1_joint_1" value="0"/>
+    <joint name="robot1_joint_2" value="0"/>
+    <joint name="robot1_joint_3" value="0"/>
+    <joint name="robot1_joint_4" value="0"/>
+    <joint name="robot1_joint_5" value="0"/>
+    <joint name="robot1_joint_6" value="0"/>
   </group_state>
 
   <group_state name="gripper_open" group="robot1_gripper">

@@ -82,14 +82,14 @@ struct ParsedChain
  * @brief URDF parser for 6-DOF welder robots with fixed tool attachments
  *
  * Designed specifically for welder robots with:
- * - Exactly 6 revolute joints (base → wrist)
+ * - Exactly 6 revolute joints (base -> wrist)
  * - Chain of fixed joints forming tool attachment (e.g., torch)
  *
  * Handles consecutive fixed joints correctly by accumulating transforms.
  *
  * Example URDF structure:
  * @code
- *   base_link → [joint1...joint6] → tool0 → [torch joints] → wire_tip
+ *   base_link -> [joint1...joint6] -> tool0 -> [torch joints] -> wire_tip
  *      ↓            ↓ revolute         ↓         ↓ fixed        ↓
  *   6 DOF robot                    Tool transform
  * @endcode

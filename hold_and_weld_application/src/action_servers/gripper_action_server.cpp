@@ -895,7 +895,7 @@ bool GripperActionServer::move_to_pose(
 bool GripperActionServer::wait_for_planning_scene_update(int millis)
 {
   // Intentional fixed-duration sleep: MoveIt's planning scene update is asynchronous
-  // (publish → apply pipeline). Without a dedicated scene monitor we cannot poll for
+  // (publish -> apply pipeline). Without a dedicated scene monitor we cannot poll for
   // a version change, so we sleep to let the update propagate before the next plan call.
   auto start = std::chrono::steady_clock::now();
   auto duration = std::chrono::milliseconds(millis);

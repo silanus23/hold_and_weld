@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_gripper_system">
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gripper_system">
   <xacro:arg name="controller_config_file" default=""/>
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
@@ -12,7 +12,7 @@
 
   <!-- Robot 1: Gripper System with Rail -->
   <xacro:linear_rail_macro parent="world" prefix="robot1_"/>
-  <xacro:gp25_arm_macro parent="robot1_rail_carriage" prefix="robot1_"/>
+  <xacro:gp25_arm_macro parent="robot1_rail_carriage" prefix="robot1_" controller_config_file="${controller_config_file}"/>
   <xacro:gripper_macro prefix="robot1_"/>
 
   <joint name="robot1_tool0_to_gripper" type="fixed">

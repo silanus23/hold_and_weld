@@ -40,19 +40,16 @@ import yaml
 
 def quaternion_to_euler(qx, qy, qz, qw):
     """Convert quaternion to euler angles (roll, pitch, yaw)."""
-    # Roll (x-axis rotation)
     sinr_cosp = 2.0 * (qw * qx + qy * qz)
     cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
     roll = math.atan2(sinr_cosp, cosr_cosp)
 
-    # Pitch (y-axis rotation)
     sinp = 2.0 * (qw * qy - qz * qx)
     if abs(sinp) >= 1:
         pitch = math.copysign(math.pi / 2, sinp)
     else:
         pitch = math.asin(sinp)
 
-    # Yaw (z-axis rotation)
     siny_cosp = 2.0 * (qw * qz + qx * qy)
     cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
     yaw = math.atan2(siny_cosp, cosy_cosp)

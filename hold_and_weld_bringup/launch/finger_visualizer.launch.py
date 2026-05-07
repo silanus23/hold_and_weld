@@ -126,7 +126,6 @@ def generate_launch_description():
         'move_group': {'planning_plugins': ['ompl_interface/OMPLPlanner']}
     }
 
-    # Robot state publisher
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -134,7 +133,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}, robot_description],
     )
 
-    # Static TF: world → base_link
     static_tf_world = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -143,8 +141,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}],
     )
 
-    # MoveIt move_group — needed so collision objects land in the
-    # planning scene and can be inspected in RViz.
     move_group = Node(
         package='moveit_ros_move_group',
         executable='move_group',
@@ -162,7 +158,6 @@ def generate_launch_description():
         ],
     )
 
-    # RViz2
     rviz = Node(
         package='rviz2',
         executable='rviz2',

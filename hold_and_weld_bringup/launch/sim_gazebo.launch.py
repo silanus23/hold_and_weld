@@ -60,7 +60,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'robot_name',
-            default_value='dual_gp25_system',
+            default_value='dual_robot_system',
             description='Name of the robot in Gazebo',
         ),
         DeclareLaunchArgument(
@@ -140,7 +140,6 @@ def generate_launch_description():
         ),
         launch_arguments=[
             ('gz_args', [gz_args, ' ', world_path]),
-            # on_exit_shutdown omitted: each process handles SIGINT independently.
         ],
     )
 

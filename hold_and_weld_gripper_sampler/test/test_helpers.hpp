@@ -101,8 +101,8 @@ inline ParsedGripper create_small_gripper()
 {
   // Half-scale version of test_gripper.urdf convention:
   // - Fingers extend forward along +Z, centered at z=+0.05 from joint origin
-  // - Left finger joint at y=+0.015, z=+0.01 → moves in +Y to open
-  // - Right finger joint at y=-0.015, z=+0.01 → moves in -Y to open
+  // - Left finger joint at y=+0.015, z=+0.01 -> moves in +Y to open
+  // - Right finger joint at y=-0.015, z=+0.01 -> moves in -Y to open
   // - TCP at z=+0.11 (forward tip of fingers)
   // This matches the real gripper convention so collision tests are meaningful.
   ParsedGripper gripper;
@@ -111,7 +111,7 @@ inline ParsedGripper create_small_gripper()
   gripper.base = create_box_at_helper(0.04, 0.06, 0.02, -0.02, -0.03, 0.0);
 
   // Left finger: 15x20x100 mm, joint origin at (0, +0.015, +0.01),
-  // collision geometry centered at z=+0.05 above joint → world z = +0.06
+  // collision geometry centered at z=+0.05 above joint -> world z = +0.06
   gripper.finger_1 = create_box_at_helper(0.015, 0.02, 0.10, -0.0075, 0.005, 0.01);
 
   // Right finger: same geometry, joint origin at (0, -0.015, +0.01)

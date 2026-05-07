@@ -65,7 +65,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_gazebo.launch.py']),
         launch_arguments={
             'use_gazebo_gui': use_gazebo_gui,
-            'robot_name': 'gp25_gripper_system',
+            'robot_name': 'gripper_system',
             'urdf_file': 'robot1_gripper.xacro',
             'controller_config': 'robot1_controllers.yaml',
         }.items(),

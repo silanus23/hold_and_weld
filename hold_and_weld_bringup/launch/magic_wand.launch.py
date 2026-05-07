@@ -39,11 +39,9 @@ import yaml
 
 def generate_launch_description():
     """Launch magic wand visualization system."""
-    # PACKAGE DIRECTORIES
     bringup_pkg = get_package_share_directory('hold_and_weld_bringup')
     desc_pkg = get_package_share_directory('hold_and_weld_description')
 
-    # LAUNCH ARGUMENTS
     declared_arguments = [
         DeclareLaunchArgument(
             'use_rviz',
@@ -58,7 +56,6 @@ def generate_launch_description():
         [FindPackageShare('hold_and_weld_description'), 'rviz', 'magic_wand.rviz']
     )
 
-    # ROBOT DESCRIPTION (URDF) - Robot 1 only
     robot_description_content = ParameterValue(
         Command([
             PathJoinSubstitution([FindExecutable(name='xacro')]),
@@ -73,7 +70,6 @@ def generate_launch_description():
     )
     robot_description = {'robot_description': robot_description_content}
 
-    # ROBOT SEMANTIC DESCRIPTION (SRDF)
     srdf_file = os.path.join(desc_pkg, 'config', 'robot1_gripper.srdf')
     with open(srdf_file, 'r') as file:
         robot_description_semantic_content = file.read()
@@ -81,7 +77,6 @@ def generate_launch_description():
         'robot_description_semantic': robot_description_semantic_content
     }
 
-    # MOVEIT CONFIGURATION
     kinematics_yaml_path = os.path.join(bringup_pkg, 'config', 'moveit', 'kinematics.yaml')
     with open(kinematics_yaml_path, 'r') as file:
         kinematics_yaml_dict = yaml.safe_load(file)
@@ -105,7 +100,6 @@ def generate_launch_description():
             'ros__parameters', {}
         )
 
-    # MoveIt configuration parameters
     planning_scene_monitor_parameters = {
         'publish_planning_scene': True,
         'publish_geometry_updates': True,
@@ -117,7 +111,6 @@ def generate_launch_description():
         'move_group': {'planning_plugins': ['ompl_interface/OMPLPlanner']}
     }
 
-    # ROBOT STATE PUBLISHER
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -125,7 +118,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}, robot_description],
     )
 
-    # STATIC TRANSFORM PUBLISHER (world frame)
     static_tf_world = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -134,7 +126,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}],
     )
 
-    # MOVEIT MOVE_GROUP
     move_group = Node(
         package='moveit_ros_move_group',
         executable='move_group',
@@ -169,7 +160,6 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # COLLISION OBJECTS
     add_collision_objects = Node(
         package='hold_and_weld_application',
         executable='add_collision_objects.py',

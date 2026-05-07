@@ -354,7 +354,7 @@ class SeamExtractor:
             nearby_normals = mesh.face_normals[nearby_faces]
             ref_normal = nearby_normals[0]
             # Project all normals onto a reference to get a scalar distribution.
-            # Bimodal distribution → two distinct normal clusters → edge contact.
+            # Bimodal distribution -> two distinct normal clusters -> edge contact.
             dots = np.einsum('ij,j->i', nearby_normals, ref_normal)
 
             if len(np.unique(dots)) < 2:
@@ -618,7 +618,7 @@ class SeamExtractor:
         The main surface is the base plate — the one whose normals point *away* from its
         own part centroid relative to the seam. Computed by projecting the centroid-to-seam
         vector onto each part's average normal: the higher dot product means the normal
-        aligns with the outward direction → that part is the base (main).
+        aligns with the outward direction -> that part is the base (main).
         """
         if is_edge_joint:
             avg_normal_1 = np.mean(normals_1, axis=0)
@@ -650,7 +650,7 @@ class SeamExtractor:
             vec_2 = vec_2 / norm_v2
 
             # The part whose average normal aligns more with its centroid-to-seam vector
-            # has the seam on its outward face → that is the base plate (main)
+            # has the seam on its outward face -> that is the base plate (main)
             dot_1 = np.dot(avg_normal_1, vec_1)
             dot_2 = np.dot(avg_normal_2, vec_2)
 

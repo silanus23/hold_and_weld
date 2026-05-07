@@ -52,7 +52,7 @@ KinematicsSolver::KinematicsSolver(const ParsedChain & chain)
   }
 
   RCLCPP_INFO(
-    logger, "KinematicsSolver initialized for %s → %s (%zu DOF)",
+    logger, "KinematicsSolver initialized for %s -> %s (%zu DOF)",
     base_link_.c_str(), tip_link_.c_str(), dof_);
 }
 

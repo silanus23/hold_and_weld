@@ -877,7 +877,7 @@ std::vector<ContactPair> ContactPointSampler::deduplicate_contact_pairs(
     result.push_back(pair);
   }
 
-  RCLCPP_DEBUG(logger_, "Deduplication: %zu pairs → %zu unique pairs (tolerance=%.4f m)",
+  RCLCPP_DEBUG(logger_, "Deduplication: %zu pairs -> %zu unique pairs (tolerance=%.4f m)",
     pairs.size(), result.size(), tolerance);
 
   return result;

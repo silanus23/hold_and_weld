@@ -47,7 +47,7 @@ public:
   explicit KinematicsSolver(const ParsedChain & chain);
 
   /**
-   * @brief Compute forward kinematics (joint angles → TCP pose)
+   * @brief Compute forward kinematics (joint angles -> TCP pose)
    * @param q Joint angles [rad] (size must equal DOF)
    * @return TCP pose in base frame
    * @throws std::invalid_argument if q.size() != DOF

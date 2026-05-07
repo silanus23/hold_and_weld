@@ -103,7 +103,7 @@ static gp_Pnt compute_ring_point(
 // Merges a seam-split arc: the first and last segments of a sweep that
 // started and ended in the same state are one arc split across the 0/2π seam.
 // Extend front's end_rad by the back segment's width, then discard the back.
-// Example: back=[350°,360°], front=[0°,10°] → front becomes [0°,20°].
+// Example: back=[350°,360°], front=[0°,10°] -> front becomes [0°,20°].
 // end_rad > 2π is fine; the sweep loop condition handles it correctly.
 static void rejoin_wraparound_arc(
   RadialMaps & maps,

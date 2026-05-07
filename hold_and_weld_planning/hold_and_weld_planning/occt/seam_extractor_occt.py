@@ -590,7 +590,7 @@ class SeamExtractorOCCT:
         The main surface is the base plate — the one whose normals point *away* from its
         own part centroid relative to the seam. Computed by projecting the centroid-to-seam
         vector onto each part's average normal: the higher dot product means the seam is
-        on the outward-facing side of that part → that part is the base (main).
+        on the outward-facing side of that part -> that part is the base (main).
         """
         avg_normal_A = np.mean(normals_A, axis=0)
         avg_normal_B = np.mean(normals_B, axis=0)
@@ -621,7 +621,7 @@ class SeamExtractorOCCT:
         vec_B = vec_B / norm_vB
 
         # The part whose average normal aligns MORE with its centroid-to-seam vector
-        # has the seam on its outward face → that is the base plate (main)
+        # has the seam on its outward face -> that is the base plate (main)
         dot_A = np.dot(avg_normal_A, vec_A)
         dot_B = np.dot(avg_normal_B, vec_B)
 

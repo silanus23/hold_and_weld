@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://ros.org/wiki/xacro" name="dual_gp25_system">
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="dual_robot_system">
   <xacro:arg name="controller_config_file" default=""/>
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
@@ -14,7 +14,8 @@
 
   <!-- Include all macro files -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/extra_axis/linear_rail_prefix.xacro"/>
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/> <!-- Robot1 (gripper) -->
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_arm_prefix.xacro"/> <!-- Robot2 (welder) -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/welding_torch_prefix.xacro"/>
 
@@ -22,7 +23,7 @@
 
   <!-- Robot 1: Gripper System with Rail -->
   <xacro:linear_rail_macro parent="world" prefix="robot1_"/>
-  <xacro:gp25_arm_macro parent="robot1_rail_carriage" prefix="robot1_"/>
+  <xacro:gp25_arm_macro parent="robot1_rail_carriage" prefix="robot1_" controller_config_file="${controller_config_file}"/>
   <xacro:gripper_macro prefix="robot1_"/>
 
   <joint name="robot1_tool0_to_gripper" type="fixed">
@@ -32,13 +33,14 @@
   </joint>
 
   <!-- Robot 2: Welder System (standalone) -->
-  <xacro:gp25_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
+  <xacro:ar2010_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
     initial_pos_j1="$(arg robot2_initial_pos_j1)"
     initial_pos_j2="$(arg robot2_initial_pos_j2)"
     initial_pos_j3="$(arg robot2_initial_pos_j3)"
     initial_pos_j4="$(arg robot2_initial_pos_j4)"
     initial_pos_j5="$(arg robot2_initial_pos_j5)"
-    initial_pos_j6="$(arg robot2_initial_pos_j6)"/>
+    initial_pos_j6="$(arg robot2_initial_pos_j6)"
+    controller_config_file="${controller_config_file}"/>
   <xacro:welding_torch_macro prefix="robot2_"/>
 
   <joint name="robot2_tool0_to_torch" type="fixed">

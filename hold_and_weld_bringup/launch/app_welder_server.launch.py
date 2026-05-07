@@ -53,7 +53,7 @@ def generate_launch_description():
     declared_arguments = [
         DeclareLaunchArgument(
             'welder_group_name',
-            default_value='robot2_gp25_welder_arm',
+            default_value='robot2_welder_arm',
             description='MoveIt planning group name for welder arm',
         ),
         DeclareLaunchArgument(

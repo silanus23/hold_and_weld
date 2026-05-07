@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_arm_macro">
-  <xacro:macro name="gp25_arm_macro"
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="ar2010_arm_macro">
+  <xacro:macro name="ar2010_arm_macro"
                params="parent prefix x:=0 y:=0 z:=0 roll:=0 pitch:=0 yaw:=0
                        initial_pos_j1:=0 initial_pos_j2:=0 initial_pos_j3:=0
                        initial_pos_j4:=0 initial_pos_j5:=0 initial_pos_j6:=0
@@ -13,15 +13,15 @@
       <origin xyz="${x} ${y} ${z}" rpy="${roll} ${pitch} ${yaw}"/>
     </joint>
 
-    <!-- Include the upstream Motoman GP25 kinematic description -->
-    <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_macro.xacro"/>
-    <xacro:motoman_gp25 prefix="${prefix}"/>
+    <!-- Include the upstream Motoman AR2010 kinematic description -->
+    <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_macro.xacro"/>
+    <xacro:motoman_ar2010 prefix="${prefix}"/>
 
     <!-- Include the shared ros2_control block -->
     <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/robot_arm_ros2_control.xacro"/>
     <xacro:robot_arm_ros2_control
       prefix="${prefix}"
-      ros2_control_name="${prefix}gp25_system"
+      ros2_control_name="${prefix}ar2010_system"
       initial_pos_j1="${initial_pos_j1}"
       initial_pos_j2="${initial_pos_j2}"
       initial_pos_j3="${initial_pos_j3}"
@@ -33,22 +33,22 @@
     <gazebo reference="${prefix}base_link">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_1_s">
+    <gazebo reference="${prefix}link_1">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_2_l">
+    <gazebo reference="${prefix}link_2">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_3_u">
+    <gazebo reference="${prefix}link_3">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_4_r">
+    <gazebo reference="${prefix}link_4">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_5_b">
+    <gazebo reference="${prefix}link_5">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_6_t">
+    <gazebo reference="${prefix}link_6">
       <material>Gazebo/Blue</material>
     </gazebo>
   </xacro:macro>

@@ -50,7 +50,6 @@ def load_yaml(package_name, file_path):
 
 def generate_launch_description():
     """Launch welder-only system with parallel node startup."""
-    # Read robot2 safety joint positions from welding.yaml and flatten into
     # [-J name value ...] spawn arguments for Gazebo.
     welding_yaml = load_yaml('hold_and_weld_bringup', 'config/tasks/welding.yaml')
     safety_joints = (
@@ -58,6 +57,20 @@ def generate_launch_description():
         if welding_yaml else {}
     )
     spawn_joint_args = [arg for jn, jv in safety_joints.items() for arg in ['-J', jn, str(jv)]]
+
+    joint_index_map = {
+        'robot2_joint_1': 'robot2_initial_pos_j1',
+        'robot2_joint_2': 'robot2_initial_pos_j2',
+        'robot2_joint_3': 'robot2_initial_pos_j3',
+        'robot2_joint_4': 'robot2_initial_pos_j4',
+        'robot2_joint_5': 'robot2_initial_pos_j5',
+        'robot2_joint_6': 'robot2_initial_pos_j6',
+    }
+    robot2_initial_positions = ' '.join(
+        f'{xacro_arg}:={safety_joints[joint_name]}'
+        for joint_name, xacro_arg in joint_index_map.items()
+        if joint_name in safety_joints
+    )
 
     declared_arguments = [
         DeclareLaunchArgument(
@@ -85,34 +98,32 @@ def generate_launch_description():
         [FindPackageShare('hold_and_weld_bringup'), 'launch']
     )
 
-    # Gazebo — internal spawn disabled; we handle it below with -J args
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_gazebo.launch.py']),
         launch_arguments={
             'use_gazebo_gui': use_gazebo_gui,
-            'robot_name': 'gp25_welder_system',
+            'robot_name': 'welder_system',
             'urdf_file': 'robot2_welder.xacro',
             'controller_config': 'robot2_controllers.yaml',
             'spawn_robot': 'false',
+            'robot2_initial_positions': robot2_initial_positions,
             'use_sim_time': use_sim_time,
         }.items(),
     )
 
-    # Spawn robot2 at the safety pose from welding.yaml
     spawn_welder = Node(
         package='ros_gz_sim',
         executable='create',
-        name='spawn_gp25_welder_system',
+        name='spawn_welder_system',
         arguments=[
             '-topic', '/robot_description',
-            '-name', 'gp25_welder_system',
+            '-name', 'welder_system',
             '-allow_renaming', 'true',
             '-x', '0', '-y', '0', '-z', '0',
         ] + spawn_joint_args,
         output='screen',
     )
 
-    # Collision objects — spawned in Gazebo and added to planning scene
     spawn_objects = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_spawn_objects.launch.py']),
         launch_arguments={
@@ -122,7 +133,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Controllers — wait for controller_manager internally
     controllers = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/controllers_spawn.launch.py']),
         launch_arguments={
@@ -131,7 +141,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # MoveIt move_group — waits for robot_description and joint_states internally
     move_group = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_move_group.launch.py']),
         launch_arguments={
@@ -140,7 +149,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # RViz
     rviz = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_rviz.launch.py']),
         condition=IfCondition(use_rviz),
@@ -150,7 +158,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Add collision objects to planning scene
     add_collision_objects = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_spawn_objects.launch.py']),
         launch_arguments={
@@ -160,7 +167,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Welder application server — lifecycle node, waits for its dependencies
     welder_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_welder_server.launch.py']),
         launch_arguments={

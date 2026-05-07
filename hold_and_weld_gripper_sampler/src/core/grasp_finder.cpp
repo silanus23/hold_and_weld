@@ -114,7 +114,7 @@ std::string GraspFinder::initialize()
 
       // Only pass the non-ground secondary shapes to add_secondary_shapes() so they
       // land in secondary_bvhs_ and show up correctly in FCL stats.
-      // Ground shapes go through add_ground_plane_z() → ground_halfspace_ separately.
+      // Ground shapes go through add_ground_plane_z() -> ground_halfspace_ separately.
         fcl_checker_ = std::make_shared<geometry::FCLCollisionChecker>(
         gripper_,
         fcl_primary_shape_,
