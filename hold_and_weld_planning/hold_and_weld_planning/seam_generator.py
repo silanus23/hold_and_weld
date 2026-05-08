@@ -33,6 +33,7 @@ from hold_and_weld_planning.utils.path_utils import (
 
 
 def parse_arguments():
+    """Parse command-line arguments for the seam generation CLI."""
     parser = argparse.ArgumentParser(
         description='Generate weld seams from URDF geometry',
         formatter_class=argparse.RawDescriptionHelpFormatter,

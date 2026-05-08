@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Mesh-based weld seam extraction and shell generation utilities."""
+
 from .mesh_loader import MeshLoader
 from .path_creator import PathCreator
 from .seam_extractor import SeamExtractor

@@ -511,6 +511,21 @@ bool ConfigParser::parse_orientation(
   if (node["collision_tolerance"]) {
     config.collision_tolerance = node["collision_tolerance"].as<double>();
   }
+  if (node["ring_step_size"]) {
+    config.ring_step_size = node["ring_step_size"].as<double>();
+  }
+  if (node["angular_step_deg"]) {
+    config.angular_step_deg = node["angular_step_deg"].as<double>();
+  }
+  if (node["flat_detection_tolerance_m"]) {
+    config.flat_detection_tolerance_m = node["flat_detection_tolerance_m"].as<double>();
+  }
+  if (node["cliff_merge_tolerance_deg"]) {
+    config.cliff_merge_tolerance_deg = node["cliff_merge_tolerance_deg"].as<double>();
+  }
+  if (node["min_cliff_width_deg"]) {
+    config.min_cliff_width_deg = node["min_cliff_width_deg"].as<double>();
+  }
   if (node["randomize_seeds"]) {
     config.randomize_seeds = node["randomize_seeds"].as<bool>();
   }

@@ -549,9 +549,9 @@ std::string WelderActionServer::find_latest_json() const
         ament_index_cpp::get_package_share_directory("hold_and_weld_application");
       std::filesystem::path install_share(pkg_share);
       std::filesystem::path ws_root = install_share.parent_path()
-                                        .parent_path()
-                                        .parent_path()
-                                        .parent_path();
+        .parent_path()
+        .parent_path()
+        .parent_path();
       std::filesystem::path src_trajectories =
         ws_root / "src" / "hold_and_weld" / "hold_and_weld_application" / "trajectories";
 

@@ -77,7 +77,7 @@ class SeamExtractorOCCT:
             shape_2: Second OCCT shape (already transformed to world frame)
             params: Dictionary with keys:
                     - num_smooth_points: Points per seam curve (default 100)
-                    - tolerance: Distance tolerance for contact detection (default 1e-3)
+                    - epsilon: Distance tolerance for contact detection (default 1e-3)
         """
         if shape_1.IsNull():
             raise ValueError('shape_1 is null')
@@ -88,7 +88,7 @@ class SeamExtractorOCCT:
         self.params = params
 
         self.num_smooth_points = params.get('num_smooth_points', 100)
-        self.tolerance = params.get('tolerance', 1e-3)
+        self.tolerance = params.get('epsilon', 1e-3)
 
         # Centroids for geometry-based main/secondary determination
         self.centroid_1 = self._compute_shape_centroid(shape_1)
@@ -660,7 +660,6 @@ class SeamExtractorOCCT:
 
         if props.IsNormalDefined():
             normal_dir = props.Normal()
-            # Respect face orientation
             if face.Orientation() == TopAbs_REVERSED:
                 normal_dir.Reverse()
             normal = np.array([normal_dir.X(), normal_dir.Y(), normal_dir.Z()])

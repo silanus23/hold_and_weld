@@ -91,49 +91,49 @@ parameters:
 
   # PathCreator configuration - Advanced geometry processing parameters
   # All parameters are optional - defaults shown below
-  path_creator:
-    # Outlier Removal
-    # Remove points that are statistical outliers based on inter-point distances
-    outlier_std_threshold: 5.0
 
-    # Corner Detection - General
-    min_sub_path_length: 10
-    min_points_for_corner_detection: 20
+  # Outlier Removal
+  # Remove points that are statistical outliers based on inter-point distances
+  outlier_std_threshold: 5.0
 
-    # Corner Detection - Angle-based Method
-    # Detects corners by measuring angle change between before/after vectors
-    corner_min_angle: 25
-    corner_angle_window: 10
+  # Corner Detection - General
+  min_sub_path_length: 10
+  min_points_for_corner_detection: 20
 
-    # Corner Detection - Curvature-based Method
-    # Detects corners by measuring discrete curvature magnitude
-    corner_curvature_window: 10
-    corner_curvature_threshold: 0.8
+  # Corner Detection - Angle-based Method
+  # Detects corners by measuring angle change between before/after vectors
+  corner_min_angle: 25
+  corner_angle_window: 10
 
-    # Corner Detection - Combination & Filtering
-    corner_min_agreement: 1
-    corner_tolerance: 5
-    corner_filter_window: 5
+  # Corner Detection - Curvature-based Method
+  # Detects corners by measuring discrete curvature magnitude
+  corner_curvature_window: 10
+  corner_curvature_threshold: 0.8
 
-    # Arc Merging
-    # Merge consecutive arc segments with similar radii
-    arc_radius_tolerance: 0.05
-    arc_merge_num_points: 100
+  # Corner Detection - Combination & Filtering
+  corner_min_agreement: 1
+  corner_tolerance: 5
+  corner_filter_window: 5
 
-    # Line Merging
-    # Merge consecutive collinear line segments
-    line_angle_tolerance_deg: 10.0
-    line_merge_max_error: 0.001
-    line_merge_max_iterations: 20
+  # Arc Merging
+  # Merge consecutive arc segments with similar radii
+  arc_radius_tolerance: 0.05
+  arc_merge_num_points: 100
 
-    # Small Line Absorption
-    # Absorb small line segments into adjacent arcs
-    min_line_size: 70
-    line_absorption_max_error: 0.01  #
-    line_absorption_max_iterations: 10
+  # Line Merging
+  # Merge consecutive collinear line segments
+  line_angle_tolerance_deg: 10.0
+  line_merge_max_error: 0.001
+  line_merge_max_iterations: 20
 
-    # First/Last Segment Merging (for closed paths)
-    # Merge first and last segments if path was split arbitrarily at a corner
-    first_last_angle_tolerance: 10
-    first_last_radius_tolerance: 0.05
-    first_last_gap_threshold: 0.01
+  # Small Line Absorption
+  # Absorb small line segments into adjacent arcs
+  min_line_size: 70
+  line_absorption_max_error: 0.01  #
+  line_absorption_max_iterations: 10
+
+  # First/Last Segment Merging (for closed paths)
+  # Merge first and last segments if path was split arbitrarily at a corner
+  first_last_angle_tolerance: 10
+  first_last_radius_tolerance: 0.05
+  first_last_gap_threshold: 0.01

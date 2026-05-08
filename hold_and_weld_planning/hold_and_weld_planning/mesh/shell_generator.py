@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Generate watertight mesh shells from URDF collision geometry using manifold3d."""
+
 import logging
 from typing import Any
 
@@ -43,6 +45,7 @@ class ShellGenerator:
             robot_object: The self.robot object from URDFProcessor
             world_transform: The global starting pose matrix (4x4)
             refine_iterations: Number of mesh subdivision iterations (default: 32)
+
         Raises:
             ValueError: If world_transform is not 4x4
         """

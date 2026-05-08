@@ -43,6 +43,7 @@ class Seam:
         arc_segment: Optional[ArcSegment] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """Initialize seam from a seam dict, LineSegment, or ArcSegment."""
         # Validate mutual exclusion: exactly one segment source must be provided
         sources_provided = sum(
             [seam_dict is not None, line_segment is not None, arc_segment is not None]
@@ -111,7 +112,6 @@ class Seam:
         Raises:
             RuntimeError: If poses not generated yet
         """
-        # Enforce that poses must be generated before export
         if not self.is_generated:
             raise RuntimeError('Cannot export seam - poses not generated yet')
 

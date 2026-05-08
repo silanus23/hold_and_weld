@@ -43,6 +43,7 @@ class ArcSegment:
         radius: float,
         away_from_wall_vector: List[float] | NDArray | None = None,
     ) -> None:
+        """Initialize arc segment with points, center, radius, and optional away vector."""
         self.points = np.array(points, dtype=float)
         self.center = np.array(center, dtype=float)
 
@@ -151,6 +152,7 @@ class ArcSegment:
         return self.tangent_at(0)
 
     def __repr__(self) -> str:
+        """Return string representation of ArcSegment."""
         has_away = (
             'with away_vector'
             if self.away_from_wall_vector is not None

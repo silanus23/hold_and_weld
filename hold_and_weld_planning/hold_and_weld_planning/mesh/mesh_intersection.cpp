@@ -64,7 +64,6 @@ SurfaceMesh build_mesh(
   auto v = verts.unchecked<2>();
   auto f = faces.unchecked<2>();
 
-    // Validate input dimensions
   if (v.shape(1) != 3) {
     throw std::invalid_argument("Vertices must be Nx3 array");
   }
@@ -152,14 +151,11 @@ py::array_t<double> get_intersection_curve(
   double inflate = 1.002
 )
 {
-    // Build CGAL meshes from numpy arrays (with validation)
   SurfaceMesh mesh1 = build_mesh(verts1, faces1);
   SurfaceMesh mesh2 = build_mesh(verts2, faces2);
 
-    // Inflate mesh2 to create overlap for touching surfaces
   scale_mesh(mesh2, inflate);
 
-    // Property maps to mark constrained edges (edges on the intersection curve)
   auto ecm1 = mesh1.add_property_map<edge_descriptor, bool>(
         "e:is_constrained", false).first;
   auto ecm2 = mesh2.add_property_map<edge_descriptor, bool>(

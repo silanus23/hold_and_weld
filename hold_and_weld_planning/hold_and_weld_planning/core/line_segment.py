@@ -37,6 +37,7 @@ class LineSegment:
         start: List[float] | NDArray,
         end: List[float] | NDArray,
     ) -> None:
+        """Initialize line segment with start and end points."""
         self.start = np.array(start, dtype=float)
         self.end = np.array(end, dtype=float)
 

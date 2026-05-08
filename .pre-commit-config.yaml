@@ -1,4 +1,8 @@
 # See https://github.com/pre-commit/pre-commit
+#  This pre-commit configuration was adapted from the Nav2 project.
+# I took benefit from Nav2 in this file; thanks to all members and contributors
+# of the Open Navigation team for their excellent work!
+
 exclude: ".pgm$|.svg$"
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
