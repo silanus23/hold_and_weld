@@ -49,6 +49,10 @@ robot2_arm_controller:
     state_interfaces:
       - position
       - velocity
+    allow_integration_in_goal_trajectories: true
+    stop_trajectory_duration: 0.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
 
 # Gripper: Finger joints only
 gripper_controller:

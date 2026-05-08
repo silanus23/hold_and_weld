@@ -547,9 +547,23 @@ std::string WelderActionServer::find_latest_json() const
     try {
       std::string pkg_share =
         ament_index_cpp::get_package_share_directory("hold_and_weld_application");
-      trajectory_dir = pkg_share + "/trajectories";
-      RCLCPP_INFO(logger_, "Using installed trajectory directory: %s",
-                  trajectory_dir.c_str());
+      std::filesystem::path install_share(pkg_share);
+      std::filesystem::path ws_root = install_share.parent_path()
+                                        .parent_path()
+                                        .parent_path()
+                                        .parent_path();
+      std::filesystem::path src_trajectories =
+        ws_root / "src" / "hold_and_weld" / "hold_and_weld_application" / "trajectories";
+
+      if (std::filesystem::exists(src_trajectories)) {
+        trajectory_dir = src_trajectories.string();
+        RCLCPP_INFO(logger_, "Using source-tree trajectory directory: %s",
+                    trajectory_dir.c_str());
+      } else {
+        trajectory_dir = pkg_share + "/trajectories";
+        RCLCPP_INFO(logger_, "Using installed trajectory directory: %s",
+                    trajectory_dir.c_str());
+      }
     } catch (const std::exception & e) {
       RCLCPP_ERROR(logger_, "Failed to locate package: %s", e.what());
       return "";

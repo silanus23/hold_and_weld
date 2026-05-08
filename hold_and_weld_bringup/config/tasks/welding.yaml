@@ -27,17 +27,6 @@ max_approach_validation_retries: 3
 max_cartesian_retries: 2
 use_approach_validation: false
 
-start_pose:
-  position:
-    x: 1.2
-    y: 0.3
-    z: 0.625
-  orientation:
-    x: 0.0
-    y: 0.7071068
-    z: 0.0
-    w: 0.7071068
-
 # JSON file path (optional)
 # If not specified, will auto-load latest JSON from hold_and_weld_planning/generated/
 # json_file: "/path/to/specific/seams.json"

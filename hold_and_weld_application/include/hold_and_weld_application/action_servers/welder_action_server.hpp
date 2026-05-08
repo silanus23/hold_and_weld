@@ -55,7 +55,7 @@ namespace application
  */
 struct WelderConfig
 {
-  std::string welder_group_name = "robot2_gp25_welder_arm";
+  std::string welder_group_name = "robot2_welder_arm";
   double approach_offset_z = 0.1;
   double cartesian_path_threshold = 0.95;
   double cartesian_step_size = 0.01;

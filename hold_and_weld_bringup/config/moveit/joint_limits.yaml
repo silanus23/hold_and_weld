@@ -66,16 +66,16 @@
           max_acceleration: 2.0
         robot2_joint_4:
           has_velocity_limits: true
-          max_velocity: 6.544
+          max_velocity: 7.330
           has_acceleration_limits: true
           max_acceleration: 3.0
         robot2_joint_5:
           has_velocity_limits: true
-          max_velocity: 6.544
+          max_velocity: 7.330
           has_acceleration_limits: true
           max_acceleration: 3.0
         robot2_joint_6:
           has_velocity_limits: true
-          max_velocity: 12.217
+          max_velocity: 15.450
           has_acceleration_limits: true
           max_acceleration: 5.0
