@@ -305,9 +305,9 @@ private:
   std::vector<std::string> gripper_joint_names_ = {
     "robot1_left_finger_joint", "robot1_right_finger_joint"};
   std::vector<std::string> touch_links_ = {
-    "robot1_tool0", "robot1_link_6_t", "robot1_flange",
+    "robot1_tool0", "robot1_link_6", "robot1_flange",
     "robot1_gripper_base", "robot1_left_finger", "robot1_right_finger"};
-  std::string attach_link_ = "robot1_link_6_t";
+  std::string attach_link_ = "robot1_link_6";
   int max_planning_retries_ = 3;
   std::string arm_group_name_;
   std::string yaml_path_;

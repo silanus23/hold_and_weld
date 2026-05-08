@@ -54,12 +54,12 @@ TEST_F(URDFParserTest, ParsesRobotChain) {
   EXPECT_EQ(chain.base_link, "robot2_base_link");
   EXPECT_EQ(chain.tip_link, "robot2_wire_tip");
 
-  EXPECT_EQ(chain.actuated_joints[0].name, "robot2_joint_1_s");
-  EXPECT_EQ(chain.actuated_joints[1].name, "robot2_joint_2_l");
-  EXPECT_EQ(chain.actuated_joints[2].name, "robot2_joint_3_u");
-  EXPECT_EQ(chain.actuated_joints[3].name, "robot2_joint_4_r");
-  EXPECT_EQ(chain.actuated_joints[4].name, "robot2_joint_5_b");
-  EXPECT_EQ(chain.actuated_joints[5].name, "robot2_joint_6_t");
+  EXPECT_EQ(chain.actuated_joints[0].name, "robot2_joint_1");
+  EXPECT_EQ(chain.actuated_joints[1].name, "robot2_joint_2");
+  EXPECT_EQ(chain.actuated_joints[2].name, "robot2_joint_3");
+  EXPECT_EQ(chain.actuated_joints[3].name, "robot2_joint_4");
+  EXPECT_EQ(chain.actuated_joints[4].name, "robot2_joint_5");
+  EXPECT_EQ(chain.actuated_joints[5].name, "robot2_joint_6");
 
   for (const auto & joint : chain.actuated_joints) {
     EXPECT_TRUE(joint.is_revolute);

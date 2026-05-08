@@ -802,36 +802,44 @@ bool GripperActionServer::set_finger_aperture(double position)
   point.time_from_start = rclcpp::Duration::from_seconds(timing::GRIPPER_MOTION_DURATION_SEC);
   goal_msg.trajectory.points.push_back(point);
 
-  auto future = gripper_action_client_->async_send_goal(goal_msg);
+  auto promise = std::make_shared<std::promise<bool>>();
+  auto future = promise->get_future();
 
-  auto status = future.wait_for(std::chrono::seconds(timing::ACTION_SERVER_TIMEOUT_SEC));
-  if (status != std::future_status::ready) {
-    RCLCPP_ERROR(logger_, "Timeout sending gripper goal (%.3f m)", position);
-    return false;
+  auto send_goal_options =
+    rclcpp_action::Client<FollowJointTrajectory>::SendGoalOptions();
+
+  send_goal_options.goal_response_callback =
+    [this, promise, position](
+    const rclcpp_action::ClientGoalHandle<FollowJointTrajectory>::SharedPtr & handle)
+    {
+      if (!handle) {
+        RCLCPP_ERROR(logger_, "Gripper goal rejected (%.3f m)", position);
+        promise->set_value(false);
+      }
+    };
+
+  send_goal_options.result_callback =
+    [this, promise, position](
+    const rclcpp_action::ClientGoalHandle<FollowJointTrajectory>::WrappedResult & result)
+    {
+      if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+        promise->set_value(true);
+      } else {
+        RCLCPP_ERROR(logger_, "Failed to reach gripper position (%.3f m)", position);
+        promise->set_value(false);
+      }
+    };
+
+  gripper_action_client_->async_send_goal(goal_msg, send_goal_options);
+
+  bool result = future.get();
+
+  //  Temporary solution to give time gripper to open
+  if (result) {
+    rclcpp::sleep_for(std::chrono::milliseconds(500));
   }
 
-  auto goal_handle = future.get();
-  if (!goal_handle) {
-    RCLCPP_ERROR(logger_, "Gripper goal rejected (%.3f m)", position);
-    return false;
-  }
-
-  auto result_future = gripper_action_client_->async_get_result(goal_handle);
-
-  auto result_status =
-    result_future.wait_for(std::chrono::seconds(timing::GRIPPER_RESULT_TIMEOUT_SEC));
-  if (result_status != std::future_status::ready) {
-    RCLCPP_ERROR(logger_, "Timeout waiting for gripper result (%.3f m)", position);
-    return false;
-  }
-
-  auto result = result_future.get();
-  if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
-    return true;
-  }
-
-  RCLCPP_ERROR(logger_, "Failed to reach gripper position (%.3f m)", position);
-  return false;
+  return result;
 }
 
 bool GripperActionServer::move_to_pose(
@@ -869,7 +877,7 @@ bool GripperActionServer::move_to_pose(
         if (attempt < max_planning_retries_) {
           RCLCPP_WARN(logger_, "[%s] Retrying execution (attempt %d/%d)",
                       step_name.c_str(), attempt, max_planning_retries_);
-          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+          rclcpp::sleep_for(std::chrono::milliseconds(500));
           continue;
         }
         return false;
@@ -882,7 +890,7 @@ bool GripperActionServer::move_to_pose(
                   step_name.c_str(), attempt, max_planning_retries_);
 
       if (attempt < max_planning_retries_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        rclcpp::sleep_for(std::chrono::milliseconds(500));
       }
     }
   }
@@ -899,7 +907,7 @@ bool GripperActionServer::wait_for_planning_scene_update(int millis)
   // a version change, so we sleep to let the update propagate before the next plan call.
   auto start = std::chrono::steady_clock::now();
   auto duration = std::chrono::milliseconds(millis);
-  std::this_thread::sleep_for(duration);
+  rclcpp::sleep_for(duration);
 
   if (std::chrono::steady_clock::now() - start >= duration) {
     return true;

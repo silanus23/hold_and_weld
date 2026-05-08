@@ -226,29 +226,10 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
       }
 
-      const std::vector<std::string> & link_names = joint_model_group->getLinkModelNames();
-      if (link_names.size() < 2) {
-        RCLCPP_ERROR(logger_, "Joint model group has insufficient links: %zu",
-                     link_names.size());
-        shutdown_worker();
-        if (moveit_executor_) {moveit_executor_->cancel();}
-        if (moveit_thread_.joinable()) {moveit_thread_.join();}
-        return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
-      }
+      std::string base_link = "robot2_base_link";
+      std::string tip_link = "robot2_wire_tip";
 
-      const std::vector<const moveit::core::JointModel *> & joint_models =
-        joint_model_group->getActiveJointModels();
-
-      std::string base_link;
-      if (!joint_models.empty() && joint_models.front()->getParentLinkModel()) {
-        base_link = joint_models.front()->getParentLinkModel()->getName();
-      } else {
-        base_link = link_names.front();
-      }
-
-      std::string tip_link = link_names.back();
-
-      RCLCPP_INFO(logger_, "Detected kinematic chain: %s -> %s",
+      RCLCPP_INFO(logger_, "Kinematic chain: %s -> %s",
                   base_link.c_str(), tip_link.c_str());
 
       auto urdf_parser = std::make_unique<hold_and_weld::kinematics::URDFParser>();
@@ -487,11 +468,8 @@ void WelderActionServer::load_config_from_yaml()
     if (yaml["approach_offset_z"]) {
       config_.approach_offset_z = yaml["approach_offset_z"].as<double>();
     }
-    if (yaml["use_approach_validator"]) {
-      config_.use_approach_validator = yaml["use_approach_validator"].as<bool>();
-    }
-    if (yaml["retract_offset_z"]) {
-      config_.retract_offset_z = yaml["retract_offset_z"].as<double>();
+    if (yaml["use_approach_validation"]) {
+      config_.use_approach_validator = yaml["use_approach_validation"].as<bool>();
     }
     if (yaml["cartesian_path_threshold"]) {
       config_.cartesian_path_threshold = yaml["cartesian_path_threshold"].as<double>();
@@ -803,7 +781,7 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     }
 
     publish_progress("approaching_seam_" + seam.seam_id, points_processed);
-    if (!approach_seam(seam)) {
+    if (!move_to_seam_boundary(seam, waypoints.front())) {
       RCLCPP_ERROR(logger_, "Failed to approach seam %s", seam.seam_id.c_str());
       failed_seams.push_back(seam.seam_id);
       continue;
@@ -848,7 +826,7 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     }
 
     publish_progress("retracting_from_seam_" + seam.seam_id, points_processed);
-    if (!retract_from_seam(waypoints.back())) {
+    if (!move_to_seam_boundary(seam, waypoints.back())) {
       RCLCPP_ERROR(logger_, "Failed to retract from seam %s", seam.seam_id.c_str());
       failed_seams.push_back(seam.seam_id);
       continue;
@@ -886,31 +864,30 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
   }
 }
 
-bool WelderActionServer::approach_seam(const WeldSeam & seam)
+bool WelderActionServer::move_to_seam_boundary(
+  const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose)
 {
   Eigen::Quaterniond q(
-    seam.poses[0].orientation.w,
-    seam.poses[0].orientation.x,
-    seam.poses[0].orientation.y,
-    seam.poses[0].orientation.z
+    ref_pose.orientation.w,
+    ref_pose.orientation.x,
+    ref_pose.orientation.y,
+    ref_pose.orientation.z
   );
 
-  // Torch tip link is antiparallel to the torch direction, so approach
-  // is computed by backing up along the negative Z axis of the first pose
+  // Back up along the torch local -Z axis (away from the workpiece surface)
   Eigen::Vector3d torch_direction = q * Eigen::Vector3d(0, 0, -1);
 
-  Eigen::Vector3d pos0(seam.poses[0].position.x, seam.poses[0].position.y,
-    seam.poses[0].position.z);
-  Eigen::Vector3d approach_pos = pos0 - torch_direction * config_.approach_offset_z;
+  Eigen::Vector3d ref_pos(ref_pose.position.x, ref_pose.position.y, ref_pose.position.z);
+  Eigen::Vector3d target_pos = ref_pos - torch_direction * config_.approach_offset_z;
 
-  geometry_msgs::msg::Pose approach_pose;
-  approach_pose.position.x = approach_pos.x();
-  approach_pose.position.y = approach_pos.y();
-  approach_pose.position.z = approach_pos.z();
-  approach_pose.orientation = seam.poses[0].orientation;
+  geometry_msgs::msg::Pose target_pose;
+  target_pose.position.x = target_pos.x();
+  target_pose.position.y = target_pos.y();
+  target_pose.position.z = target_pos.z();
+  target_pose.orientation = ref_pose.orientation;
 
-  RCLCPP_DEBUG(logger_, "Approach Position: (%.3f, %.3f, %.3f)",
-               approach_pose.position.x, approach_pose.position.y, approach_pose.position.z);
+  RCLCPP_DEBUG(logger_, "Boundary Position: (%.3f, %.3f, %.3f)",
+               target_pose.position.x, target_pose.position.y, target_pose.position.z);
 
   move_group_->setStartStateToCurrentState();
   auto current_state = move_group_->getCurrentState();
@@ -924,26 +901,20 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
     RCLCPP_WARN(logger_, "getCurrentPose() returned invalid pose — skipping distance log");
   }
   double distance = std::sqrt(
-    std::pow(approach_pose.position.x - current_pose.pose.position.x, 2) +
-    std::pow(approach_pose.position.y - current_pose.pose.position.y, 2) +
-    std::pow(approach_pose.position.z - current_pose.pose.position.z, 2)
+    std::pow(target_pose.position.x - current_pose.pose.position.x, 2) +
+    std::pow(target_pose.position.y - current_pose.pose.position.y, 2) +
+    std::pow(target_pose.position.z - current_pose.pose.position.z, 2)
   );
   RCLCPP_DEBUG(logger_, "Distance to approach target: %.3f m", distance);
 
-  move_group_->setPoseTarget(approach_pose);
+  move_group_->setPoseTarget(target_pose);
   move_group_->setGoalPositionTolerance(0.001);
   move_group_->setGoalOrientationTolerance(0.01);
 
   // Transform seam waypoints from world frame to robot base frame for the validator.
   // The approach validator solves IK in the robot's own base frame.
   WeldSeam local_seam = seam;
-  const auto * joint_model_group = current_state->getJointModelGroup(config_.welder_group_name);
-  if (!joint_model_group) {
-    RCLCPP_ERROR(logger_, "Joint model group '%s' not found", config_.welder_group_name.c_str());
-    return false;
-  }
-  std::string base_link_name = joint_model_group->getLinkModelNames().front();
-  Eigen::Isometry3d world_to_base = current_state->getGlobalLinkTransform(base_link_name);
+  Eigen::Isometry3d world_to_base = current_state->getGlobalLinkTransform("robot2_base_link");
   Eigen::Isometry3d base_to_world = world_to_base.inverse();
   for (auto & pose : local_seam.poses) {
     pose = transform_pose_to_base_frame(pose, base_to_world);
@@ -1048,39 +1019,8 @@ bool WelderActionServer::approach_seam(const WeldSeam & seam)
     }
   }
 
-  RCLCPP_ERROR(logger_, "Failed to find valid approach after %d OMPL attempts",
+  RCLCPP_ERROR(logger_, "Failed to find valid boundary pose after %d OMPL attempts",
                config_.max_ompl_planning_attempts);
-  return false;
-}
-
-bool WelderActionServer::retract_from_seam(const geometry_msgs::msg::Pose & last_pose)
-{
-  // Retract along the tool's local -Z axis (torch tip direction, away from the work
-  // piece), matching the approach_seam convention of q * (0,0,-1). Offsetting along
-  // world +Z is incorrect for non-horizontal seams.
-  const Eigen::Quaterniond q(
-    last_pose.orientation.w,
-    last_pose.orientation.x,
-    last_pose.orientation.y,
-    last_pose.orientation.z);
-  const Eigen::Vector3d retract_dir = q * Eigen::Vector3d(0.0, 0.0, -1.0);
-
-  geometry_msgs::msg::Pose retract_pose = last_pose;
-  retract_pose.position.x += retract_dir.x() * config_.retract_offset_z;
-  retract_pose.position.y += retract_dir.y() * config_.retract_offset_z;
-  retract_pose.position.z += retract_dir.z() * config_.retract_offset_z;
-
-  RCLCPP_INFO(logger_, "Retracting from seam to (%.3f, %.3f, %.3f)",
-               retract_pose.position.x,
-               retract_pose.position.y,
-               retract_pose.position.z);
-
-  move_group_->setPoseTarget(retract_pose);
-  auto result = move_group_->move();
-  if (result == moveit::core::MoveItErrorCode::SUCCESS) {
-    return true;
-  }
-  RCLCPP_ERROR(logger_, "Failed to retract from seam");
   return false;
 }
 

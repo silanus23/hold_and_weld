@@ -182,7 +182,7 @@ TEST_F(KinematicsSolverTest, YoshikawaIndex_IsPositive)
 TEST_F(KinematicsSolverTest, YoshikawaIndex_ChangesWithConfiguration)
 {
   std::vector<double> q1 = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  std::vector<double> q2 = {0.5, 0.3, 0.2, 0.0, 0.0, 0.0};
+  std::vector<double> q2 = {0.5, 0.3, 0.2, 0.4, 0.5, 0.1};
 
   double y1 = solver_->compute_yoshikawa_index(q1);
   double y2 = solver_->compute_yoshikawa_index(q2);

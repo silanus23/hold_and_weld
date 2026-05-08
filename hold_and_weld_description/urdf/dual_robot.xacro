@@ -15,7 +15,7 @@
   <!-- Include all macro files -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/extra_axis/linear_rail_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/> <!-- Robot1 (gripper) -->
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_arm_prefix.xacro"/> <!-- Robot2 (welder) -->
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/> <!-- Robot2 (welder) -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/welding_torch_prefix.xacro"/>
 
@@ -33,7 +33,7 @@
   </joint>
 
   <!-- Robot 2: Welder System (standalone) -->
-  <xacro:ar2010_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
+  <xacro:gp25_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
     initial_pos_j1="$(arg robot2_initial_pos_j1)"
     initial_pos_j2="$(arg robot2_initial_pos_j2)"
     initial_pos_j3="$(arg robot2_initial_pos_j3)"

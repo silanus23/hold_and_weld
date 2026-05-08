@@ -1,6 +1,6 @@
 gripper:
   open_position: 0.15
-  close_position: 0.128
+  close_position: 0.125
   attach_link: robot1_gripper_base
   touch_links:
     - robot1_tool0

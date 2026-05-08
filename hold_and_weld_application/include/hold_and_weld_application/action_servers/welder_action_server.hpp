@@ -57,7 +57,6 @@ struct WelderConfig
 {
   std::string welder_group_name = "robot2_gp25_welder_arm";
   double approach_offset_z = 0.1;
-  double retract_offset_z = 0.15;
   double cartesian_path_threshold = 0.95;
   double cartesian_step_size = 0.01;
   double velocity_scaling = 0.3;
@@ -207,18 +206,19 @@ private:
   void execute_weld(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
   /**
-   * @brief Move the welder arm to approach position 5cm back along the seam direction.
-   * @param seam The weld seam containing start/end points and poses.
-   * @return true if approach motion was successful, false otherwise.
+   * @brief Move the welder arm to the offset boundary pose relative to a seam pose.
+   *
+   * Used for both approach (ref_pose = poses.front()) and retract (ref_pose = poses.back()).
+   * The target is `approach_offset_z` metres back along the torch local -Z axis from
+   * ref_pose, with the same orientation. The full OMPL + ApproachValidator pipeline
+   * is used so retract benefits from the same replanning and validation as approach.
+   *
+   * @param seam      The weld seam (used for validator IK chain warm-start).
+   * @param ref_pose  Boundary pose to offset from (poses.front() or poses.back()).
+   * @return true if the motion was planned, validated and executed successfully.
    */
-  bool approach_seam(const WeldSeam & seam);
-
-  /**
-   * @brief Retract the welder arm from the last seam pose.
-   * @param last_pose Last pose along the weld seam.
-   * @return true if retract motion was successful, false otherwise.
-   */
-  bool retract_from_seam(const geometry_msgs::msg::Pose & last_pose);
+  bool move_to_seam_boundary(
+    const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose);
 
   /**
    * @brief Execute a cartesian path along the weld seam.
