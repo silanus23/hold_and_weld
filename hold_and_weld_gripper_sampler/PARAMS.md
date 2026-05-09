@@ -199,9 +199,3 @@ They will become user facing in future versions.
 | `ground_size_x` | Ground plane size in X for kissing surface contact analysis |
 | `ground_size_y` | Ground plane size in Y for kissing surface contact analysis |
 ```
-
-A few things to check before approving:
-
-- `max_edge_candidates`, `dual_seed_dedup_tolerance_deg`, `max_edges_per_contact`, `angle_offsets` — I marked these as kept for config compatibility since the radial map replaced the edge-based approach. Are these still meaningful or should they be marked deprecated?
-- Default for `max_orientations_per_pair` — code shows 0 as default but `find_valid_grasps` uses 16 as internal fallback when 0 is set. Worth noting?
-- Anything missing or wrong?
