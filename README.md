@@ -2,7 +2,7 @@
 
 **A ROS 2 framework for automated dual-arm robotic welding systems that perform holding and welding simultaneously with integrated grasp sampler and weld finder. Currently at PoC stage. Targets ROS 2 Jazzy.**
 
-![System Launch](docs/system_launch.GIF)
+https://github.com/user-attachments/assets/5dadf27f-0fd4-468e-813c-f0a223d694ed
 
 ## Packages
 
