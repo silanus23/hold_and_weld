@@ -104,8 +104,9 @@ Node(
 )
 ```
 
-**This single parameter is the entire connection between an action server and a
-specific physical robot.** Change it and the server plans for a different robot.
+**This parameter defines robot name groups for action servers.** Change it and the server plans for a different robot.
+
+> **Note:** The welder action server currently has some hardcoded robot-specific values such as link names and tool frame references. This is a temporary compromise and will be parameterised in the same way as the gripper server. Adding a second welder before that work is done will require matching those hardcoded values to your robot.
 
 ### 6. Coordinator — connects to action servers by topic name
 

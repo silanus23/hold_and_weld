@@ -8,7 +8,7 @@ from the seam extraction side. Outputs weld paths as `JSON`.
 
 Regarding seam extractors: the OCCT-based extractor is more deterministic by nature of
 exact CAD representations, while the mesh-based extractor remains sensitive to parameters.
-Active investigation into academic sources is ongoing to improve its robustness.
+See [ROADMAP.md](../ROADMAP.md) for further improvements to handle more complicated setups.
 
 ## Core
 
@@ -51,6 +51,16 @@ based on whether a real boundary edge exists on the kissing face. Normals are ev
 directly from OCCT surface properties at each point. The result is more deterministic
 than the mesh pipeline with no parameter sensitivity on the geometry classification side.
 Pipe joint detection is under development.
+
+## Known Limitations
+
+## Results
+
+**Weld seam extraction example via the mesh pipeline:**
+
+![Edge to Edge](../docs/edge_to_edge.png)
+
+![Cylinder Weld](../docs/cylinder_back.png)
 
 ## Known Limitations
 

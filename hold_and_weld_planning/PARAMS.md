@@ -1,7 +1,3 @@
-Got it. Here is the Parameters.md:
-
----
-
 # Parameters
 
 ## Workpiece
