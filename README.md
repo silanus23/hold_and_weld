@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/5dadf27f-0fd4-468e-813c-f0a223d694ed
 
 ## Quick Start
 
-## Dependencies
+**1. Install dependencies**
 - [OpenCASCADE 7.9.3](https://github.com/Open-Cascade-SAS/OCCT/tree/OCCT-793)
 - CGAL
 - FCL
