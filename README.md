@@ -8,9 +8,11 @@ https://github.com/user-attachments/assets/5dadf27f-0fd4-468e-813c-f0a223d694ed
 
 - [`hold_and_weld_description`](hold_and_weld_description) — robot URDFs, meshes, and models
 - [`hold_and_weld_planning`](hold_and_weld_planning) — weld path generation and seam extraction
-- [`hold_and_weld_gripper_sampler`](hold_and_weld_gripper_sampler) — constraint-aware grasp sampling
-- [`hold_and_weld_application`](hold_and_weld_application) — action servers and workflow coordination
-- [`hold_and_weld_bringup`](hold_and_weld_bringup) — launch files and system bringup
+- [`hold_and_weld_gripper_sampler`](hold_and_weld_gripper_sampler) — constraint-aware grasp sampling(eliminating surfaces and regions including weld lines)
+- [`hold_and_weld_application`](hold_and_weld_application) — action servers and workflow coordination(including custom kinematic solvers)
+- [`hold_and_weld_bringup`](hold_and_weld_bringup) — launch files and system bringup (including visualizers and single spawners)
+
+Key packages have detailed READMEs.
 
 ## Architecture
 
