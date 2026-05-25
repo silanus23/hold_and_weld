@@ -261,11 +261,12 @@ class MagicWand(Node):
 
     def load_and_visualize_latest_json(self):
         """Load the latest trajectory JSON and create torch tip markers."""
-        # Point directly to source trajectories directory
-        # This works whether running from source or install
-        trajectories_dir = os.path.join(
-            get_package_share_directory('hold_and_weld_application'),
-            'trajectories'
+        # Walk up from this script's location to find the source trajectories
+        # directory, bypassing the ament install tree so newly generated JSON
+        # files are visible without rebuilding the package.
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        trajectories_dir = os.path.normpath(
+            os.path.join(script_dir, '..', 'trajectories')
         )
 
         if not os.path.exists(trajectories_dir):
