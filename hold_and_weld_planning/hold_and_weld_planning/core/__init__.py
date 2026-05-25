@@ -16,6 +16,7 @@
 
 from .arc_segment import ArcSegment
 from .line_segment import LineSegment
+from .ptp_segment import PtPSegment
 from .seam import Seam
 
-__all__ = ['LineSegment', 'Seam', 'ArcSegment']
+__all__ = ['LineSegment', 'ArcSegment', 'PtPSegment', 'Seam']

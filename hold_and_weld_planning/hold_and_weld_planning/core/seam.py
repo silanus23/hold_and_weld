@@ -14,23 +14,25 @@
 
 """Seam - Weld seam with geometry and generated poses.
 
-Provides a domain-specific wrapper around LineSegment or ArcSegment for welding
-applications, managing both geometric data and generated trajectory poses.
+Provides a domain-specific wrapper around LineSegment, ArcSegment, or
+PtPSegment for welding applications, managing both geometric data and
+generated trajectory poses.
 """
 
 from typing import Any, Dict, List, Optional
 
 from .arc_segment import ArcSegment
 from .line_segment import LineSegment
+from .ptp_segment import PtPSegment
 
 
 class Seam:
     """Weld seam with geometry and generated poses.
 
-    Wraps LineSegment or ArcSegment with weld-specific metadata.
+    Wraps LineSegment, ArcSegment, or PtPSegment with weld-specific metadata.
 
     Attributes:
-        segment: LineSegment or ArcSegment containing geometry
+        segment: LineSegment, ArcSegment, or PtPSegment containing geometry
         poses: List of generated pose dictionaries, None if not generated yet
         is_generated: True if poses have been successfully generated
         config: Dictionary with metadata (is_edge_joint, normals, etc)
@@ -41,36 +43,39 @@ class Seam:
         seam_dict: Optional[Dict[str, List[float]]] = None,
         line_segment: Optional[LineSegment] = None,
         arc_segment: Optional[ArcSegment] = None,
+        ptp_segment: Optional[PtPSegment] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Initialize seam from a seam dict, LineSegment, or ArcSegment."""
-        # Validate mutual exclusion: exactly one segment source must be provided
+        """Initialize seam from a seam dict, LineSegment, ArcSegment, or PtPSegment."""
         sources_provided = sum(
-            [seam_dict is not None, line_segment is not None, arc_segment is not None]
+            [
+                seam_dict is not None,
+                line_segment is not None,
+                arc_segment is not None,
+                ptp_segment is not None,
+            ]
         )
 
         if sources_provided == 0:
             raise ValueError(
-                'Must provide one of: seam_dict, line_segment, or arc_segment'
+                'Must provide one of: seam_dict, line_segment, arc_segment, or ptp_segment'
             )
         if sources_provided > 1:
             raise ValueError('Cannot provide multiple segment sources')
 
-        # Initialize segment from the provided source
         if line_segment is not None:
             self.segment = line_segment
         elif arc_segment is not None:
             self.segment = arc_segment
+        elif ptp_segment is not None:
+            self.segment = ptp_segment
         elif seam_dict is not None:
             # Legacy dict format: construct LineSegment from start/end
             if 'start' not in seam_dict:
                 raise KeyError("seam_dict must contain 'start' key")
             if 'end' not in seam_dict:
                 raise KeyError("seam_dict must contain 'end' key")
-
-            self.segment = LineSegment(
-                seam_dict['start'], seam_dict['end']
-            )
+            self.segment = LineSegment(seam_dict['start'], seam_dict['end'])
 
         self.poses = None
         self.is_generated = False
@@ -91,12 +96,21 @@ class Seam:
         return None
 
     @property
+    def ptp_segment(self) -> Optional[PtPSegment]:
+        """Return segment as PtPSegment if applicable, else None."""
+        if isinstance(self.segment, PtPSegment):
+            return self.segment
+        return None
+
+    @property
     def segment_type(self) -> str:
-        """Return 'line', 'arc', or 'unknown'."""
+        """Return 'line', 'arc', 'ptp', or 'unknown'."""
         if isinstance(self.segment, LineSegment):
             return 'line'
         elif isinstance(self.segment, ArcSegment):
             return 'arc'
+        elif isinstance(self.segment, PtPSegment):
+            return 'ptp'
         return 'unknown'
 
     def length(self) -> float:
@@ -125,26 +139,31 @@ class Seam:
         if isinstance(self.segment, LineSegment):
             result['start'] = self.segment.start.tolist()
             result['end'] = self.segment.end.tolist()
+
         elif isinstance(self.segment, ArcSegment):
             result['start'] = self.segment.start.tolist()
             result['end'] = self.segment.end.tolist()
             result['center'] = self.segment.center.tolist()
             result['radius'] = float(self.segment.radius)
 
+        elif isinstance(self.segment, PtPSegment):
+            result['start'] = self.segment.start.tolist()
+            result['end'] = self.segment.end.tolist()
+            result['num_points'] = len(self.segment.points)
+            result['points'] = self.segment.points.tolist()
+
         if self.config:
             result['config'] = {}
             for k, v in self.config.items():
-                # Skip large internal arrays that aren't needed in exported JSON
                 if k in ['normals_mesh_1', 'normals_mesh_2', 'normals_main',
                          'normals_secondary', 'smoothed_points']:
                     continue
 
-                # Convert numpy types to native Python types for JSON serialization
                 if hasattr(v, 'item') and hasattr(v, 'shape') and v.shape == ():
-                    result['config'][k] = v.item()  # Scalar numpy value
+                    result['config'][k] = v.item()
                 elif hasattr(v, 'tolist'):
-                    result['config'][k] = v.tolist()  # Numpy array
+                    result['config'][k] = v.tolist()
                 else:
-                    result['config'][k] = v  # Already JSON-serializable
+                    result['config'][k] = v
 
         return result

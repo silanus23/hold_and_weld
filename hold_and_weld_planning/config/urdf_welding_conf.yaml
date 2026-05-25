@@ -25,11 +25,10 @@
 #      - 0
 #      - 0
 
-# ── T-joint cube straight ──────────────────────────────────────────────────────
+# ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
 workpiece:
   auto_detect_seams: true
-  mode: occt
-
+  mode: mesh
   main_part:
     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:
@@ -39,101 +38,87 @@ workpiece:
       - 0.65
       rpy:
       - 0
-      - 0
+      - 0.7853982
       - 0
   secondary_part:
     secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
     world_pose:
       xyz:
-      - 1.2
+      - 1.394
       - -0.5
-      - 0.925
+      - 0.844
       rpy:
       - 0
+      - 0.7853982
       - 0
-      - 0
-
-# ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
-# workpiece:
-#   auto_detect_seams: true
-#   mode: mesh
-#
-#   main_part:
-#     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
-#     world_pose:
-#       xyz:
-#       - 1.2
-#       - -0.5
-#       - 0.65
-#       rpy:
-#       - 0
-#       - 0.7853982
-#       - 0
-#   secondary_part:
-#     secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
-#     world_pose:
-#       xyz:
-#       - 1.394
-#       - -0.5
-#       - 0.844
-#       rpy:
-#       - 0
-#       - 0.7853982
-#       - 0
 # ──────────────────────────────────────────────────────────────────────────────
 
 parameters:
-  num_smooth_points: 40
+  # ── Planner ────────────────────────────────────────────────────────────────
   gap_mm: 40.0
   work_angle_deg: 45.0
   travel_angle_deg: 5.0
+  waypoint_spacing_mm: 10.0
+
+  # ── Mesh intersection ──────────────────────────────────────────────────────
+  inflate: 1.0
+  refine_iterations: 24
+
+  # ── Newton refinement ──────────────────────────────────────────────────────
+  # Refines CGAL vertices from tessellation-pinned positions onto the true
+  # geometric intersection curve. Set to false to use legacy PathCreator pipeline.
+  newton_enabled: false
+  newton_max_iterations: 15
+  newton_tolerance: 1.0e-7
+
+  # ── Ridge-valley detection ─────────────────────────────────────────────────
+  # Finds geometric boundary edges to seed Newton with better starting points.
+  # Only active when newton_enabled is true.
+  ridge_valley_enabled: false
+  crease_zone_radius_ratio: 0.05
+
+  # ── Edge detection (bimodality) ────────────────────────────────────────────
   edge_detection_search_radius_ratio: 0.02
+  edge_detection_threshold: 0.5
+  gaussian_sigma_ratio: 0.3
+  normal_outlier_threshold_std: 2.0
 
-  # PathCreator configuration - Advanced geometry processing parameters
-  # All parameters are optional - defaults shown below
+  # ── Classification (sliding window) ───────────────────────────────────────
+  # Only active when newton_enabled is true.
+  classification_window_size: 0.05
+  line_fit_threshold: 1.0e-4
+  circle_fit_threshold: 1.0e-4
+  resample_points_per_meter: 1000
 
-  # Outlier Removal
-  # Remove points that are statistical outliers based on inter-point distances
-  outlier_std_threshold: 5.0
+  # ── Subdivision ────────────────────────────────────────────────────────────
+  # Only active when newton_enabled is true.
+  max_lin_segment_length_mm: 200.0
+  max_circ_arc_angle_deg: 90.0
+  ptp_waypoint_spacing_mm: 10.0
+  ptp_curvature_density_factor: 3.0
 
-  # Corner Detection - General
-  min_sub_path_length: 10
-  min_points_for_corner_detection: 20
-
-  # Corner Detection - Angle-based Method
-  # Detects corners by measuring angle change between before/after vectors
-  corner_min_angle: 25
-  corner_angle_window: 10
-
-  # Corner Detection - Curvature-based Method
-  # Detects corners by measuring discrete curvature magnitude
-  corner_curvature_window: 10
-  corner_curvature_threshold: 0.8
-
-  # Corner Detection - Combination & Filtering
-  corner_min_agreement: 1
-  corner_tolerance: 5
-  corner_filter_window: 5
-
-  # Arc Merging
-  # Merge consecutive arc segments with similar radii
-  arc_radius_tolerance: 0.05
-  arc_merge_num_points: 100
-
-  # Line Merging
-  # Merge consecutive collinear line segments
-  line_angle_tolerance_deg: 10.0
-  line_merge_max_error: 0.001
-  line_merge_max_iterations: 20
-
-  # Small Line Absorption
-  # Absorb small line segments into adjacent arcs
-  min_line_size: 70
-  line_absorption_max_error: 0.01  #
-  line_absorption_max_iterations: 10
-
-  # First/Last Segment Merging (for closed paths)
-  # Merge first and last segments if path was split arbitrarily at a corner
-  first_last_angle_tolerance: 10
-  first_last_radius_tolerance: 0.05
-  first_last_gap_threshold: 0.01
+  # ── Legacy PathCreator parameters ─────────────────────────────────────────
+  # Only used when newton_enabled is false. Kept for backward compatibility.
+  #
+  # num_smooth_points: 40
+  # outlier_std_threshold: 5.0
+  # min_sub_path_length: 10
+  # min_points_for_corner_detection: 20
+  # corner_min_angle: 25
+  # corner_angle_window: 10
+  # corner_curvature_window: 10
+  # corner_curvature_threshold: 0.8
+  # corner_min_agreement: 1
+  # corner_tolerance: 5
+  # corner_filter_window: 5
+  # arc_radius_tolerance: 0.05
+  # arc_merge_num_points: 100
+  # line_angle_tolerance_deg: 10.0
+  # line_merge_max_error: 0.001
+  # line_merge_max_iterations: 20
+  # min_line_size: 70
+  # line_absorption_max_error: 0.01
+  # line_absorption_max_iterations: 10
+  # first_last_angle_tolerance: 10
+  # first_last_radius_tolerance: 0.05
+  # first_last_gap_threshold: 0.01

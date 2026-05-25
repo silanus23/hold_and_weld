@@ -14,7 +14,7 @@
 
 """Hold and Weld Planning Package - Weld seam trajectory generation."""
 
-from .core import ArcSegment, LineSegment, Seam
+from .core import ArcSegment, LineSegment, PtPSegment, Seam
 from .mesh import (
     MeshLoader,
     PathCreator,
@@ -40,6 +40,7 @@ __version__ = '0.2.0'
 __all__ = [
     'LineSegment',
     'ArcSegment',
+    'PtPSegment',
     'Seam',
     'WeldPlanner',
     'URDFProcessor',
