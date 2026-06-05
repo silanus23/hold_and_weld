@@ -113,7 +113,7 @@ def main():
 
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
-            print(f'  Points per seam: {parameters.get("num_points", 100)}')
+            print(f'  Points per seam: {parameters.get("num_smooth_points", 100)}')
             print(f'  Work angle: {parameters["work_angle_deg"]}')
             print(f'  Travel angle: {parameters["travel_angle_deg"]}')
             print(f'  Gap: {parameters["gap_mm"]}mm')

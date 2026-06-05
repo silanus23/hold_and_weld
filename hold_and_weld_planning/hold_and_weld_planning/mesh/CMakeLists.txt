@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.14)
 project(mesh_intersection)
 
+# Prefer locally installed CGAL 6 over system CGAL 5.x
+list(PREPEND CMAKE_PREFIX_PATH /usr/local/lib/cmake)
+
 # C++17 required for CGAL and modern pybind11
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,6 +33,7 @@ target_link_libraries(mesh_intersection PRIVATE CGAL::CGAL)
 
 # Include directories for CGAL, Boost, and Eigen3
 target_include_directories(mesh_intersection PRIVATE
+    /usr/local/include
     ${CGAL_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIR}

@@ -61,6 +61,7 @@ parameters:
   waypoint_spacing_mm: 10.0
 
   # ── Mesh intersection ──────────────────────────────────────────────────────
+  epsilon: 0.02
   inflate: 1.0
   refine_iterations: 24
 
