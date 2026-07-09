@@ -17,6 +17,7 @@
 
 #include <embree4/rtcore.h>
 
+#include <array>
 #include <optional>
 #include <vector>
 

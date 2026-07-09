@@ -18,7 +18,6 @@ install(DIRECTORY
 )
 
 install(DIRECTORY
-  rviz
   DESTINATION share/${PROJECT_NAME}/
 )
 
