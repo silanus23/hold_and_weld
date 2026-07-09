@@ -24,7 +24,7 @@
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/AABB_tree.h>
-#include <CGAL/AABB_traits_3.h>
+#include <CGAL/AABB_traits.h>
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
 #include <CGAL/Polygon_mesh_processing/compute_normal.h>
 
@@ -49,7 +49,7 @@ typedef boost::graph_traits<SurfaceMesh>::vertex_descriptor   vertex_descriptor;
 typedef boost::graph_traits<SurfaceMesh>::halfedge_descriptor halfedge_descriptor;
 
 typedef CGAL::AABB_face_graph_triangle_primitive<SurfaceMesh> Primitive;
-typedef CGAL::AABB_traits_3<K, Primitive>                     AABB_Traits;
+typedef CGAL::AABB_traits<K, Primitive>                       AABB_Traits;
 typedef CGAL::AABB_tree<AABB_Traits>                          AABB_Tree;
 
 
