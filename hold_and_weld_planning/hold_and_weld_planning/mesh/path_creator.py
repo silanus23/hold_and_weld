@@ -184,16 +184,23 @@ class PathCreator:
         self,
         seam_points: List[SeamPoint],
     ) -> List[List[SeamPoint]]:
-        """Split at (on_edge_1, on_edge_2) contact type changes; discard sublists < 2 points."""
+        """Split at (is_edge_joint, refined_side) transitions; discard sublists < 2 points.
+
+        Splitting on refined_side as well ensures a mid-seam side switch (where
+        normal_main/normal_secondary swap meshes) starts a new sublist.
+        """
         if not seam_points:
             return []
 
+        def contact_type(sp: SeamPoint) -> Tuple[bool, int]:
+            return (sp.on_edge_1 and sp.on_edge_2, sp.refined_side)
+
         sublists = []
         current = [seam_points[0]]
-        current_type = (seam_points[0].on_edge_1, seam_points[0].on_edge_2)
+        current_type = contact_type(seam_points[0])
 
         for sp in seam_points[1:]:
-            sp_type = (sp.on_edge_1, sp.on_edge_2)
+            sp_type = contact_type(sp)
             if sp_type != current_type:
                 if len(current) >= 2:
                     sublists.append(current)
@@ -363,7 +370,7 @@ class PathCreator:
                 seam = Seam(line_segment=segment)
 
             elif seg_type == 'arc':
-                result = self._fit_circle_taubin(points)
+                result = self._fit_circle_kasa(points)
                 if result is None:
                     logger.warning(
                         'Arc fit failed in _wrap_in_seam — falling back to PtPSegment'
@@ -401,7 +408,7 @@ class PathCreator:
 
     def _normalized_arc_error(self, points: NDArray) -> Optional[float]:
         """Sum-squared arc fit error divided by point count, or None on degenerate geometry."""
-        result = self._fit_circle_taubin(points)
+        result = self._fit_circle_kasa(points)
         if result is None:
             return None
         _, _, error = result
@@ -429,11 +436,11 @@ class PathCreator:
         error = float(np.sum(np.linalg.norm(residuals, axis=1) ** 2))
         return centroid, direction, error
 
-    def _fit_circle_taubin(
+    def _fit_circle_kasa(
         self,
         points: NDArray,
     ) -> Optional[Tuple[NDArray, float, float]]:
-        """Algebraic circle fit via linear least squares in PCA-projected 2D plane.
+        """Kåsa algebraic circle fit via linear least squares in PCA-projected 2D plane.
 
         Args:
             points: Input positions (N, 3), N >= 3.

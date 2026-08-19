@@ -62,6 +62,7 @@ parameters:
 
   # ── Mesh intersection ──────────────────────────────────────────────────────
   epsilon: 0.02
+  pairing_radius: 0.02
   inflate: 1.0
   refine_iterations: 24
 

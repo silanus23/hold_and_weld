@@ -14,6 +14,7 @@
 
 """Extract and classify weld seam points from a pair of touching mesh shells."""
 
+from collections import deque
 from dataclasses import dataclass
 import logging
 from typing import Dict, List, Optional, Tuple
@@ -44,8 +45,12 @@ class SeamPoint:
         position:          Refined 3D position on the geometric edge (3,).
         normal_main:       Surface normal of the base plate (3,).
         normal_secondary:  Surface normal of the secondary part (3,).
-        on_edge_1:         True if mesh_1 contributes an edge contact.
-        on_edge_2:         True if mesh_2 contributes an edge contact.
+        on_edge_1:         True if the mesh_1-side point lies on a geometric
+                            edge (bimodal local normals).
+        on_edge_2:         True if the mesh_2-side point lies on a geometric
+                            edge (bimodal local normals).
+        refined_side:      Which mesh this point was refined against: 1 for
+                            mesh_1, 2 for mesh_2.
     """
 
     position: NDArray
@@ -53,13 +58,15 @@ class SeamPoint:
     normal_secondary: NDArray
     on_edge_1: bool
     on_edge_2: bool
+    refined_side: int
 
 
 class SeamExtractor:
     """Extract weld seam points from two touching mesh shells.
 
-    Calls C++ get_seam_vertices, refines points toward the geometric edge via
-    covariance-guided stepping, classifies edge contact, and delegates to PathCreator.
+    Calls C++ get_seam_vertices, picks per-point which mesh side is the true
+    edge side (comparative normal-covariance bimodality), refines the chosen
+    side's position via a local field scan, and delegates to PathCreator.
     """
 
     def __init__(
@@ -73,10 +80,12 @@ class SeamExtractor:
             mesh_1: First mesh (world frame, must be watertight).
             mesh_2: Second mesh (world frame, must be watertight).
             params: Configuration dict with keys: epsilon, covariance_radius,
-                    edge_threshold, step_size, max_steps, pairing_radius, num_smooth_points.
+                    edge_threshold, pairing_radius, num_smooth_points,
+                    scan_point_spacing.
 
         Raises:
-            ValueError: If either mesh is not watertight.
+            ValueError: If either mesh is not watertight, or if pairing_radius
+                        is smaller than epsilon.
         """
         if not mesh_1.is_watertight:
             raise ValueError('mesh_1 is not watertight')
@@ -90,10 +99,16 @@ class SeamExtractor:
         self.epsilon = params.get('epsilon', 1e-3)
         self.covariance_radius = params.get('covariance_radius', 0.05)
         self.edge_threshold = params.get('edge_threshold', 0.3)
-        self.step_size = params.get('step_size', 0.001)
-        self.max_steps = params.get('max_steps', 50)
         self.pairing_radius = params.get('pairing_radius', 0.01)
         self.num_smooth_points = params.get('num_smooth_points', 100)
+        self.scan_point_spacing = params.get('scan_point_spacing', 0.004)
+
+        if self.pairing_radius < self.epsilon:
+            raise ValueError(
+                f'pairing_radius ({self.pairing_radius}) must be >= '
+                f'epsilon ({self.epsilon}), otherwise a face detected as '
+                'in-contact by epsilon can fail to find a pairing partner.'
+            )
 
         self.chain_1: Optional[Dict[str, NDArray]] = None
         self.chain_2: Optional[Dict[str, NDArray]] = None
@@ -101,15 +116,38 @@ class SeamExtractor:
 
         self._seam_1_slices: List[Tuple[int, int, bool]] = []
 
-        self._kdtree_mesh2_verts: Optional[KDTree] = None
         self._kdtree_chain1: Optional[KDTree] = None
         self._kdtree_chain2: Optional[KDTree] = None
 
-        self._kdtree_combined: Optional[KDTree] = None
-        self._combined_normals: Optional[NDArray] = None
+        self._mesh_1_data = self._prepare_mesh_data(mesh_1)
+        self._mesh_2_data = self._prepare_mesh_data(mesh_2)
 
-        self._centroid_1 = np.array(mesh_1.centroid)
-        self._centroid_2 = np.array(mesh_2.centroid)
+    def _prepare_mesh_data(self, mesh: trimesh.Trimesh) -> Dict:
+        """Precompute per-mesh lookup structures used by field-scan refinement."""
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+        area_faces = np.asarray(mesh.area_faces, dtype=np.float64)
+        face_centroids = np.asarray(mesh.triangles_center, dtype=np.float64)
+
+        return {
+            'mesh': mesh,
+            'vertices': vertices,
+            'vertex_kdtree': KDTree(vertices),
+            'face_normals': face_normals,
+            'area_faces': area_faces,
+            'face_centroids': face_centroids,
+            'face_centroid_kdtree': KDTree(face_centroids),
+            'vertex_faces': mesh.vertex_faces,
+            'face_adjacency': self._build_face_adjacency(mesh),
+        }
+
+    def _build_face_adjacency(self, mesh: trimesh.Trimesh) -> Dict[int, List[int]]:
+        """Build a face-index adjacency list from trimesh's face_adjacency pairs."""
+        adjacency: Dict[int, List[int]] = {}
+        for f1, f2 in mesh.face_adjacency:
+            adjacency.setdefault(int(f1), []).append(int(f2))
+            adjacency.setdefault(int(f2), []).append(int(f1))
+        return adjacency
 
     def _get_local_normals(
         self,
@@ -117,11 +155,54 @@ class SeamExtractor:
         tree: KDTree,
         normals: NDArray,
     ) -> NDArray:
-        """Return face normals within covariance_radius of point from tree/normals."""
+        """Return normals within covariance_radius of point from tree/normals."""
         idxs = tree.query_ball_point(point, self.covariance_radius)
         if len(idxs) == 0:
             return np.empty((0, 3))
         return normals[np.array(idxs)]
+
+    def _compute_local_covariance(
+        self,
+        point: NDArray,
+        tree: KDTree,
+        normals: NDArray,
+    ) -> Tuple[Optional[NDArray], Optional[NDArray]]:
+        """Return eigendecomposition of normal covariance within covariance_radius, or (None, None)."""
+        local_normals = self._get_local_normals(point, tree, normals)
+
+        if len(local_normals) < 3:
+            return None, None
+
+        cov = np.cov(local_normals.T)  # (3, 3)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov)
+
+        return eigenvalues, eigenvectors
+
+    def _is_edge_contact(self, eigenvalues: NDArray) -> bool:
+        """Return True if σ = λ2/sum(λ) >= edge_threshold (bimodal normals at an edge)."""
+        total = np.sum(eigenvalues)
+        if total < 1e-10:
+            return False
+        sigma = eigenvalues[2] / total
+        return bool(sigma >= self.edge_threshold)
+
+    def _compute_sigma_and_edge(
+        self,
+        point: NDArray,
+        tree: KDTree,
+        normals: NDArray,
+    ) -> Tuple[float, bool]:
+        """Return (sigma, is_edge) for point's local normal covariance against tree/normals."""
+        eigenvalues, _ = self._compute_local_covariance(point, tree, normals)
+        if eigenvalues is None:
+            return 0.0, False
+
+        total = np.sum(eigenvalues)
+        if total < 1e-10:
+            return 0.0, False
+
+        sigma = float(eigenvalues[2] / total)
+        return sigma, self._is_edge_contact(eigenvalues)
 
     def _load_ordered_chains(
         self,
@@ -190,186 +271,155 @@ class SeamExtractor:
             f'Paired {len(self.pairs)}/{len(self.chain_1["positions"])} chain_1 point(s)'
         )
 
-    def _compute_local_covariance(
+    def _collect_nearby_faces(
         self,
-        point: NDArray,
-        tree: KDTree,
-        normals: NDArray,
-    ) -> Tuple[Optional[NDArray], Optional[NDArray]]:
-        """Return eigendecomposition of normal covariance within covariance_radius, or (None, None)."""
-        local_normals = self._get_local_normals(point, tree, normals)
+        mesh_data: Dict,
+        anchor_position: NDArray,
+        anchor_vertex_idx: int,
+    ) -> set:
+        """Flood-fill face adjacency from anchor_vertex_idx, bounded by covariance_radius.
 
-        if len(local_normals) < 3:
-            return None, None
-
-        cov = np.cov(local_normals.T)  # (3, 3)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov)
-
-        return eigenvalues, eigenvectors
-
-    def _is_edge_contact(self, eigenvalues: NDArray) -> bool:
-        """Return True if σ = λ2/sum(λ) >= edge_threshold (bimodal normals at an edge)."""
-        total = np.sum(eigenvalues)
-        if total < 1e-10:
-            return False
-        sigma = eigenvalues[2] / total
-        return bool(sigma >= self.edge_threshold)
-
-    def _refine_edge_point(self, index: int) -> NDArray:
-        """Walk chain_1[index] toward the geometric edge via tangent-plane stepping on mesh_2.
-
-        Steps using position covariance of mesh_2 vertices to stay on the tangent plane.
-        Stops when normal covariance σ = λ2/sum of the combined boundary pool peaks,
-        indicating the two normal populations meet at the seam. Returns the position p*
-        that maximised σ.
-
-        Args:
-            index: Index into chain_1.
-
-        Returns:
-            Refined position p* (3,).
+        Stays on mesh topology (no tangent-plane assumption needed) to gather
+        the set of faces to sample candidate points from.
         """
-        p = self.chain_1['positions'][index].copy()
+        adjacency = mesh_data['face_adjacency']
+        face_centroids = mesh_data['face_centroids']
+        vertex_faces_row = mesh_data['vertex_faces'][anchor_vertex_idx]
+        seed_faces = [int(f) for f in vertex_faces_row if f != -1]
 
-        mesh2_verts = np.asarray(self.mesh_2.vertices, dtype=np.float64)
+        visited: set = set()
+        frontier: deque = deque()
 
-        _, j0 = self._kdtree_chain2.query(p)
-        q0 = self.chain_2['positions'][j0]
-        if np.linalg.norm(q0 - p) < 1e-10:
-            logger.debug(
-                f'Chain_1 index {index}: chain_1 and chain_2 points coincide, '
-                'skipping refinement'
-            )
-            return p
+        for f in seed_faces:
+            d = np.linalg.norm(face_centroids[f] - anchor_position)
+            if d <= self.covariance_radius:
+                visited.add(f)
+                frontier.append(f)
+
+        while frontier:
+            f = frontier.popleft()
+            for nb in adjacency.get(f, []):
+                if nb in visited:
+                    continue
+                d = np.linalg.norm(face_centroids[nb] - anchor_position)
+                if d <= self.covariance_radius:
+                    visited.add(nb)
+                    frontier.append(nb)
+
+        if not visited:
+            # Fallback: anchor's own incident faces, regardless of the radius
+            # check, so refinement always has at least a seed neighborhood.
+            visited = set(seed_faces)
+
+        return visited
+
+    def _field_scan_refine(
+        self,
+        mesh_data: Dict,
+        anchor_position: NDArray,
+        anchor_vertex_idx: int,
+    ) -> NDArray:
+        """Sample candidate points on the mesh near the anchor and return the one
+        with highest normal-covariance bimodality (σ), i.e. closest to the true edge.
+        """
+        face_idx_set = self._collect_nearby_faces(mesh_data, anchor_position, anchor_vertex_idx)
+
+        candidates = [anchor_position]
+
+        if face_idx_set:
+            face_indices = np.array(sorted(face_idx_set))
+            total_area = float(np.sum(mesh_data['area_faces'][face_indices]))
+            n_samples = max(8, int(total_area / (self.scan_point_spacing ** 2)))
+
+            weights = np.zeros(len(mesh_data['face_normals']))
+            weights[face_indices] = mesh_data['area_faces'][face_indices]
+
+            try:
+                sampled_points, _ = trimesh.sample.sample_surface(
+                    mesh_data['mesh'], n_samples, face_weight=weights
+                )
+                candidates.extend(list(sampled_points))
+            except Exception as e:
+                logger.debug(f'Field-scan sampling failed, using anchor only: {e}')
+
+        tree = mesh_data['face_centroid_kdtree']
+        normals = mesh_data['face_normals']
 
         best_sigma = -np.inf
-        best_p = p.copy()
+        best_position = anchor_position.copy()
 
-        for step in range(self.max_steps):
-            _, j = self._kdtree_chain2.query(p)
-            q = self.chain_2['positions'][j]
-            u_global = q - p
-            u_global_norm = np.linalg.norm(u_global)
-
-            if u_global_norm < 1e-10:
-                logger.debug(
-                    f'Chain_1 index {index}: reached chain_2 point at step {step}'
-                )
-                best_p = p.copy()
-                break
-
-            u_global = u_global / u_global_norm
-
-            idxs_pos = self._kdtree_mesh2_verts.query_ball_point(p, self.covariance_radius)
-
-            if len(idxs_pos) >= 3:
-                pos_data = mesh2_verts[np.array(idxs_pos)]
-                cov_pos = np.cov(pos_data.T)  # (3, 3)
-                _, pos_eigenvectors = np.linalg.eigh(cov_pos)
-
-                v0 = pos_eigenvectors[:, 0]
-
-                u_tangent = u_global - np.dot(u_global, v0) * v0
-                u_tangent_norm = np.linalg.norm(u_tangent)
-
-                if u_tangent_norm > 1e-10:
-                    u_tangent = u_tangent / u_tangent_norm
-                else:
-                    u_tangent = u_global
-            else:
-                u_tangent = u_global
-
-            p = p + self.step_size * u_tangent
-
-            eigenvalues, _ = self._compute_local_covariance(
-                p, self._kdtree_combined, self._combined_normals
-            )
-
-            if eigenvalues is None:
-                continue
-
-            total = np.sum(eigenvalues)
-            if total < 1e-10:
-                continue
-
-            sigma = eigenvalues[2] / total
-
+        for cand in candidates:
+            cand = np.asarray(cand, dtype=np.float64)
+            sigma, _ = self._compute_sigma_and_edge(cand, tree, normals)
             if sigma > best_sigma:
                 best_sigma = sigma
-                best_p = p.copy()
+                best_position = cand.copy()
 
-            if sigma >= self.edge_threshold:
-                logger.debug(
-                    f'Chain_1 index {index}: edge found at step {step}, σ={sigma:.3f}'
-                )
-                break
-        else:
-            logger.debug(
-                f'Chain_1 index {index}: max_steps reached, '
-                f'returning best σ={best_sigma:.3f} position'
-            )
+        return best_position
 
-        return best_p
-
-    def _determine_main_secondary(
+    def _find_side_switch_anchor(
         self,
-        normal_1: NDArray,
-        normal_2: NDArray,
-        point: NDArray,
-    ) -> Tuple[NDArray, NDArray]:
-        """Return (normal_main, normal_secondary) ordered by centroid-to-seam alignment."""
-        vec_1 = point - self._centroid_1
-        vec_2 = point - self._centroid_2
+        mesh_data: Dict,
+        last_position: NDArray,
+        direction: Optional[NDArray],
+    ) -> Tuple[NDArray, int]:
+        """Find the anchor vertex on the new mesh side when switching sides mid-seam.
 
-        norm_v1 = np.linalg.norm(vec_1)
-        norm_v2 = np.linalg.norm(vec_2)
+        Picks the nearest vertex to last_position, but if a rough travel
+        direction is known, restricts candidates to ones ahead of
+        last_position along that direction (to avoid walking backward).
+        """
+        vertices = mesh_data['vertices']
+        k = min(10, len(vertices))
+        dists, idxs = mesh_data['vertex_kdtree'].query(last_position, k=k)
+        dists = np.atleast_1d(dists)
+        idxs = np.atleast_1d(idxs)
 
-        if norm_v1 < 1e-10 or norm_v2 < 1e-10:
-            logger.warning('Degenerate centroid-to-seam vector, defaulting to mesh_1 as main')
-            return normal_1, normal_2
+        chosen_idx = int(idxs[0])
 
-        dot_1 = np.dot(normal_1, vec_1 / norm_v1)
-        dot_2 = np.dot(normal_2, vec_2 / norm_v2)
+        if direction is not None:
+            dir_norm = np.linalg.norm(direction)
+            if dir_norm > 1e-10:
+                dir_unit = direction / dir_norm
+                forward = [
+                    (d, int(i)) for d, i in zip(dists, idxs)
+                    if np.dot(vertices[int(i)] - last_position, dir_unit) > 0
+                ]
+                if forward:
+                    forward.sort(key=lambda x: x[0])
+                    chosen_idx = forward[0][1]
 
-        if dot_1 >= dot_2:
-            return normal_1, normal_2
-        else:
-            return normal_2, normal_1
+        return vertices[chosen_idx], chosen_idx
 
     def _build_seam_point(
         self,
         i: int,
         j: int,
         refined_position: NDArray,
+        side: int,
+        edge_1: bool,
+        edge_2: bool,
     ) -> SeamPoint:
-        """Assemble a SeamPoint from chain indices and the refined position."""
+        """Assemble a SeamPoint from chain indices, the refined position, and chosen side.
+
+        The refinement side carries the geometric edge, so its normal is the
+        secondary part's normal; the other side's normal is the main (base) one.
+        """
         normal_1 = self.chain_1['normals'][i]
         normal_2 = self.chain_2['normals'][j]
 
-        ev_1, _ = self._compute_local_covariance(
-            self.chain_1['positions'][i],
-            self._kdtree_chain1,
-            self.chain_1['normals'],
-        )
-        ev_2, _ = self._compute_local_covariance(
-            self.chain_2['positions'][j],
-            self._kdtree_chain2,
-            self.chain_2['normals'],
-        )
-
-        on_edge_1 = self._is_edge_contact(ev_1) if ev_1 is not None else False
-        on_edge_2 = self._is_edge_contact(ev_2) if ev_2 is not None else False
-
-        normal_main, normal_secondary = self._determine_main_secondary(
-            normal_1, normal_2, refined_position
-        )
+        if side == 1:
+            normal_main, normal_secondary = normal_2, normal_1
+        else:
+            normal_main, normal_secondary = normal_1, normal_2
 
         return SeamPoint(
             position=refined_position,
             normal_main=normal_main,
             normal_secondary=normal_secondary,
-            on_edge_1=on_edge_1,
-            on_edge_2=on_edge_2,
+            on_edge_1=edge_1,
+            on_edge_2=edge_2,
+            refined_side=side,
         )
 
     def extract_seams(self) -> List[Seam]:
@@ -411,19 +461,7 @@ class SeamExtractor:
             logger.warning('No usable chain points after loading ordered seams')
             return []
 
-        self._kdtree_mesh2_verts = KDTree(verts2)
-
         self._kdtree_chain1 = KDTree(self.chain_1['positions'])
-
-        combined_positions = np.vstack([
-            self.chain_1['positions'],
-            self.chain_2['positions'],
-        ])
-        self._combined_normals = np.vstack([
-            self.chain_1['normals'],
-            self.chain_2['normals'],
-        ])
-        self._kdtree_combined = KDTree(combined_positions)
 
         self._pair_chains()
 
@@ -441,18 +479,72 @@ class SeamExtractor:
         path_creator = PathCreator(self.params)
         seams: List[Seam] = []
         failed = 0
+        discarded = 0
 
         for start, end, _is_closed in self._seam_1_slices:
             seam_points: List[SeamPoint] = []
+
+            prev_side: Optional[int] = None
+            prev_refined_positions: List[NDArray] = []
 
             for i in range(start, end):
                 j = self.pairs.get(i)
                 if j is None:
                     continue
+
                 try:
-                    p_refined = self._refine_edge_point(i)
-                    sp = self._build_seam_point(i, j, p_refined)
+                    sigma_1, edge_1 = self._compute_sigma_and_edge(
+                        self.chain_1['positions'][i], self._kdtree_chain1, self.chain_1['normals']
+                    )
+                    sigma_2, edge_2 = self._compute_sigma_and_edge(
+                        self.chain_2['positions'][j], self._kdtree_chain2, self.chain_2['normals']
+                    )
+
+                    if not edge_1 and not edge_2:
+                        discarded += 1
+                        continue
+
+                    if edge_1 and edge_2:
+                        side = prev_side if prev_side is not None else 1
+                    elif edge_1:
+                        side = 1
+                    else:
+                        side = 2
+
+                    mesh_data = self._mesh_1_data if side == 1 else self._mesh_2_data
+                    raw_position = (
+                        self.chain_1['positions'][i] if side == 1 else self.chain_2['positions'][j]
+                    )
+
+                    if prev_side is not None and side != prev_side:
+                        direction = None
+                        if len(prev_refined_positions) >= 2:
+                            direction = prev_refined_positions[-1] - prev_refined_positions[-2]
+                        last_position = (
+                            prev_refined_positions[-1] if prev_refined_positions else raw_position
+                        )
+                        anchor_position, anchor_vertex_idx = self._find_side_switch_anchor(
+                            mesh_data, last_position, direction
+                        )
+                    else:
+                        anchor_position = raw_position
+                        _, anchor_vertex_idx = mesh_data['vertex_kdtree'].query(anchor_position)
+                        anchor_vertex_idx = int(anchor_vertex_idx)
+
+                    refined_position = self._field_scan_refine(
+                        mesh_data, anchor_position, anchor_vertex_idx
+                    )
+
+                    sp = self._build_seam_point(
+                        i, j, refined_position, side, edge_1, edge_2
+                    )
                     seam_points.append(sp)
+
+                    prev_side = side
+                    prev_refined_positions.append(refined_position)
+                    if len(prev_refined_positions) > 2:
+                        prev_refined_positions.pop(0)
+
                 except Exception as e:
                     logger.warning(f'Failed at chain_1 index {i}: {e}')
                     failed += 1
@@ -465,7 +557,8 @@ class SeamExtractor:
                 )
 
         logger.info(
-            f'Produced {len(seams)} Seam object(s) ({failed} point failure(s))'
+            f'Produced {len(seams)} Seam object(s) '
+            f'({failed} point failure(s), {discarded} discarded as neither-edge)'
         )
 
         return seams
