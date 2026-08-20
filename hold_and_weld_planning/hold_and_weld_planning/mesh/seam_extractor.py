@@ -24,7 +24,11 @@ as an ordered chain from the start:
     Pass 2 (converge):   each surviving seed walks across the seam on its
                          edge side — perpendicular to the probed edge
                          direction, re-projected onto the surface — to the
-                         maximum of the edge response, landing on the ridge.
+                         zero-crossing of the signed cluster balance (both
+                         wall surfaces equally represented in the probe ball
+                         ⇔ the ball is centred on the edge), landing on the
+                         ridge. Falls back to the edge-response maximum when
+                         no balance sign change brackets the edge.
     Pass 3 (order):      converged ridge points are coherence-filtered,
                          thinned, and chained into ordered seams using the
                          per-point edge direction; closed loops are detected
@@ -208,13 +212,51 @@ class SeamExtractor:
         distances = np.linalg.norm(candidates - point, axis=1)
         return candidates[int(np.argmin(distances))]
 
+    def _signed_balance(
+        self,
+        result: ProbeResult,
+        ref_1: NDArray,
+        ref_2: NDArray,
+    ) -> float:
+        """Signed cluster balance of a probe result against reference normals.
+
+        Returns w - 1/2 where w is the area fraction of the cluster matching
+        ref_1 (the seed's dominant wall). Zero means both wall surfaces are
+        equally represented — the probe ball is centred on the edge. The
+        sign says which wall the ball has drifted onto. Cluster identity is
+        matched to the seed's reference normals because the probe's own
+        dominant/secondary labels flip as the ball crosses the centre.
+        """
+        n_dom, n_sec = result.n_dominant, result.n_secondary
+
+        if not result.is_edge:
+            # Single lump: the ball sits entirely on one wall. Full weight
+            # to whichever reference the lump resembles.
+            if np.dot(n_dom, ref_1) >= np.dot(n_dom, ref_2):
+                return 0.5
+            return -0.5
+
+        straight = np.dot(n_dom, ref_1) + np.dot(n_sec, ref_2)
+        crossed = np.dot(n_dom, ref_2) + np.dot(n_sec, ref_1)
+        w_ref_1 = result.balance if straight >= crossed else 1.0 - result.balance
+        return float(w_ref_1 - 0.5)
+
+    _BISECT_ITERATIONS = 5
+
     def _walk_to_ridge(
         self,
         side: int,
         position: NDArray,
         seed_result: ProbeResult,
     ) -> Optional[_RidgePoint]:
-        """Pass 2: walk across the seam to the edge-response maximum."""
+        """Pass 2: walk across the seam to the cluster-balance zero-crossing.
+
+        The signed balance is an error signal: positive on one wall,
+        negative on the other, zero when the probe ball straddles the edge
+        evenly. Coarse stations bracket the sign change nearest the seed,
+        bisection refines it. When no bracket exists (degenerate
+        neighbourhood), falls back to the edge-response maximum.
+        """
         pm = self.pm[side]
 
         direction = np.cross(seed_result.edge_dir, seed_result.n_dominant)
@@ -223,40 +265,64 @@ class SeamExtractor:
             return None
         direction /= norm
 
+        ref_1 = seed_result.n_dominant
+        ref_2 = seed_result.n_secondary
+
         step = pm.median_edge
         bound = _WALK_BOUND_PROBE_RADII * pm.probe_radius
         offsets = np.arange(-bound, bound + 0.5 * step, step)
 
-        stations: List[Tuple[float, NDArray, ProbeResult]] = []
-        for s in offsets:
+        def evaluate(s: float) -> Tuple[NDArray, ProbeResult, float]:
             candidate = self._project_to_surface(pm, position + s * direction)
             result = self.probe.probe(pm, candidate)
-            stations.append((s, candidate, result))
+            return candidate, result, self._signed_balance(result, ref_1, ref_2)
 
-        best_idx = int(np.argmax([st[2].response for st in stations]))
-        _, best_pos, best_result = stations[best_idx]
+        stations = [(s, *evaluate(s)) for s in offsets]
 
-        # One parabolic refinement between the best station's neighbours.
-        if 0 < best_idx < len(stations) - 1:
-            s_prev, _, r_prev = stations[best_idx - 1]
-            s_best, _, r_best = stations[best_idx]
-            s_next, _, r_next = stations[best_idx + 1]
-            denominator = r_prev.response - 2.0 * r_best.response + r_next.response
-            if abs(denominator) > 1e-12:
-                s_ref = s_best + 0.5 * step * (
-                    (r_prev.response - r_next.response) / denominator
-                )
-                if s_prev < s_ref < s_next:
-                    candidate = self._project_to_surface(
-                        pm, position + s_ref * direction
-                    )
-                    result = self.probe.probe(pm, candidate)
-                    if result.response > best_result.response:
-                        best_pos, best_result = candidate, result
+        # Track the best edge-seeing evaluation (smallest |balance|) across
+        # the scan and the bisection, as the returned point must be an edge.
+        best: Optional[Tuple[float, NDArray, ProbeResult]] = None
+        for _, candidate, result, balance in stations:
+            if result.is_edge and (best is None or abs(balance) < best[0]):
+                best = (abs(balance), candidate, result)
 
-        if not best_result.is_edge:
+        brackets = [
+            (stations[i], stations[i + 1])
+            for i in range(len(stations) - 1)
+            if stations[i][3] * stations[i + 1][3] < 0.0
+        ]
+
+        if brackets:
+            # The seed sits on the contact-strip boundary, near the true
+            # edge: trust the sign change closest to it.
+            lo, hi = min(
+                brackets, key=lambda br: abs(br[0][0]) + abs(br[1][0])
+            )
+            s_lo, b_lo = lo[0], lo[3]
+            s_hi = hi[0]
+            for _ in range(self._BISECT_ITERATIONS):
+                s_mid = 0.5 * (s_lo + s_hi)
+                candidate, result, balance = evaluate(s_mid)
+                if result.is_edge and (best is None or abs(balance) < best[0]):
+                    best = (abs(balance), candidate, result)
+                if balance == 0.0:
+                    break
+                if balance * b_lo > 0.0:
+                    s_lo, b_lo = s_mid, balance
+                else:
+                    s_hi = s_mid
+        elif best is not None:
+            # No sign change: fall back to the strongest edge response seen.
+            edge_stations = [st for st in stations if st[2].is_edge]
+            _, candidate, result, _ = max(
+                edge_stations, key=lambda st: st[2].response
+            )
+            best = (1.0, candidate, result)
+
+        if best is None:
             return None
 
+        _, best_pos, best_result = best
         return _RidgePoint(position=best_pos, side=side, result=best_result)
 
     def _coherence_filter(
