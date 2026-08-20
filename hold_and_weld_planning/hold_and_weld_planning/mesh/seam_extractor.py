@@ -73,6 +73,11 @@ _MIN_CLOSED_CHAIN = 6           # minimum points for closed-loop detection
 _MIN_LINK_ALIGNMENT = 0.5       # |cos| between link and local edge direction
 _CORNER_RADIUS_PROBE_RADII = 2.5  # max end-to-end gap bridged at a corner
 _CORNER_TANGENT_POINTS = 5      # chain-end points used for the end tangent
+_KINK_ANGLE_DEG = 35.0          # two-span turn angle that splits a chain
+_MIN_FRAGMENT_POINTS = 4        # smaller kink fragments are corner-zone junk
+_MERGE_ALIGNMENT = 0.92         # end-tangent alignment required to splice
+#                                 chains; must be stricter than the kink
+#                                 angle or splices undo kink splits
 
 
 @dataclass
@@ -190,14 +195,26 @@ class SeamExtractor:
     def _near_contact(self, side: int, position: NDArray) -> bool:
         """True if position lies close enough to the OTHER mesh to be a weld.
 
-        A weld seam exists where the parts meet: a ridge point converged on
-        one mesh must also be near the other. This rejects genuine but
-        irrelevant part edges (e.g. the base plate's outer boundary) that the
-        probe can latch onto.
+        A weld seam exists where the parts meet: a ridge point CONVERGED on
+        one mesh's edge must sit essentially on the other mesh — within the
+        contact epsilon plus a little tessellation slack. (Raw seeds sit up
+        to two edge lengths off the contact, but converged points do not,
+        so the bound here is deliberately tight.) This rejects genuine but
+        irrelevant part edges the probe can latch onto: a part boundary
+        passing nearby, a rim overhanging next to a plate edge.
         """
         other = self.pm[2 if side == 1 else 1]
-        distance, _ = other.centroid_tree.query(position)
-        return bool(distance <= self.epsilon + 2.0 * self.mean_edge)
+
+        k = min(8, len(other.face_centroids))
+        _, idxs = other.centroid_tree.query(position, k=k)
+        idxs = np.atleast_1d(idxs)
+
+        triangles = other.mesh.triangles[idxs]
+        nearest = trimesh.triangles.closest_point(
+            triangles, np.tile(position, (len(idxs), 1))
+        )
+        distance = float(np.min(np.linalg.norm(nearest - position, axis=1)))
+        return distance <= self.epsilon + 0.5 * self.mean_edge
 
     def _project_to_surface(self, pm: ProbeMesh, point: NDArray) -> NDArray:
         """Project point onto the mesh, restricted to the local face patch."""
@@ -481,6 +498,113 @@ class SeamExtractor:
 
         return chains
 
+    def _split_at_kinks(
+        self, chains: List[Tuple[List[_RidgePoint], bool]]
+    ) -> List[Tuple[List[_RidgePoint], bool]]:
+        """Split chains at sharp direction changes (pass 3.2).
+
+        A chain that meanders through a feature transition (e.g. where a rim
+        arc crosses a plate edge) mixes two seams and corner-zone junk into
+        one point sequence. The turn angle between the two-point spans
+        before and after each point flags such kinks: smooth arc curvature
+        turns a few degrees per span, a corner-zone transition tens.
+        Fragments shorter than _MIN_FRAGMENT_POINTS after splitting are
+        corner-zone junk and are dropped.
+        """
+        cos_kink = np.cos(np.radians(_KINK_ANGLE_DEG))
+        result: List[Tuple[List[_RidgePoint], bool]] = []
+
+        for chain, is_closed in chains:
+            n = len(chain)
+            if n < 5:
+                if n >= _MIN_FRAGMENT_POINTS:
+                    result.append((chain, is_closed))
+                continue
+
+            positions = np.array([rp.position for rp in chain])
+            cuts = []
+            for i in range(2, n - 2):
+                before = positions[i] - positions[i - 2]
+                after = positions[i + 2] - positions[i]
+                nb, na = np.linalg.norm(before), np.linalg.norm(after)
+                if nb < 1e-12 or na < 1e-12:
+                    continue
+                if np.dot(before, after) / (nb * na) < cos_kink:
+                    cuts.append(i)
+
+            if not cuts:
+                result.append((chain, is_closed))
+                continue
+
+            # Group consecutive cut indices into kink zones and keep the
+            # fragments between them (zone boundary points included; end
+            # trimming cleans any residue).
+            zones: List[Tuple[int, int]] = []
+            for c in cuts:
+                if zones and c - zones[-1][1] <= 2:
+                    zones[-1] = (zones[-1][0], c)
+                else:
+                    zones.append((c, c))
+
+            bounds = []
+            previous = 0
+            for zone_start, zone_end in zones:
+                bounds.append((previous, zone_start + 1))
+                previous = zone_end
+            bounds.append((previous, n))
+
+            for start, end in bounds:
+                fragment = chain[start:end]
+                if len(fragment) >= _MIN_FRAGMENT_POINTS:
+                    result.append((fragment, False))
+
+        return result
+
+    def _trim_chain_ends(
+        self, chains: List[Tuple[List[_RidgePoint], bool]]
+    ) -> List[Tuple[List[_RidgePoint], bool]]:
+        """Drop chain-end stragglers that disagree with the end line (pass 3.3).
+
+        A single junk point at a chain end corrupts the end tangent, which
+        both the continuation merge and the corner extension depend on. The
+        end point is dropped when its perpendicular residual against the
+        line fitted through the following points exceeds the coherence
+        floor.
+        """
+        threshold = _COHERENCE_MIN_RESIDUAL_EDGES * self.mean_edge
+        window = _CORNER_TANGENT_POINTS + 1
+        result = []
+
+        for chain, is_closed in chains:
+            if not is_closed:
+                for _ in range(2):  # at most two stragglers per end
+                    changed = False
+                    for at_head in (True, False):
+                        if len(chain) < window:
+                            break
+                        pts = chain[:window] if at_head else chain[-window:]
+                        local = np.array([rp.position for rp in pts])
+                        core = local[1:] if at_head else local[:-1]
+                        centroid = core.mean(axis=0)
+                        _, _, vt = np.linalg.svd(
+                            core - centroid, full_matrices=False
+                        )
+                        axis = vt[0]
+                        end = local[0] if at_head else local[-1]
+                        offset = end - centroid
+                        residual = np.linalg.norm(
+                            offset - np.dot(offset, axis) * axis
+                        )
+                        if residual > threshold:
+                            chain = chain[1:] if at_head else chain[:-1]
+                            changed = True
+                    if not changed:
+                        break
+            if is_closed or len(chain) >= _MIN_FRAGMENT_POINTS:
+                result.append((chain, is_closed))
+
+        return result
+
     def _end_tangent(
         self, chain: List[_RidgePoint], at_head: bool
     ) -> Tuple[NDArray, NDArray]:
@@ -535,8 +659,8 @@ class SeamExtractor:
                                 continue
                             join = (p_j - p_i) / gap
                             # Outward tangents must both align with the join.
-                            if (np.dot(t_i, join) < 0.8
-                                    or np.dot(t_j, -join) < 0.8):
+                            if (np.dot(t_i, join) < _MERGE_ALIGNMENT
+                                    or np.dot(t_j, -join) < _MERGE_ALIGNMENT):
                                 continue
                             if best is None or gap < best[0]:
                                 best = (gap, hi, hj)
@@ -616,6 +740,12 @@ class SeamExtractor:
             if (np.linalg.norm(corner - p1) > radius
                     or np.linalg.norm(corner - p2) > radius):
                 continue
+
+            # A straight tangent extended from a curved chain leaves the
+            # surface (chord error); pull the corner back onto the mesh.
+            corner = self._project_to_surface(
+                self.pm[ends[i][4]], corner
+            )
 
             used.update((i, j))
             for end in (ends[i], ends[j]):
@@ -734,6 +864,8 @@ class SeamExtractor:
             logger.warning('Ridge points could not be chained into seams')
             return []
 
+        chains = self._split_at_kinks(chains)
+        chains = self._trim_chain_ends(chains)
         chains = self._merge_continuations(chains)
         self._extend_corners(chains)
 
