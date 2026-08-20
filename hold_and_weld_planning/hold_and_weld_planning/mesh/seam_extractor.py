@@ -12,9 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Extract and classify weld seam points from a pair of touching mesh shells."""
+"""Field-based weld seam extraction from a pair of touching mesh shells.
 
-from collections import deque
+The seam is treated as a ridge of the local edge-response field rather than
+as an ordered chain from the start:
+
+    Pass 1 (situation):  unordered contact seeds from C++ get_contact_points
+                         are probed against both meshes; each seed learns
+                         which side carries the geometric edge (comparative
+                         dihedral) or is discarded when neither does.
+    Pass 2 (converge):   each surviving seed walks across the seam on its
+                         edge side — perpendicular to the probed edge
+                         direction, re-projected onto the surface — to the
+                         maximum of the edge response, landing on the ridge.
+    Pass 3 (order):      converged ridge points are coherence-filtered,
+                         thinned, and chained into ordered seams using the
+                         per-point edge direction; closed loops are detected
+                         when chain ends meet.
+
+Ordered per-seam SeamPoints are then delegated to PathCreator.
+"""
+
 from dataclasses import dataclass
 import logging
 from typing import Dict, List, Optional, Tuple
@@ -24,6 +42,7 @@ from numpy.typing import NDArray
 from scipy.spatial import KDTree
 import trimesh
 
+from .edge_probe import EdgeProbe, ProbeMesh, ProbeResult
 from ..core.seam import Seam
 
 try:
@@ -36,21 +55,33 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+# All spatial scales below are multiples of the mean of the two meshes'
+# median edge lengths — derived, not user parameters.
+_WALK_BOUND_PROBE_RADII = 2.0   # walk half-span, in probe radii of the edge side
+_THIN_RADIUS_EDGES = 0.25       # ridge thinning radius (merges duplicates only)
+_LINK_RADIUS_EDGES = 3.0        # max neighbour distance when chaining
+_COHERENCE_RADIUS_EDGES = 3.0   # neighbourhood for the local-line outlier test
+_COHERENCE_MAX_RESIDUAL_EDGES = 0.5   # hard cap on distance from local ridge line
+_COHERENCE_MIN_RESIDUAL_EDGES = 0.25  # floor, so grid-exact regions cannot
+#                                       set a threshold that rejects normal
+#                                       convergence scatter elsewhere
+_MIN_CLOSED_CHAIN = 6           # minimum points for closed-loop detection
+_MIN_LINK_ALIGNMENT = 0.5       # |cos| between link and local edge direction
+_CORNER_RADIUS_PROBE_RADII = 2.5  # max end-to-end gap bridged at a corner
+_CORNER_TANGENT_POINTS = 5      # chain-end points used for the end tangent
+
 
 @dataclass
 class SeamPoint:
-    """Single point on a weld seam with surface normal information.
+    """Single ordered point on a weld seam with surface normal information.
 
     Attributes:
-        position:          Refined 3D position on the geometric edge (3,).
-        normal_main:       Surface normal of the base plate (3,).
-        normal_secondary:  Surface normal of the secondary part (3,).
-        on_edge_1:         True if the mesh_1-side point lies on a geometric
-                            edge (bimodal local normals).
-        on_edge_2:         True if the mesh_2-side point lies on a geometric
-                            edge (bimodal local normals).
-        refined_side:      Which mesh this point was refined against: 1 for
-                            mesh_1, 2 for mesh_2.
+        position:          Converged 3D position on the geometric edge (3,).
+        normal_main:       Surface normal of the base (non-edge) side (3,).
+        normal_secondary:  Wall normal of the edge side (3,).
+        on_edge_1:         True if mesh_1 shows a geometric edge here.
+        on_edge_2:         True if mesh_2 shows a geometric edge here.
+        refined_side:      Mesh the point converged on: 1 or 2.
     """
 
     position: NDArray
@@ -61,13 +92,17 @@ class SeamPoint:
     refined_side: int
 
 
-class SeamExtractor:
-    """Extract weld seam points from two touching mesh shells.
+@dataclass
+class _RidgePoint:
+    """Internal: one converged ridge point with its cached edge-side probe."""
 
-    Calls C++ get_seam_vertices, picks per-point which mesh side is the true
-    edge side (comparative normal-covariance bimodality), refines the chosen
-    side's position via a local field scan, and delegates to PathCreator.
-    """
+    position: NDArray
+    side: int
+    result: ProbeResult
+
+
+class SeamExtractor:
+    """Extract weld seams from two touching mesh shells (field pipeline)."""
 
     def __init__(
         self,
@@ -79,13 +114,11 @@ class SeamExtractor:
         Args:
             mesh_1: First mesh (world frame, must be watertight).
             mesh_2: Second mesh (world frame, must be watertight).
-            params: Configuration dict with keys: epsilon, covariance_radius,
-                    edge_threshold, pairing_radius, num_smooth_points,
-                    scan_point_spacing.
+            params: Configuration dict; reads 'epsilon' plus the EdgeProbe
+                    keys 'edge_angle_min_deg' and 'gap_dominance'.
 
         Raises:
-            ValueError: If either mesh is not watertight, or if pairing_radius
-                        is smaller than epsilon.
+            ValueError: If either mesh is not watertight.
         """
         if not mesh_1.is_watertight:
             raise ValueError('mesh_1 is not watertight')
@@ -95,470 +128,565 @@ class SeamExtractor:
         self.mesh_1 = mesh_1
         self.mesh_2 = mesh_2
         self.params = params
-
         self.epsilon = params.get('epsilon', 1e-3)
-        self.covariance_radius = params.get('covariance_radius', 0.05)
-        self.edge_threshold = params.get('edge_threshold', 0.3)
-        self.pairing_radius = params.get('pairing_radius', 0.01)
-        self.num_smooth_points = params.get('num_smooth_points', 100)
-        self.scan_point_spacing = params.get('scan_point_spacing', 0.004)
 
-        if self.pairing_radius < self.epsilon:
-            raise ValueError(
-                f'pairing_radius ({self.pairing_radius}) must be >= '
-                f'epsilon ({self.epsilon}), otherwise a face detected as '
-                'in-contact by epsilon can fail to find a pairing partner.'
+        self.probe = EdgeProbe(params)
+        self.pm = {1: ProbeMesh(mesh_1), 2: ProbeMesh(mesh_2)}
+        self.mean_edge = 0.5 * (self.pm[1].median_edge + self.pm[2].median_edge)
+
+        # Median perpendicular residual of ridge points against their local
+        # line fit; measured in the coherence pass, consumed by PathCreator
+        # as a noise floor for fit tolerances.
+        self.ridge_jitter: float = 0.0
+
+    # ------------------------------------------------------------------ seeds
+
+    def _collect_seeds(self) -> NDArray:
+        """Pool unordered contact-boundary seeds from both call directions."""
+        arrays = []
+        for ma, mb in ((self.mesh_1, self.mesh_2), (self.mesh_2, self.mesh_1)):
+            result = _mesh_intersection.get_contact_points(
+                np.asarray(ma.vertices, dtype=np.float64),
+                np.asarray(ma.faces, dtype=np.int32),
+                np.asarray(mb.vertices, dtype=np.float64),
+                np.asarray(mb.faces, dtype=np.int32),
+                self.epsilon,
+            )
+            points = np.asarray(result['points'], dtype=np.float64)
+            if len(points):
+                arrays.append(points)
+
+        if not arrays:
+            return np.empty((0, 3))
+
+        return np.vstack(arrays)
+
+    # ---------------------------------------------------------------- passes
+
+    def _classify_seed(
+        self, position: NDArray
+    ) -> List[Tuple[int, ProbeResult]]:
+        """Pass 1: edge-carrying side(s) for one seed, best first.
+
+        Returns up to two (side, probe_result) entries ordered by dihedral,
+        so pass 2 can fall back to the other side when the first walk lands
+        away from the contact zone (e.g. on an unrelated part edge).
+        """
+        r1 = self.probe.probe(self.pm[1], position)
+        r2 = self.probe.probe(self.pm[2], position)
+
+        candidates = []
+        if r1.is_edge:
+            candidates.append((1, r1))
+        if r2.is_edge:
+            candidates.append((2, r2))
+        candidates.sort(key=lambda c: -c[1].dihedral)
+        return candidates
+
+    def _near_contact(self, side: int, position: NDArray) -> bool:
+        """True if position lies close enough to the OTHER mesh to be a weld.
+
+        A weld seam exists where the parts meet: a ridge point converged on
+        one mesh must also be near the other. This rejects genuine but
+        irrelevant part edges (e.g. the base plate's outer boundary) that the
+        probe can latch onto.
+        """
+        other = self.pm[2 if side == 1 else 1]
+        distance, _ = other.centroid_tree.query(position)
+        return bool(distance <= self.epsilon + 2.0 * self.mean_edge)
+
+    def _project_to_surface(self, pm: ProbeMesh, point: NDArray) -> NDArray:
+        """Project point onto the mesh, restricted to the local face patch."""
+        faces = self.probe.collect_faces(pm, point)
+        if not faces:
+            return point
+
+        triangles = pm.mesh.triangles[faces]
+        candidates = trimesh.triangles.closest_point(
+            triangles, np.tile(point, (len(faces), 1))
+        )
+        distances = np.linalg.norm(candidates - point, axis=1)
+        return candidates[int(np.argmin(distances))]
+
+    def _walk_to_ridge(
+        self,
+        side: int,
+        position: NDArray,
+        seed_result: ProbeResult,
+    ) -> Optional[_RidgePoint]:
+        """Pass 2: walk across the seam to the edge-response maximum."""
+        pm = self.pm[side]
+
+        direction = np.cross(seed_result.edge_dir, seed_result.n_dominant)
+        norm = np.linalg.norm(direction)
+        if norm < 1e-10:
+            return None
+        direction /= norm
+
+        step = pm.median_edge
+        bound = _WALK_BOUND_PROBE_RADII * pm.probe_radius
+        offsets = np.arange(-bound, bound + 0.5 * step, step)
+
+        stations: List[Tuple[float, NDArray, ProbeResult]] = []
+        for s in offsets:
+            candidate = self._project_to_surface(pm, position + s * direction)
+            result = self.probe.probe(pm, candidate)
+            stations.append((s, candidate, result))
+
+        best_idx = int(np.argmax([st[2].response for st in stations]))
+        _, best_pos, best_result = stations[best_idx]
+
+        # One parabolic refinement between the best station's neighbours.
+        if 0 < best_idx < len(stations) - 1:
+            s_prev, _, r_prev = stations[best_idx - 1]
+            s_best, _, r_best = stations[best_idx]
+            s_next, _, r_next = stations[best_idx + 1]
+            denominator = r_prev.response - 2.0 * r_best.response + r_next.response
+            if abs(denominator) > 1e-12:
+                s_ref = s_best + 0.5 * step * (
+                    (r_prev.response - r_next.response) / denominator
+                )
+                if s_prev < s_ref < s_next:
+                    candidate = self._project_to_surface(
+                        pm, position + s_ref * direction
+                    )
+                    result = self.probe.probe(pm, candidate)
+                    if result.response > best_result.response:
+                        best_pos, best_result = candidate, result
+
+        if not best_result.is_edge:
+            return None
+
+        return _RidgePoint(position=best_pos, side=side, result=best_result)
+
+    def _coherence_filter(
+        self, ridge: List[_RidgePoint]
+    ) -> List[_RidgePoint]:
+        """Reject converged points that disagree with the local ridge line.
+
+        Fits a line (position covariance) through each point's ridge
+        neighbourhood and rejects points whose perpendicular residual is an
+        outlier. Also measures the ridge jitter used downstream as a noise
+        floor. Isolated points (fewer than 2 neighbours) are dropped.
+        """
+        if len(ridge) < 3:
+            return ridge
+
+        positions = np.array([rp.position for rp in ridge])
+        tree = KDTree(positions)
+        radius = _COHERENCE_RADIUS_EDGES * self.mean_edge
+
+        residuals = np.full(len(ridge), np.inf)
+        for i, rp in enumerate(ridge):
+            idxs = tree.query_ball_point(rp.position, radius)
+            if len(idxs) < 3:
+                continue  # isolated: residual stays inf, point is dropped
+            local = positions[idxs]
+            centroid = local.mean(axis=0)
+            centered = local - centroid
+            _, _, vt = np.linalg.svd(centered, full_matrices=False)
+            axis = vt[0]
+            offset = rp.position - centroid
+            residuals[i] = float(
+                np.linalg.norm(offset - np.dot(offset, axis) * axis)
             )
 
-        self.chain_1: Optional[Dict[str, NDArray]] = None
-        self.chain_2: Optional[Dict[str, NDArray]] = None
-        self.pairs: Dict[int, int] = {}
+        finite = residuals[np.isfinite(residuals)]
+        if len(finite) == 0:
+            return []
 
-        self._seam_1_slices: List[Tuple[int, int, bool]] = []
-
-        self._kdtree_chain1: Optional[KDTree] = None
-        self._kdtree_chain2: Optional[KDTree] = None
-
-        self._mesh_1_data = self._prepare_mesh_data(mesh_1)
-        self._mesh_2_data = self._prepare_mesh_data(mesh_2)
-
-    def _prepare_mesh_data(self, mesh: trimesh.Trimesh) -> Dict:
-        """Precompute per-mesh lookup structures used by field-scan refinement."""
-        vertices = np.asarray(mesh.vertices, dtype=np.float64)
-        face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
-        area_faces = np.asarray(mesh.area_faces, dtype=np.float64)
-        face_centroids = np.asarray(mesh.triangles_center, dtype=np.float64)
-
-        return {
-            'mesh': mesh,
-            'vertices': vertices,
-            'vertex_kdtree': KDTree(vertices),
-            'face_normals': face_normals,
-            'area_faces': area_faces,
-            'face_centroids': face_centroids,
-            'face_centroid_kdtree': KDTree(face_centroids),
-            'vertex_faces': mesh.vertex_faces,
-            'face_adjacency': self._build_face_adjacency(mesh),
-        }
-
-    def _build_face_adjacency(self, mesh: trimesh.Trimesh) -> Dict[int, List[int]]:
-        """Build a face-index adjacency list from trimesh's face_adjacency pairs."""
-        adjacency: Dict[int, List[int]] = {}
-        for f1, f2 in mesh.face_adjacency:
-            adjacency.setdefault(int(f1), []).append(int(f2))
-            adjacency.setdefault(int(f2), []).append(int(f1))
-        return adjacency
-
-    def _get_local_normals(
-        self,
-        point: NDArray,
-        tree: KDTree,
-        normals: NDArray,
-    ) -> NDArray:
-        """Return normals within covariance_radius of point from tree/normals."""
-        idxs = tree.query_ball_point(point, self.covariance_radius)
-        if len(idxs) == 0:
-            return np.empty((0, 3))
-        return normals[np.array(idxs)]
-
-    def _compute_local_covariance(
-        self,
-        point: NDArray,
-        tree: KDTree,
-        normals: NDArray,
-    ) -> Tuple[Optional[NDArray], Optional[NDArray]]:
-        """Return eigendecomposition of normal covariance within covariance_radius, or (None, None)."""
-        local_normals = self._get_local_normals(point, tree, normals)
-
-        if len(local_normals) < 3:
-            return None, None
-
-        cov = np.cov(local_normals.T)  # (3, 3)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov)
-
-        return eigenvalues, eigenvectors
-
-    def _is_edge_contact(self, eigenvalues: NDArray) -> bool:
-        """Return True if σ = λ2/sum(λ) >= edge_threshold (bimodal normals at an edge)."""
-        total = np.sum(eigenvalues)
-        if total < 1e-10:
-            return False
-        sigma = eigenvalues[2] / total
-        return bool(sigma >= self.edge_threshold)
-
-    def _compute_sigma_and_edge(
-        self,
-        point: NDArray,
-        tree: KDTree,
-        normals: NDArray,
-    ) -> Tuple[float, bool]:
-        """Return (sigma, is_edge) for point's local normal covariance against tree/normals."""
-        eigenvalues, _ = self._compute_local_covariance(point, tree, normals)
-        if eigenvalues is None:
-            return 0.0, False
-
-        total = np.sum(eigenvalues)
-        if total < 1e-10:
-            return 0.0, False
-
-        sigma = float(eigenvalues[2] / total)
-        return sigma, self._is_edge_contact(eigenvalues)
-
-    def _load_ordered_chains(
-        self,
-        seams_1: List[Dict],
-        seams_2: List[Dict],
-    ) -> None:
-        """Concatenate mesh_1 seams into chain_1 (recording index slices) and pool mesh_2 into chain_2."""
-        pos_1_parts: List[NDArray] = []
-        nrm_1_parts: List[NDArray] = []
-        self._seam_1_slices = []
-        cursor = 0
-
-        for s in seams_1:
-            v = np.asarray(s['vertices'], dtype=np.float64)
-            nrm = np.asarray(s['normals'], dtype=np.float64)
-            if len(v) < 2:
-                continue
-            pos_1_parts.append(v)
-            nrm_1_parts.append(nrm)
-            self._seam_1_slices.append((cursor, cursor + len(v), bool(s['is_closed'])))
-            cursor += len(v)
-
-        pos_2_parts: List[NDArray] = []
-        nrm_2_parts: List[NDArray] = []
-
-        for s in seams_2:
-            v = np.asarray(s['vertices'], dtype=np.float64)
-            nrm = np.asarray(s['normals'], dtype=np.float64)
-            if len(v) < 1:
-                continue
-            pos_2_parts.append(v)
-            nrm_2_parts.append(nrm)
-
-        if not pos_1_parts or not pos_2_parts:
-            self.chain_1 = {'positions': np.empty((0, 3)), 'normals': np.empty((0, 3))}
-            self.chain_2 = {'positions': np.empty((0, 3)), 'normals': np.empty((0, 3))}
-            self._seam_1_slices = []
-            return
-
-        self.chain_1 = {
-            'positions': np.vstack(pos_1_parts),
-            'normals': np.vstack(nrm_1_parts),
-        }
-        self.chain_2 = {
-            'positions': np.vstack(pos_2_parts),
-            'normals': np.vstack(nrm_2_parts),
-        }
-
-        logger.debug(
-            f'Loaded ordered chains: chain_1={len(self.chain_1["positions"])} points '
-            f'in {len(self._seam_1_slices)} seam(s), '
-            f'chain_2={len(self.chain_2["positions"])} points'
+        self.ridge_jitter = float(np.median(finite))
+        threshold = min(
+            max(
+                4.0 * self.ridge_jitter,
+                _COHERENCE_MIN_RESIDUAL_EDGES * self.mean_edge,
+            ),
+            _COHERENCE_MAX_RESIDUAL_EDGES * self.mean_edge,
         )
 
-    def _pair_chains(self) -> None:
-        """Pair chain_1 and chain_2 points by nearest-neighbour proximity within pairing_radius."""
-        self._kdtree_chain2 = KDTree(self.chain_2['positions'])
-        self.pairs = {}
-
-        for i, p in enumerate(self.chain_1['positions']):
-            dist, j = self._kdtree_chain2.query(p)
-            if dist <= self.pairing_radius:
-                self.pairs[i] = int(j)
-
+        kept = [rp for rp, r in zip(ridge, residuals) if r <= threshold]
         logger.debug(
-            f'Paired {len(self.pairs)}/{len(self.chain_1["positions"])} chain_1 point(s)'
+            f'Coherence filter kept {len(kept)}/{len(ridge)} point(s), '
+            f'jitter={self.ridge_jitter * 1000:.3f}mm'
         )
+        return kept
 
-    def _collect_nearby_faces(
-        self,
-        mesh_data: Dict,
-        anchor_position: NDArray,
-        anchor_vertex_idx: int,
-    ) -> set:
-        """Flood-fill face adjacency from anchor_vertex_idx, bounded by covariance_radius.
+    def _thin(self, ridge: List[_RidgePoint]) -> List[_RidgePoint]:
+        """Keep the highest-response representative per thinning radius."""
+        if not ridge:
+            return ridge
 
-        Stays on mesh topology (no tangent-plane assumption needed) to gather
-        the set of faces to sample candidate points from.
-        """
-        adjacency = mesh_data['face_adjacency']
-        face_centroids = mesh_data['face_centroids']
-        vertex_faces_row = mesh_data['vertex_faces'][anchor_vertex_idx]
-        seed_faces = [int(f) for f in vertex_faces_row if f != -1]
+        order = np.argsort([-rp.result.response for rp in ridge])
+        radius = _THIN_RADIUS_EDGES * self.mean_edge
 
-        visited: set = set()
-        frontier: deque = deque()
-
-        for f in seed_faces:
-            d = np.linalg.norm(face_centroids[f] - anchor_position)
-            if d <= self.covariance_radius:
-                visited.add(f)
-                frontier.append(f)
-
-        while frontier:
-            f = frontier.popleft()
-            for nb in adjacency.get(f, []):
-                if nb in visited:
-                    continue
-                d = np.linalg.norm(face_centroids[nb] - anchor_position)
-                if d <= self.covariance_radius:
-                    visited.add(nb)
-                    frontier.append(nb)
-
-        if not visited:
-            # Fallback: anchor's own incident faces, regardless of the radius
-            # check, so refinement always has at least a seed neighborhood.
-            visited = set(seed_faces)
-
-        return visited
-
-    def _field_scan_refine(
-        self,
-        mesh_data: Dict,
-        anchor_position: NDArray,
-        anchor_vertex_idx: int,
-    ) -> NDArray:
-        """Sample candidate points on the mesh near the anchor and return the one
-        with highest normal-covariance bimodality (σ), i.e. closest to the true edge.
-        """
-        face_idx_set = self._collect_nearby_faces(mesh_data, anchor_position, anchor_vertex_idx)
-
-        candidates = [anchor_position]
-
-        if face_idx_set:
-            face_indices = np.array(sorted(face_idx_set))
-            total_area = float(np.sum(mesh_data['area_faces'][face_indices]))
-            n_samples = max(8, int(total_area / (self.scan_point_spacing ** 2)))
-
-            weights = np.zeros(len(mesh_data['face_normals']))
-            weights[face_indices] = mesh_data['area_faces'][face_indices]
-
-            try:
-                sampled_points, _ = trimesh.sample.sample_surface(
-                    mesh_data['mesh'], n_samples, face_weight=weights
+        kept: List[_RidgePoint] = []
+        kept_positions: List[NDArray] = []
+        for i in order:
+            rp = ridge[int(i)]
+            if kept_positions:
+                d = np.linalg.norm(
+                    np.array(kept_positions) - rp.position, axis=1
                 )
-                candidates.extend(list(sampled_points))
-            except Exception as e:
-                logger.debug(f'Field-scan sampling failed, using anchor only: {e}')
+                if np.min(d) < radius:
+                    continue
+            kept.append(rp)
+            kept_positions.append(rp.position)
 
-        tree = mesh_data['face_centroid_kdtree']
-        normals = mesh_data['face_normals']
+        return kept
 
-        best_sigma = -np.inf
-        best_position = anchor_position.copy()
+    def _order_ridge(
+        self, ridge: List[_RidgePoint]
+    ) -> List[Tuple[List[_RidgePoint], bool]]:
+        """Pass 3: chain thinned ridge points into ordered seams.
 
-        for cand in candidates:
-            cand = np.asarray(cand, dtype=np.float64)
-            sigma, _ = self._compute_sigma_and_edge(cand, tree, normals)
-            if sigma > best_sigma:
-                best_sigma = sigma
-                best_position = cand.copy()
-
-        return best_position
-
-    def _find_side_switch_anchor(
-        self,
-        mesh_data: Dict,
-        last_position: NDArray,
-        direction: Optional[NDArray],
-    ) -> Tuple[NDArray, int]:
-        """Find the anchor vertex on the new mesh side when switching sides mid-seam.
-
-        Picks the nearest vertex to last_position, but if a rough travel
-        direction is known, restricts candidates to ones ahead of
-        last_position along that direction (to avoid walking backward).
+        Greedy two-ended growth: from each chain end, link to the nearest
+        unused point whose direction from the end aligns with the local edge
+        direction and does not backtrack. Ends meeting closes the loop.
         """
-        vertices = mesh_data['vertices']
-        k = min(10, len(vertices))
-        dists, idxs = mesh_data['vertex_kdtree'].query(last_position, k=k)
-        dists = np.atleast_1d(dists)
-        idxs = np.atleast_1d(idxs)
+        if len(ridge) < 2:
+            return []
 
-        chosen_idx = int(idxs[0])
+        positions = np.array([rp.position for rp in ridge])
+        tree = KDTree(positions)
+        link_radius = _LINK_RADIUS_EDGES * self.mean_edge
 
-        if direction is not None:
-            dir_norm = np.linalg.norm(direction)
-            if dir_norm > 1e-10:
-                dir_unit = direction / dir_norm
-                forward = [
-                    (d, int(i)) for d, i in zip(dists, idxs)
-                    if np.dot(vertices[int(i)] - last_position, dir_unit) > 0
-                ]
-                if forward:
-                    forward.sort(key=lambda x: x[0])
-                    chosen_idx = forward[0][1]
+        unused = set(range(len(ridge)))
+        chains: List[Tuple[List[_RidgePoint], bool]] = []
 
-        return vertices[chosen_idx], chosen_idx
+        seed_order = np.argsort([-rp.result.response for rp in ridge])
 
-    def _build_seam_point(
-        self,
-        i: int,
-        j: int,
-        refined_position: NDArray,
-        side: int,
-        edge_1: bool,
-        edge_2: bool,
-    ) -> SeamPoint:
-        """Assemble a SeamPoint from chain indices, the refined position, and chosen side.
+        def next_link(current: int, travel: Optional[NDArray]) -> Optional[int]:
+            candidates = tree.query_ball_point(positions[current], link_radius)
+            best_j, best_d = None, np.inf
+            for j in candidates:
+                if j not in unused:
+                    continue
+                delta = positions[j] - positions[current]
+                d = np.linalg.norm(delta)
+                if d < 1e-12:
+                    continue
+                u = delta / d
+                edge_dir = ridge[current].result.edge_dir
+                if edge_dir is not None and \
+                        abs(np.dot(u, edge_dir)) < _MIN_LINK_ALIGNMENT:
+                    continue
+                if travel is not None and np.dot(u, travel) < 0.0:
+                    continue
+                if d < best_d:
+                    best_j, best_d = j, d
+            return best_j
 
-        The refinement side carries the geometric edge, so its normal is the
-        secondary part's normal; the other side's normal is the main (base) one.
+        for seed in seed_order:
+            seed = int(seed)
+            if seed not in unused:
+                continue
+            unused.discard(seed)
+            chain = [seed]
+
+            # Grow forward from the tail, then backward from the head.
+            for backward in (False, True):
+                while True:
+                    current = chain[0] if backward else chain[-1]
+                    if len(chain) >= 2:
+                        prev = chain[1] if backward else chain[-2]
+                        travel = positions[current] - positions[prev]
+                        n = np.linalg.norm(travel)
+                        travel = travel / n if n > 1e-12 else None
+                    else:
+                        travel = None
+                    j = next_link(current, travel)
+                    if j is None:
+                        break
+                    unused.discard(j)
+                    if backward:
+                        chain.insert(0, j)
+                    else:
+                        chain.append(j)
+
+            if len(chain) < 2:
+                continue
+
+            is_closed = (
+                len(chain) >= _MIN_CLOSED_CHAIN
+                and np.linalg.norm(positions[chain[0]] - positions[chain[-1]])
+                <= link_radius
+            )
+            chains.append(([ridge[i] for i in chain], is_closed))
+
+        return chains
+
+    def _end_tangent(
+        self, chain: List[_RidgePoint], at_head: bool
+    ) -> Tuple[NDArray, NDArray]:
+        """Return (end_position, outward unit tangent) of one chain end."""
+        pts = [
+            rp.position
+            for rp in (chain[:_CORNER_TANGENT_POINTS] if at_head
+                       else chain[-_CORNER_TANGENT_POINTS:])
+        ]
+        local = np.array(pts)
+        centroid = local.mean(axis=0)
+        _, _, vt = np.linalg.svd(local - centroid, full_matrices=False)
+        tangent = vt[0]
+        end_pos = local[0] if at_head else local[-1]
+        if np.dot(end_pos - centroid, tangent) < 0.0:
+            tangent = -tangent
+        return end_pos, tangent
+
+    def _merge_continuations(
+        self, chains: List[Tuple[List[_RidgePoint], bool]]
+    ) -> List[Tuple[List[_RidgePoint], bool]]:
+        """Splice chains whose ends continue each other (pass 3.25).
+
+        Chaining can break at ambiguity holes (e.g. where two seams cross);
+        the fragments are collinear/co-curved continuations. Two open-chain
+        ends are merged when they are within the link radius and both end
+        tangents align with the joining direction. Repeats until stable,
+        then re-checks loop closure.
         """
-        normal_1 = self.chain_1['normals'][i]
-        normal_2 = self.chain_2['normals'][j]
+        link_radius = _LINK_RADIUS_EDGES * self.mean_edge
+        merged = True
+        while merged:
+            merged = False
+            for i in range(len(chains)):
+                if merged:
+                    break
+                for j in range(i + 1, len(chains)):
+                    chain_i, closed_i = chains[i]
+                    chain_j, closed_j = chains[j]
+                    if closed_i or closed_j:
+                        continue
+                    if len(chain_i) < 3 or len(chain_j) < 3:
+                        continue
 
-        if side == 1:
-            normal_main, normal_secondary = normal_2, normal_1
-        else:
-            normal_main, normal_secondary = normal_1, normal_2
+                    best = None
+                    for hi in (True, False):
+                        for hj in (True, False):
+                            p_i, t_i = self._end_tangent(chain_i, hi)
+                            p_j, t_j = self._end_tangent(chain_j, hj)
+                            gap = float(np.linalg.norm(p_j - p_i))
+                            if gap > link_radius or gap < 1e-12:
+                                continue
+                            join = (p_j - p_i) / gap
+                            # Outward tangents must both align with the join.
+                            if (np.dot(t_i, join) < 0.8
+                                    or np.dot(t_j, -join) < 0.8):
+                                continue
+                            if best is None or gap < best[0]:
+                                best = (gap, hi, hj)
+
+                    if best is None:
+                        continue
+
+                    _, hi, hj = best
+                    part_i = list(reversed(chain_i)) if hi else list(chain_i)
+                    part_j = list(chain_j) if hj else list(reversed(chain_j))
+                    chains[i] = (part_i + part_j, False)
+                    chains.pop(j)
+                    merged = True
+                    break
+
+        # Re-check loop closure on the merged chains.
+        rechecked = []
+        for chain, is_closed in chains:
+            if not is_closed and len(chain) >= _MIN_CLOSED_CHAIN:
+                gap = np.linalg.norm(chain[0].position - chain[-1].position)
+                if gap <= link_radius:
+                    is_closed = True
+            rechecked.append((chain, is_closed))
+        return rechecked
+
+    def _extend_corners(
+        self, chains: List[Tuple[List[_RidgePoint], bool]]
+    ) -> None:
+        """Reconstruct corner points the probe cannot see (pass 3.5, in place).
+
+        Ridge coverage stops roughly one probe radius short of a corner,
+        where the probe ball straddles two edge directions and the gap test
+        degrades. For each pair of nearby open-chain ends, extend the two
+        end tangent lines to their closest mutual point and append it to
+        both chains, restoring the full seam length.
+        """
+        ends = []  # (chain_idx, at_head, position, outward_tangent, side)
+        for ci, (chain, is_closed) in enumerate(chains):
+            if is_closed or len(chain) < 3:
+                continue
+            for at_head in (True, False):
+                end_pos, tangent = self._end_tangent(chain, at_head)
+                ends.append((ci, at_head, end_pos, tangent, chain[0].side))
+
+        pairs = []
+        for i in range(len(ends)):
+            for j in range(i + 1, len(ends)):
+                if ends[i][0] == ends[j][0]:
+                    continue  # never bridge a chain to itself
+                gap = float(np.linalg.norm(ends[i][2] - ends[j][2]))
+                radius = _CORNER_RADIUS_PROBE_RADII * max(
+                    self.pm[ends[i][4]].probe_radius,
+                    self.pm[ends[j][4]].probe_radius,
+                )
+                if gap <= radius:
+                    pairs.append((gap, i, j, radius))
+        pairs.sort()
+
+        used = set()
+        for gap, i, j, radius in pairs:
+            if i in used or j in used:
+                continue
+            _, _, p1, t1, _ = ends[i]
+            _, _, p2, t2, _ = ends[j]
+
+            # Closest point between the two end lines p = p1 + s*t1, q = p2 + u*t2.
+            cross = np.cross(t1, t2)
+            denom = float(np.dot(cross, cross))
+            if denom < 1e-10:
+                continue  # near-parallel ends: not a corner
+            w = p2 - p1
+            s = float(np.dot(np.cross(w, t2), cross)) / denom
+            u = float(np.dot(np.cross(w, t1), cross)) / denom
+            if s <= 0.0 or u <= 0.0:
+                continue  # intersection behind an end: not a corner
+            corner = 0.5 * ((p1 + s * t1) + (p2 + u * t2))
+            if (np.linalg.norm(corner - p1) > radius
+                    or np.linalg.norm(corner - p2) > radius):
+                continue
+
+            used.update((i, j))
+            for end in (ends[i], ends[j]):
+                ci, at_head = end[0], end[1]
+                chain = chains[ci][0]
+                template = chain[0] if at_head else chain[-1]
+                corner_point = _RidgePoint(
+                    position=corner, side=template.side, result=template.result
+                )
+                if at_head:
+                    chain.insert(0, corner_point)
+                else:
+                    chain.append(corner_point)
+
+    # ------------------------------------------------------------- assembly
+
+    def _build_seam_point(self, rp: _RidgePoint) -> SeamPoint:
+        """Assemble a SeamPoint: probe the opposite side at the ridge position.
+
+        normal_main is the base-surface normal from the non-edge side;
+        normal_secondary is the wall normal — whichever of the edge side's
+        two cluster normals is most orthogonal to normal_main.
+        """
+        other_side = 2 if rp.side == 1 else 1
+        r_other = self.probe.probe(self.pm[other_side], rp.position)
+
+        normal_main = r_other.n_dominant
+
+        wall_candidates = (rp.result.n_dominant, rp.result.n_secondary)
+        normal_secondary = min(
+            wall_candidates, key=lambda n: abs(float(np.dot(n, normal_main)))
+        )
+
+        # A side is "on edge" only when the edge passes through this point:
+        # the probe must both see a dominant jump AND straddle it roughly
+        # evenly. Without the balance condition, an unrelated edge merely
+        # inside the probe ball (e.g. a part boundary nearby) sets the flag
+        # and misclassifies the joint type.
+        def centered(r: ProbeResult) -> bool:
+            return r.is_edge and 4.0 * r.balance * (1.0 - r.balance) >= 0.5
+
+        on_edge = {rp.side: centered(rp.result), other_side: centered(r_other)}
 
         return SeamPoint(
-            position=refined_position,
+            position=rp.position,
             normal_main=normal_main,
             normal_secondary=normal_secondary,
-            on_edge_1=edge_1,
-            on_edge_2=edge_2,
-            refined_side=side,
+            on_edge_1=on_edge[1],
+            on_edge_2=on_edge[2],
+            refined_side=rp.side,
         )
 
     def extract_seams(self) -> List[Seam]:
-        """Extract weld seams from the mesh pair and return Seam objects for WeldPlanner."""
+        """Extract weld seams from the mesh pair and return Seam objects."""
         from .path_creator import PathCreator
 
-        verts1 = np.asarray(self.mesh_1.vertices, dtype=np.float64)
-        faces1 = np.asarray(self.mesh_1.faces, dtype=np.int32)
-        verts2 = np.asarray(self.mesh_2.vertices, dtype=np.float64)
-        faces2 = np.asarray(self.mesh_2.faces, dtype=np.int32)
-
-        logger.info('Calling C++ seam vertex extraction...')
-
+        logger.info('Collecting contact-boundary seeds (CGAL)...')
         try:
-            seams_1 = _mesh_intersection.get_seam_vertices(
-                verts1, faces1, verts2, faces2, self.epsilon
-            )
-            seams_2 = _mesh_intersection.get_seam_vertices(
-                verts2, faces2, verts1, faces1, self.epsilon
-            )
+            seeds = self._collect_seeds()
         except RuntimeError as e:
-            logger.error(f'C++ extraction failed: {e}')
+            logger.error(f'C++ contact extraction failed: {e}')
             return []
 
-        if len(seams_1) == 0 or len(seams_2) == 0:
-            logger.warning(
-                f'No seams from C++: mesh_1={len(seams_1)}, mesh_2={len(seams_2)}'
-            )
+        if len(seeds) == 0:
+            logger.warning('No contact seeds found — are the parts touching '
+                           f'within epsilon={self.epsilon}m?')
             return []
 
-        logger.info(
-            f'C++ returned {len(seams_1)} seam(s) from mesh_1, '
-            f'{len(seams_2)} from mesh_2'
-        )
+        logger.info(f'{len(seeds)} seed(s); classifying (pass 1)...')
 
-        self._load_ordered_chains(seams_1, seams_2)
+        situations = []
+        for position in seeds:
+            candidates = self._classify_seed(position)
+            if candidates:
+                situations.append((position, candidates))
 
-        if len(self.chain_1['positions']) == 0 or len(self.chain_2['positions']) == 0:
-            logger.warning('No usable chain points after loading ordered seams')
-            return []
-
-        self._kdtree_chain1 = KDTree(self.chain_1['positions'])
-
-        self._pair_chains()
-
-        if not self.pairs:
-            logger.warning(
-                f'No pairs found within pairing_radius={self.pairing_radius}m'
-            )
+        if not situations:
+            logger.warning('No seed sees a geometric edge on either side')
             return []
 
         logger.info(
-            f'Refining and classifying {len(self.pairs)} seam point(s) '
-            f'across {len(self._seam_1_slices)} seam(s)...'
+            f'{len(situations)}/{len(seeds)} seed(s) see an edge; '
+            'converging to ridge (pass 2)...'
         )
 
-        path_creator = PathCreator(self.params)
-        seams: List[Seam] = []
-        failed = 0
-        discarded = 0
-
-        for start, end, _is_closed in self._seam_1_slices:
-            seam_points: List[SeamPoint] = []
-
-            prev_side: Optional[int] = None
-            prev_refined_positions: List[NDArray] = []
-
-            for i in range(start, end):
-                j = self.pairs.get(i)
-                if j is None:
+        ridge: List[_RidgePoint] = []
+        off_contact = 0
+        for position, candidates in situations:
+            for side, result in candidates:
+                rp = self._walk_to_ridge(side, position, result)
+                if rp is None:
                     continue
+                if not self._near_contact(side, rp.position):
+                    off_contact += 1
+                    continue
+                ridge.append(rp)
+                break
 
-                try:
-                    sigma_1, edge_1 = self._compute_sigma_and_edge(
-                        self.chain_1['positions'][i], self._kdtree_chain1, self.chain_1['normals']
-                    )
-                    sigma_2, edge_2 = self._compute_sigma_and_edge(
-                        self.chain_2['positions'][j], self._kdtree_chain2, self.chain_2['normals']
-                    )
+        if off_contact:
+            logger.debug(
+                f'{off_contact} walk(s) landed on edges away from the contact '
+                'zone and were rejected'
+            )
 
-                    if not edge_1 and not edge_2:
-                        discarded += 1
-                        continue
+        ridge = self._coherence_filter(ridge)
+        ridge = self._thin(ridge)
 
-                    if edge_1 and edge_2:
-                        side = prev_side if prev_side is not None else 1
-                    elif edge_1:
-                        side = 1
-                    else:
-                        side = 2
+        if len(ridge) < 2:
+            logger.warning(f'Only {len(ridge)} ridge point(s) after filtering')
+            return []
 
-                    mesh_data = self._mesh_1_data if side == 1 else self._mesh_2_data
-                    raw_position = (
-                        self.chain_1['positions'][i] if side == 1 else self.chain_2['positions'][j]
-                    )
+        logger.info(f'{len(ridge)} ridge point(s); ordering (pass 3)...')
 
-                    if prev_side is not None and side != prev_side:
-                        direction = None
-                        if len(prev_refined_positions) >= 2:
-                            direction = prev_refined_positions[-1] - prev_refined_positions[-2]
-                        last_position = (
-                            prev_refined_positions[-1] if prev_refined_positions else raw_position
-                        )
-                        anchor_position, anchor_vertex_idx = self._find_side_switch_anchor(
-                            mesh_data, last_position, direction
-                        )
-                    else:
-                        anchor_position = raw_position
-                        _, anchor_vertex_idx = mesh_data['vertex_kdtree'].query(anchor_position)
-                        anchor_vertex_idx = int(anchor_vertex_idx)
+        chains = self._order_ridge(ridge)
+        if not chains:
+            logger.warning('Ridge points could not be chained into seams')
+            return []
 
-                    refined_position = self._field_scan_refine(
-                        mesh_data, anchor_position, anchor_vertex_idx
-                    )
+        chains = self._merge_continuations(chains)
+        self._extend_corners(chains)
 
-                    sp = self._build_seam_point(
-                        i, j, refined_position, side, edge_1, edge_2
-                    )
-                    seam_points.append(sp)
+        creator_params = dict(self.params)
+        creator_params['ridge_jitter'] = self.ridge_jitter
+        path_creator = PathCreator(creator_params)
 
-                    prev_side = side
-                    prev_refined_positions.append(refined_position)
-                    if len(prev_refined_positions) > 2:
-                        prev_refined_positions.pop(0)
-
-                except Exception as e:
-                    logger.warning(f'Failed at chain_1 index {i}: {e}')
-                    failed += 1
-
-            if len(seam_points) >= 2:
-                seams.extend(path_creator.process_path(seam_points, self.params))
-            elif seam_points:
-                logger.debug(
-                    f'Dropped seam with only {len(seam_points)} usable point(s)'
+        seams: List[Seam] = []
+        for chain, is_closed in chains:
+            seam_points = [self._build_seam_point(rp) for rp in chain]
+            if len(seam_points) < 2:
+                continue
+            seams.extend(
+                path_creator.process_path(
+                    seam_points, creator_params, is_closed=is_closed
                 )
+            )
 
         logger.info(
-            f'Produced {len(seams)} Seam object(s) '
-            f'({failed} point failure(s), {discarded} discarded as neither-edge)'
+            f'Produced {len(seams)} Seam object(s) from {len(chains)} chain(s)'
         )
-
         return seams

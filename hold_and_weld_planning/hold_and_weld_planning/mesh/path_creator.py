@@ -12,15 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Classify ordered SeamPoints into geometric segments wrapped in Seam objects."""
+"""Classify ordered SeamPoints into geometric segments via a tolerance cascade.
+
+The classification is anchored on one physical parameter, the process path
+tolerance: the maximum distance the executed torch path may deviate from the
+true seam. A run of points is a LINE when a straight line stays within that
+tolerance (preferred even when an arc fits "better" — below tolerance the
+welder cannot tell the difference), an ARC when a circle stays within the
+*stricter* arc tolerance, and PTP otherwise.
+
+The arc test is deliberately harsher than the line test (max-residual against
+arc_strictness * tolerance, plus a minimum subtended angle): misclassifying a
+true circle as PTP merely densifies waypoints, while forcing a near-circle
+(e.g. an ellipse) into an arc makes the torch physically leave the seam.
+"""
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.spatial import KDTree
-from sklearn.decomposition import PCA
 
 from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
@@ -32,66 +43,82 @@ logger = logging.getLogger(__name__)
 
 
 class PathCreator:
-    """Classify ordered SeamPoints into geometric segments and wrap in Seam objects.
+    """Classify ordered SeamPoints into segments wrapped in Seam objects.
 
     Configuration Parameters:
-        outlier_std_threshold: Std-dev multiplier above mean gap to flag outlier (default 5.0).
-        window_size:           Seed window size in points for classification (default 20).
-        line_error_threshold:  Normalized line fit error threshold (default 1e-4).
-        arc_error_threshold:   Normalized arc fit error threshold (default 1e-4).
-        max_line_length:       Maximum line segment arc length in meters (default 0.5).
-        max_arc_length:        Maximum arc segment arc length in meters (default 0.5).
-        max_ptp_length:        Maximum PtP segment arc length in meters (default 0.1).
+        path_tolerance_mm: Max allowed deviation of a fitted primitive from
+                           the seam points, in mm (default 1.0). Floored at
+                           2x the measured ridge jitter when the extractor
+                           provides 'ridge_jitter'.
+        arc_strictness:    Arc tolerance as a fraction of path tolerance
+                           (default 0.5). Arcs must also subtend at least
+                           min_arc_angle_deg.
+        min_arc_angle_deg: Minimum subtended angle for an arc (default 15).
+        max_line_length:   Maximum line segment length in meters (default 0.5).
+        max_arc_length:    Maximum arc segment arc length in meters (default 0.5).
+        max_ptp_length:    Maximum PtP segment arc length in meters (default 0.1).
     """
 
     _DEFAULTS = {
-        'outlier_std_threshold': 5.0,
-        'window_size': 20,
-        'line_error_threshold': 1e-4,
-        'arc_error_threshold': 1e-4,
+        'path_tolerance_mm': 1.0,
+        'arc_strictness': 0.5,
+        'min_arc_angle_deg': 15.0,
         'max_line_length': 0.5,
         'max_arc_length': 0.5,
         'max_ptp_length': 0.1,
     }
 
+    _MIN_FIT_POINTS = 4      # fewest points that count as a fitted primitive
+    _ARC_GAIN = 1.5          # arc must consume this multiple of the line run
+
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Args:
-            config: Optional configuration dict (see class docstring for keys).
+            config: Optional configuration dict (see class docstring).
         """
         self._init_config: Dict[str, Any] = config or {}
         self._apply_config(None)
 
     def _apply_config(self, config: Optional[Dict[str, Any]]) -> None:
-        """Merge per-call config > init config > defaults into instance attributes."""
+        """Merge per-call config > init config > defaults into attributes."""
         cfg = {**self._init_config, **(config or {})}
 
-        self.outlier_std_threshold = cfg.get(
-            'outlier_std_threshold', self._DEFAULTS['outlier_std_threshold']
-        )
-        self.window_size = cfg.get('window_size', self._DEFAULTS['window_size'])
-        self.line_error_threshold = cfg.get(
-            'line_error_threshold', self._DEFAULTS['line_error_threshold']
-        )
-        self.arc_error_threshold = cfg.get(
-            'arc_error_threshold', self._DEFAULTS['arc_error_threshold']
-        )
-        self.max_line_length = cfg.get('max_line_length', self._DEFAULTS['max_line_length'])
-        self.max_arc_length = cfg.get('max_arc_length', self._DEFAULTS['max_arc_length'])
-        self.max_ptp_length = cfg.get('max_ptp_length', self._DEFAULTS['max_ptp_length'])
+        def get(key):
+            return cfg.get(key, self._DEFAULTS[key])
+
+        tolerance = get('path_tolerance_mm') * 1e-3
+        jitter = float(cfg.get('ridge_jitter', 0.0))
+        floor = 2.0 * jitter
+        if floor > tolerance:
+            logger.warning(
+                f'path_tolerance {tolerance * 1000:.3f}mm below measured ridge '
+                f'jitter; floored to {floor * 1000:.3f}mm'
+            )
+            tolerance = floor
+
+        self.tolerance = tolerance
+        self.arc_tolerance = get('arc_strictness') * tolerance
+        self.min_arc_angle = np.radians(get('min_arc_angle_deg'))
+        self.max_line_length = get('max_line_length')
+        self.max_arc_length = get('max_arc_length')
+        self.max_ptp_length = get('max_ptp_length')
 
     def process_path(
         self,
         seam_points: List[SeamPoint],
         config: Optional[Dict[str, Any]] = None,
+        is_closed: bool = False,
     ) -> List[Seam]:
         """Process ordered SeamPoints into classified Seam objects.
 
         Args:
             seam_points: Ordered SeamPoint list from SeamExtractor.
             config:      Optional per-call config overriding construction config.
+            is_closed:   True when the points form a closed loop; the loop is
+                         closed by wrapping the first point so a full circle
+                         can classify as one arc.
 
         Returns:
-            List of Seam objects. Empty if fewer than 2 valid points after outlier removal.
+            List of Seam objects. Empty if fewer than 2 valid points.
         """
         if config is not None:
             self._apply_config(config)
@@ -100,30 +127,17 @@ class PathCreator:
             logger.warning(f'Too few SeamPoints to process: {len(seam_points)}')
             return []
 
-        cleaned = self._remove_outliers(seam_points)
-        logger.debug(f'After outlier removal: {len(cleaned)}/{len(seam_points)} points')
+        working = list(seam_points)
+        if is_closed and len(working) >= 3:
+            working.append(working[0])
 
-        if len(cleaned) < 2:
-            return []
+        sublists = self._split_on_contact_type(working)
 
-        sublists = self._hard_split_on_contact_type(cleaned)
-        logger.debug(f'Hard split produced {len(sublists)} sublist(s)')
-
-        seams = []
-
-        for sublist_idx, sublist in enumerate(sublists):
+        seams: List[Seam] = []
+        for sublist in sublists:
             positions = np.array([sp.position for sp in sublist])
-
-            segments = self._classify_subpath(positions)
-            logger.debug(
-                f'Sublist {sublist_idx}: {len(segments)} segment(s) from '
-                f'{len(positions)} points'
-            )
-
-            for seg_points, seg_type in segments:
-                split_segs = self._split_by_length(seg_points, seg_type)
-
-                for split_pts in split_segs:
+            for seg_points, seg_type in self._classify(positions):
+                for split_pts in self._split_by_length(seg_points, seg_type):
                     seam = self._wrap_in_seam(split_pts, seg_type, sublist)
                     if seam is not None:
                         seams.append(seam)
@@ -131,203 +145,233 @@ class PathCreator:
         logger.info(f'PathCreator produced {len(seams)} Seam object(s)')
         return seams
 
-    def _remove_outliers(
-        self,
-        seam_points: List[SeamPoint],
-    ) -> List[SeamPoint]:
-        """Remove positional outliers by inter-point distance statistics.
+    # ------------------------------------------------------------- splitting
 
-        Flags interior points only when both incident gaps are oversized.
-        Endpoint flags require only their single incident gap to be oversized.
-        """
-        if len(seam_points) < 3:
-            return seam_points
+    _MIN_CONTACT_RUN = 3  # shorter contact-type runs are flicker, not joints
 
-        positions = np.array([sp.position for sp in seam_points])
-        distances = np.linalg.norm(np.diff(positions, axis=0), axis=1)
-
-        if len(distances) < 2:
-            return seam_points
-
-        mean_dist = np.mean(distances)
-        std_dist = np.std(distances)
-
-        if std_dist < 1e-10:
-            return seam_points
-
-        threshold = mean_dist + self.outlier_std_threshold * std_dist
-        big = distances > threshold
-
-        n = len(seam_points)
-        keep_mask = np.ones(n, dtype=bool)
-
-        for i in range(n):
-            if i == 0:
-                if big[0]:
-                    keep_mask[i] = False
-            elif i == n - 1:
-                if big[n - 2]:
-                    keep_mask[i] = False
-            else:
-                if big[i - 1] and big[i]:
-                    keep_mask[i] = False
-
-        filtered = [sp for sp, keep in zip(seam_points, keep_mask) if keep]
-
-        removed = len(seam_points) - len(filtered)
-        if removed > 0:
-            logger.debug(f'Removed {removed} outlier point(s)')
-
-        return filtered
-
-    def _hard_split_on_contact_type(
-        self,
-        seam_points: List[SeamPoint],
+    def _split_on_contact_type(
+        self, seam_points: List[SeamPoint]
     ) -> List[List[SeamPoint]]:
-        """Split at (is_edge_joint, refined_side) transitions; discard sublists < 2 points.
+        """Split at (is_edge_joint, refined_side) transitions.
 
-        Splitting on refined_side as well ensures a mid-seam side switch (where
-        normal_main/normal_secondary swap meshes) starts a new sublist.
+        Runs shorter than _MIN_CONTACT_RUN are classification flicker at
+        ambiguous zones, not genuine joint changes; they are absorbed into
+        their longer neighbour so a single flickering point cannot shatter
+        a seam.
         """
-        if not seam_points:
-            return []
-
         def contact_type(sp: SeamPoint) -> Tuple[bool, int]:
             return (sp.on_edge_1 and sp.on_edge_2, sp.refined_side)
 
-        sublists = []
-        current = [seam_points[0]]
-        current_type = contact_type(seam_points[0])
-
-        for sp in seam_points[1:]:
-            sp_type = contact_type(sp)
-            if sp_type != current_type:
-                if len(current) >= 2:
-                    sublists.append(current)
-                current = [sp]
-                current_type = sp_type
+        runs: List[List[Any]] = []  # [type, count]
+        for sp in seam_points:
+            t = contact_type(sp)
+            if runs and runs[-1][0] == t:
+                runs[-1][1] += 1
             else:
-                current.append(sp)
+                runs.append([t, 1])
 
-        if len(current) >= 2:
-            sublists.append(current)
+        while len(runs) > 1:
+            shortest = min(range(len(runs)), key=lambda i: runs[i][1])
+            if runs[shortest][1] >= self._MIN_CONTACT_RUN:
+                break
+            neighbours = [i for i in (shortest - 1, shortest + 1)
+                          if 0 <= i < len(runs)]
+            absorber = max(neighbours, key=lambda i: runs[i][1])
+            runs[absorber][1] += runs[shortest][1]
+            runs.pop(shortest)
+            # Re-merge neighbours that now share a type.
+            i = 1
+            while i < len(runs):
+                if runs[i][0] == runs[i - 1][0]:
+                    runs[i - 1][1] += runs[i][1]
+                    runs.pop(i)
+                else:
+                    i += 1
 
+        sublists: List[List[SeamPoint]] = []
+        cursor = 0
+        for _, count in runs:
+            chunk = seam_points[cursor: cursor + count]
+            cursor += count
+            if len(chunk) >= 2:
+                sublists.append(chunk)
         return sublists
 
-    def _classify_subpath(
-        self,
-        positions: NDArray,
-    ) -> List[Tuple[NDArray, str]]:
-        """Classify positions into (line/arc/ptp) segments using a look-ahead consumer.
+    # -------------------------------------------------------- classification
 
-        Seeds a window_size window, grows greedily while fit error stays below threshold,
-        then commits. PTP regions advance one point at a time until a valid seed is found.
-        """
+    def _classify(self, positions: NDArray) -> List[Tuple[NDArray, str]]:
+        """Greedy tolerance-cascade consumer over the ordered positions."""
         n = len(positions)
-        segments = []
+        segments: List[Tuple[NDArray, str]] = []
         k = 0
+        ptp_start: Optional[int] = None
 
         while k < n:
             remaining = n - k
-
-            if remaining < 4:
-                segments.append((positions[k:n], 'ptp'))
+            if remaining < self._MIN_FIT_POINTS:
+                # Tail too short to fit: absorb into ptp.
+                if ptp_start is None:
+                    ptp_start = k
+                k = n
                 break
 
-            end = min(k + self.window_size, n)
-            seed_pts = positions[k:end]
+            m_line = self._grow_line(positions, k)
+            m_arc = self._grow_arc(positions, k)
 
-            line_err = self._normalized_line_error(seed_pts)
+            take_type: Optional[str] = None
+            take_end = k
 
-            if line_err < self.line_error_threshold:
-                seed_type = 'line'
-            else:
-                arc_err = self._normalized_arc_error(seed_pts)
-                if arc_err is not None and arc_err < self.arc_error_threshold:
-                    seed_type = 'arc'
-                else:
-                    seed_type = 'ptp'
+            line_ok = (m_line - k) >= self._MIN_FIT_POINTS
+            arc_ok = (m_arc - k) >= self._MIN_FIT_POINTS
 
-            if seed_type == 'ptp':
-                m = k + 1
-                while m < n:
-                    next_end = min(m + self.window_size, n)
-                    if next_end - m >= 4:
-                        next_pts = positions[m:next_end]
-                        if self._normalized_line_error(next_pts) < self.line_error_threshold:
-                            break
-                        next_arc_err = self._normalized_arc_error(next_pts)
-                        if next_arc_err is not None and next_arc_err < self.arc_error_threshold:
-                            break
-                    m += 1
+            if arc_ok and (not line_ok or m_arc - k >= self._ARC_GAIN * (m_line - k)):
+                take_type, take_end = 'arc', m_arc
+            elif line_ok:
+                take_type, take_end = 'line', m_line
 
-                segments.append((positions[k:m], 'ptp'))
-                k = m
+            if take_type is None:
+                if ptp_start is None:
+                    ptp_start = k
+                k += 1
+                continue
 
-            else:
-                m = end
+            if ptp_start is not None:
+                segments.append((positions[ptp_start: k + 1], 'ptp'))
+                ptp_start = None
 
-                while m < n:
-                    test_pts = positions[k : m + 1]
+            segments.append((positions[k:take_end], take_type))
+            # Segments share their junction point for path continuity.
+            k = take_end - 1 if take_end < n else n
 
-                    if seed_type == 'line':
-                        err = self._normalized_line_error(test_pts)
-                        if err >= self.line_error_threshold:
-                            break
-                    else:  # arc
-                        err = self._normalized_arc_error(test_pts)
-                        if err is None or err >= self.arc_error_threshold:
-                            break
+        if ptp_start is not None and n - ptp_start >= 2:
+            segments.append((positions[ptp_start:n], 'ptp'))
 
-                    m += 1
+        return [(pts, t) for pts, t in segments if len(pts) >= 2]
 
-                segments.append((positions[k:m], seed_type))
-                k = m
+    def _grow_line(self, positions: NDArray, k: int) -> int:
+        """Largest m such that positions[k:m] fits a line within tolerance."""
+        n = len(positions)
+        m = k + 2
+        while m < n:
+            if self._line_max_deviation(positions[k: m + 1]) > self.tolerance:
+                break
+            m += 1
+        return m
 
-        return segments
+    def _grow_arc(self, positions: NDArray, k: int) -> int:
+        """Largest m such that positions[k:m] fits a circle within the strict
+        arc tolerance and subtends at least the minimum arc angle."""
+        n = len(positions)
+        best = k
+        m = k + self._MIN_FIT_POINTS
+        while m <= n:
+            fit = self._fit_circle(positions[k:m])
+            if fit is None or fit['max_deviation'] > self.arc_tolerance:
+                break
+            if fit['subtended'] >= self.min_arc_angle:
+                best = m
+            m += 1
+        return best
+
+    # ---------------------------------------------------------------- fitting
+
+    def _line_max_deviation(self, points: NDArray) -> float:
+        """Max perpendicular distance of points from their best-fit line."""
+        centroid = points.mean(axis=0)
+        centered = points - centroid
+        _, _, vt = np.linalg.svd(centered, full_matrices=False)
+        direction = vt[0]
+        projected = np.outer(centered @ direction, direction)
+        return float(np.max(np.linalg.norm(centered - projected, axis=1)))
+
+    def _fit_circle(self, points: NDArray) -> Optional[Dict[str, Any]]:
+        """Kasa circle fit in the PCA plane, with full 3D max deviation.
+
+        The deviation of each point combines the in-plane radial error and
+        the out-of-plane height, so helical or warped runs cannot pass as
+        planar arcs.
+
+        Returns:
+            Dict with center (3,), radius, max_deviation, subtended (rad),
+            or None on degenerate geometry.
+        """
+        if len(points) < 3:
+            return None
+
+        centroid = points.mean(axis=0)
+        centered = points - centroid
+        _, _, vt = np.linalg.svd(centered, full_matrices=False)
+        e1, e2, e3 = vt[0], vt[1], vt[2]
+
+        x = centered @ e1
+        y = centered @ e2
+        h = centered @ e3  # out-of-plane height
+
+        A = np.column_stack([x, y, np.ones(len(points))])
+        try:
+            params, _, _, _ = np.linalg.lstsq(A, x ** 2 + y ** 2, rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+
+        a, b = params[0] / 2.0, params[1] / 2.0
+        r_sq = a ** 2 + b ** 2 + params[2]
+        if r_sq <= 0.0:
+            return None
+        radius = float(np.sqrt(r_sq))
+
+        radial = np.sqrt((x - a) ** 2 + (y - b) ** 2)
+        deviation = np.sqrt((radial - radius) ** 2 + h ** 2)
+
+        angles = np.arctan2(y - b, x - a)
+        unwrapped = np.unwrap(angles)
+        subtended = float(abs(unwrapped[-1] - unwrapped[0]))
+
+        center = centroid + a * e1 + b * e2
+
+        return {
+            'center': center,
+            'radius': radius,
+            'max_deviation': float(np.max(deviation)),
+            'subtended': subtended,
+        }
+
+    # --------------------------------------------------------------- output
 
     def _split_by_length(
-        self,
-        points: NDArray,
-        seg_type: str,
+        self, points: NDArray, seg_type: str
     ) -> List[NDArray]:
-        """Split segment into equal subsegments if total arc length exceeds the type max."""
-        if seg_type == 'line':
-            max_len = self.max_line_length
-        elif seg_type == 'arc':
-            max_len = self.max_arc_length
-        else:
-            max_len = self.max_ptp_length
+        """Split a segment into equal parts when it exceeds the type's max length."""
+        max_len = {
+            'line': self.max_line_length,
+            'arc': self.max_arc_length,
+        }.get(seg_type, self.max_ptp_length)
 
         if len(points) < 2:
             return [points]
 
-        segment_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
-        total_length = float(np.sum(segment_lengths))
-
-        if total_length <= max_len:
+        step_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+        total = float(np.sum(step_lengths))
+        if total <= max_len:
             return [points]
 
-        n_splits = int(np.ceil(total_length / max_len))
-        target_length = total_length / n_splits
+        n_splits = int(np.ceil(total / max_len))
+        target = total / n_splits
 
-        result = []
-        current_start = 0
-        cumulative = 0.0
-
+        result: List[NDArray] = []
+        start = 0
+        accumulated = 0.0
         for i in range(1, len(points)):
-            cumulative += segment_lengths[i - 1]
+            accumulated += step_lengths[i - 1]
+            if accumulated >= target and i < len(points) - 1:
+                result.append(points[start: i + 1])
+                start = i
+                accumulated = 0.0
 
-            if cumulative >= target_length and i < len(points) - 1:
-                result.append(points[current_start : i + 1])
-                current_start = i
-                cumulative = 0.0
-
-        last = points[current_start:]
-        if len(last) >= 2:
-            result.append(last)
+        tail = points[start:]
+        if len(tail) >= 2:
+            result.append(tail)
         elif result:
-            result[-1] = np.vstack([result[-1], last])
+            result[-1] = np.vstack([result[-1], tail])
 
         return [r for r in result if len(r) >= 2]
 
@@ -337,152 +381,47 @@ class PathCreator:
         seg_type: str,
         seam_points_subset: List[SeamPoint],
     ) -> Optional[Seam]:
-        """Wrap positions into a Seam with nearest-neighbour normals and contact metadata."""
+        """Wrap positions into a Seam with per-point normals and metadata."""
         if len(points) < 2:
             return None
 
         subset_positions = np.array([sp.position for sp in seam_points_subset])
-        tree = KDTree(subset_positions)
 
         normals_main = []
         normals_secondary = []
-        on_edge_1_vals = []
-        on_edge_2_vals = []
-
         for pt in points:
-            _, idx = tree.query(pt)
-            sp = seam_points_subset[idx]
-            normals_main.append(sp.normal_main)
-            normals_secondary.append(sp.normal_secondary)
-            on_edge_1_vals.append(sp.on_edge_1)
-            on_edge_2_vals.append(sp.on_edge_2)
+            idx = int(np.argmin(np.linalg.norm(subset_positions - pt, axis=1)))
+            normals_main.append(seam_points_subset[idx].normal_main)
+            normals_secondary.append(seam_points_subset[idx].normal_secondary)
 
-        normals_main = np.array(normals_main)
-        normals_secondary = np.array(normals_secondary)
-
-        on_edge_1 = on_edge_1_vals[0]
-        on_edge_2 = on_edge_2_vals[0]
-        is_edge_joint = on_edge_1 and on_edge_2
+        half = len(seam_points_subset) / 2.0
+        on_edge_1 = sum(sp.on_edge_1 for sp in seam_points_subset) > half
+        on_edge_2 = sum(sp.on_edge_2 for sp in seam_points_subset) > half
 
         try:
             if seg_type == 'line':
-                segment = LineSegment(start=points[0], end=points[-1])
-                seam = Seam(line_segment=segment)
-
+                seam = Seam(line_segment=LineSegment(start=points[0], end=points[-1]))
             elif seg_type == 'arc':
-                result = self._fit_circle_kasa(points)
-                if result is None:
-                    logger.warning(
-                        'Arc fit failed in _wrap_in_seam — falling back to PtPSegment'
-                    )
-                    segment = PtPSegment(points=points)
-                    seam = Seam(ptp_segment=segment)
+                fit = self._fit_circle(points)
+                if fit is None:
+                    seam = Seam(ptp_segment=PtPSegment(points=points))
                     seg_type = 'ptp'
                 else:
-                    center, radius, _ = result
-                    segment = ArcSegment(points=points, center=center, radius=radius)
-                    seam = Seam(arc_segment=segment)
-
-            else:  # ptp
-                segment = PtPSegment(points=points)
-                seam = Seam(ptp_segment=segment)
-
+                    seam = Seam(arc_segment=ArcSegment(
+                        points=points, center=fit['center'], radius=fit['radius']
+                    ))
+            else:
+                seam = Seam(ptp_segment=PtPSegment(points=points))
         except Exception as e:
             logger.warning(f'Segment construction failed in _wrap_in_seam: {e}')
             return None
 
-        seam.config['is_edge_joint'] = is_edge_joint
+        seam.config['is_edge_joint'] = on_edge_1 and on_edge_2
         seam.config['on_edge_1'] = on_edge_1
         seam.config['on_edge_2'] = on_edge_2
         seam.config['geometry_type'] = seg_type
         seam.config['smoothed_points'] = points
-        seam.config['normals_main'] = normals_main
-        seam.config['normals_secondary'] = normals_secondary
+        seam.config['normals_main'] = np.array(normals_main)
+        seam.config['normals_secondary'] = np.array(normals_secondary)
 
         return seam
-
-    def _normalized_line_error(self, points: NDArray) -> float:
-        """Sum-squared line fit error divided by point count."""
-        _, _, error = self._fit_line(points)
-        return error / len(points)
-
-    def _normalized_arc_error(self, points: NDArray) -> Optional[float]:
-        """Sum-squared arc fit error divided by point count, or None on degenerate geometry."""
-        result = self._fit_circle_kasa(points)
-        if result is None:
-            return None
-        _, _, error = result
-        return error / len(points)
-
-    def _fit_line(
-        self,
-        points: NDArray,
-    ) -> Tuple[NDArray, NDArray, float]:
-        """Fit 3D line via PCA; return (centroid, direction, sum_squared_perpendicular_error)."""
-        if len(points) < 2:
-            return points[0].copy(), np.array([1.0, 0.0, 0.0]), 0.0
-
-        centroid = np.mean(points, axis=0)
-        centered = points - centroid
-
-        pca = PCA(n_components=1)
-        pca.fit(centered)
-        direction = pca.components_[0]
-
-        t = np.dot(centered, direction)
-        projected = t[:, np.newaxis] * direction
-        residuals = centered - projected
-
-        error = float(np.sum(np.linalg.norm(residuals, axis=1) ** 2))
-        return centroid, direction, error
-
-    def _fit_circle_kasa(
-        self,
-        points: NDArray,
-    ) -> Optional[Tuple[NDArray, float, float]]:
-        """Kåsa algebraic circle fit via linear least squares in PCA-projected 2D plane.
-
-        Args:
-            points: Input positions (N, 3), N >= 3.
-
-        Returns:
-            (center_3d, radius, sum_squared_radial_error) or None if fit fails.
-        """
-        if len(points) < 3:
-            return None
-
-        centroid = np.mean(points, axis=0)
-        centered = points - centroid
-
-        pca = PCA(n_components=2)
-        pts_2d = pca.fit_transform(centered)
-
-        xi = pts_2d[:, 0]
-        yi = pts_2d[:, 1]
-        zi = xi ** 2 + yi ** 2
-
-        A = np.column_stack([xi, yi, np.ones(len(pts_2d))])
-
-        try:
-            params, _, _, _ = np.linalg.lstsq(A, zi, rcond=None)
-        except Exception as e:
-            logger.debug(f'Circle lstsq failed: {e}')
-            return None
-
-        a = params[0] / 2.0
-        b = params[1] / 2.0
-        c = params[2]
-
-        r_sq = a ** 2 + b ** 2 + c
-        if r_sq <= 0:
-            return None
-
-        radius = float(np.sqrt(r_sq))
-        center_2d = np.array([a, b])
-
-        center_3d = pca.inverse_transform(center_2d.reshape(1, -1))[0] + centroid
-
-        dists = np.sqrt((xi - a) ** 2 + (yi - b) ** 2)
-        error = float(np.sum((dists - radius) ** 2))
-
-        return center_3d, radius, error

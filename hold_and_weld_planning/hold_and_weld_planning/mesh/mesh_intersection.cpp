@@ -13,13 +13,18 @@
 // limitations under the License.
 
 /**
- * Extracts ordered seam vertices from the contact chain between two meshes,
- * grouped into separate seams via face-adjacency decomposition.
+ * Extracts unordered contact-boundary seed points between two meshes.
+ *
+ * A face of mesh_1 is "in contact" when any of its vertices or its centroid
+ * lies within epsilon of mesh_2. The seed points are the unique vertices of
+ * the contact strip's boundary halfedges (edges whose neighbouring face is
+ * outside the contact strip) — these sit on the contact perimeter, near the
+ * true weld edge. Ordering, chaining, and edge refinement are deliberately
+ * NOT done here; the Python field pipeline owns those.
  */
 
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
-#include <pybind11/stl.h>
 
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Surface_mesh.h>
@@ -28,14 +33,11 @@
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
 #include <CGAL/Polygon_mesh_processing/compute_normal.h>
 
+#include <cmath>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <set>
-#include <utility>
-#include <stdexcept>
-#include <iostream>
-#include <cmath>
 
 namespace py = pybind11;
 namespace PMP = CGAL::Polygon_mesh_processing;
@@ -76,247 +78,25 @@ SurfaceMesh build_mesh(
     for (py::ssize_t i = 0; i < v.shape(0); ++i)
         vmap[i] = mesh.add_vertex(Point_3(v(i,0), v(i,1), v(i,2)));
 
-    for (py::ssize_t i = 0; i < f.shape(0); ++i)
-        mesh.add_face(vmap[f(i,0)], vmap[f(i,1)], vmap[f(i,2)]);
+    for (py::ssize_t i = 0; i < f.shape(0); ++i) {
+        face_descriptor fd = mesh.add_face(vmap[f(i,0)], vmap[f(i,1)], vmap[f(i,2)]);
+        if (fd == SurfaceMesh::null_face())
+            throw std::invalid_argument(
+                "Non-manifold or degenerate face at index " + std::to_string(i));
+    }
 
     return mesh;
 }
 
 
-/** Compute mesh centroid as the average of all vertex positions. */
-Point_3 compute_mesh_centroid(const SurfaceMesh& mesh)
-{
-    double cx = 0, cy = 0, cz = 0;
-    int n = 0;
-    for (vertex_descriptor v : mesh.vertices()) {
-        const Point_3& p = mesh.point(v);
-        cx += p.x(); cy += p.y(); cz += p.z();
-        ++n;
-    }
-    if (n == 0) return Point_3(0, 0, 0);
-    return Point_3(cx/n, cy/n, cz/n);
-}
-
-
-/** Squared Euclidean distance between two Point_3. */
-double sq_dist(const Point_3& a, const Point_3& b)
-{
-    double dx = a.x()-b.x(), dy = a.y()-b.y(), dz = a.z()-b.z();
-    return dx*dx + dy*dy + dz*dz;
-}
-
-
-/** Return the three halfedges of a triangular face. */
-std::vector<halfedge_descriptor> get_face_halfedges(
-    const SurfaceMesh& mesh,
-    face_descriptor    fd)
-{
-    std::vector<halfedge_descriptor> halfedges;
-    halfedge_descriptor h = mesh.halfedge(fd);
-    halfedge_descriptor start = h;
-    do {
-        halfedges.push_back(h);
-        h = mesh.next(h);
-    } while (h != start);
-    return halfedges;
-}
-
-
 /**
- * Select the seam vertex from an outer-chain face based on boundary edge count.
- * Returns false (skip face) for 0 or 3 boundary edges.
- */
-bool select_seam_vertex(
-    const SurfaceMesh&                      mesh,
-    face_descriptor                         fd,
-    const std::vector<halfedge_descriptor>& boundary_halfedges,
-    const Point_3&                          mesh_centroid,
-    Point_3&                                out_vertex)
-{
-    int num_boundary = static_cast<int>(boundary_halfedges.size());
-
-    if (num_boundary == 0 || num_boundary == 3)
-        return false;
-
-    if (num_boundary == 1) {
-        std::vector<halfedge_descriptor> all_he = get_face_halfedges(mesh, fd);
-
-        std::vector<halfedge_descriptor> non_boundary;
-        for (auto& h : all_he) {
-            bool is_boundary = false;
-            for (auto& bh : boundary_halfedges) {
-                if (h == bh) { is_boundary = true; break; }
-            }
-            if (!is_boundary) non_boundary.push_back(h);
-        }
-
-        vertex_descriptor v0s = mesh.source(non_boundary[0]);
-        vertex_descriptor v0t = mesh.target(non_boundary[0]);
-        vertex_descriptor v1s = mesh.source(non_boundary[1]);
-        vertex_descriptor v1t = mesh.target(non_boundary[1]);
-
-        vertex_descriptor shared = SurfaceMesh::null_vertex();
-        if      (v0s == v1s || v0s == v1t) shared = v0s;
-        else if (v0t == v1s || v0t == v1t) shared = v0t;
-
-        if (shared == SurfaceMesh::null_vertex()) {
-            return false;
-        }
-
-        out_vertex = mesh.point(shared);
-        return true;
-    }
-
-    if (num_boundary == 2) {
-        vertex_descriptor bv0s = mesh.source(boundary_halfedges[0]);
-        vertex_descriptor bv0t = mesh.target(boundary_halfedges[0]);
-        vertex_descriptor bv1s = mesh.source(boundary_halfedges[1]);
-        vertex_descriptor bv1t = mesh.target(boundary_halfedges[1]);
-
-        vertex_descriptor corner = SurfaceMesh::null_vertex();
-        if      (bv0s == bv1s || bv0s == bv1t) corner = bv0s;
-        else if (bv0t == bv1s || bv0t == bv1t) corner = bv0t;
-
-        std::vector<vertex_descriptor> candidates;
-        for (vertex_descriptor v : {bv0s, bv0t, bv1s, bv1t}) {
-            if (v != corner) candidates.push_back(v);
-        }
-
-        if (candidates.empty()) {
-            return false;
-        }
-
-        vertex_descriptor best = candidates[0];
-        double best_dist = sq_dist(mesh.point(candidates[0]), mesh_centroid);
-
-        for (size_t i = 1; i < candidates.size(); ++i) {
-            double d = sq_dist(mesh.point(candidates[i]), mesh_centroid);
-            if (d > best_dist) {
-                best_dist = d;
-                best = candidates[i];
-            }
-        }
-
-        out_vertex = mesh.point(best);
-        return true;
-    }
-
-    return false;
-}
-
-
-/** Seam vertex and face normal for one emitted outer-chain face. */
-struct EmittedFace {
-    Point_3  vertex;
-    Vector_3 normal;
-};
-
-/** Ordered sequence of emitted-face indices forming one seam. */
-struct SeamPath {
-    std::vector<size_t> faces;
-    bool                is_closed;
-};
-
-/** Normalize an undirected face-pair edge to (min, max). */
-static std::pair<size_t, size_t> make_edge(size_t a, size_t b)
-{
-    return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
-}
-
-/**
- * Decompose the emitted-face adjacency graph into ordered seams.
- * Produces maximal non-branching paths from tips/forks, then sweeps
- * remaining edges as closed cycles.
- */
-std::vector<SeamPath> decompose_into_seams(
-    const std::unordered_map<size_t, std::vector<size_t>>& adj)
-{
-    std::vector<SeamPath> seams;
-    std::set<std::pair<size_t, size_t>> used_edges;
-
-    auto next_unused = [&](size_t cur) -> long long {
-        auto it = adj.find(cur);
-        if (it == adj.end()) return -1;
-        for (size_t nb : it->second) {
-            if (!used_edges.count(make_edge(cur, nb)))
-                return static_cast<long long>(nb);
-        }
-        return -1;
-    };
-
-    for (const auto& kv : adj) {
-        size_t seed = kv.first;
-        if (kv.second.size() == 2) continue;
-
-        for (size_t first_nb : kv.second) {
-            auto e = make_edge(seed, first_nb);
-            if (used_edges.count(e)) continue;
-
-            used_edges.insert(e);
-
-            SeamPath path;
-            path.is_closed = false;
-            path.faces.push_back(seed);
-            path.faces.push_back(first_nb);
-
-            size_t cur = first_nb;
-            while (true) {
-                auto cit = adj.find(cur);
-                if (cit == adj.end() || cit->second.size() != 2) break;
-
-                long long nx = next_unused(cur);
-                if (nx < 0) break;
-
-                used_edges.insert(make_edge(cur, static_cast<size_t>(nx)));
-                path.faces.push_back(static_cast<size_t>(nx));
-                cur = static_cast<size_t>(nx);
-            }
-
-            seams.push_back(std::move(path));
-        }
-    }
-
-    for (const auto& kv : adj) {
-        size_t start = kv.first;
-
-        for (size_t first_nb : kv.second) {
-            auto e = make_edge(start, first_nb);
-            if (used_edges.count(e)) continue;
-
-            used_edges.insert(e);
-
-            SeamPath path;
-            path.is_closed = true;
-            path.faces.push_back(start);
-            path.faces.push_back(first_nb);
-
-            size_t cur = first_nb;
-            while (cur != start) {
-                long long nx = next_unused(cur);
-                if (nx < 0) break;
-
-                used_edges.insert(make_edge(cur, static_cast<size_t>(nx)));
-                path.faces.push_back(static_cast<size_t>(nx));
-                cur = static_cast<size_t>(nx);
-            }
-
-            seams.push_back(std::move(path));
-        }
-    }
-
-    return seams;
-}
-
-
-/**
- * Extract ordered seam vertices from mesh_1 relative to mesh_2.
+ * Extract unordered contact-boundary seed points of mesh_1 relative to mesh_2.
  *
- * Returns a Python list of dicts, each with:
- *   'vertices':  (K,3) float64 - ordered seam vertex positions
- *   'normals':   (K,3) float64 - aligned face normal at each vertex
- *   'is_closed': bool           - whether the seam forms a closed loop
+ * Returns a Python dict with:
+ *   'points':  (N,3) float64 - unique boundary vertex positions (unordered)
+ *   'normals': (N,3) float64 - averaged contact-face normal per vertex
  */
-py::list get_seam_vertices(
+py::dict get_contact_points(
     py::array_t<double> verts1,
     py::array_t<int>    faces1,
     py::array_t<double> verts2,
@@ -335,11 +115,11 @@ py::list get_seam_vertices(
         "f:normal", CGAL::NULL_VECTOR).first;
     PMP::compute_face_normals(mesh1, face_normals);
 
-    Point_3 mesh1_centroid = compute_mesh_centroid(mesh1);
+    // Contact strip: faces with any vertex or the centroid within epsilon of
+    // mesh_2. Testing all four points (not just the centroid) keeps large
+    // triangles that touch mesh_2 only near a corner in the strip.
+    std::unordered_set<size_t> contact_set;
 
-    std::unordered_map<size_t, face_descriptor> proximity_set;
-
-    double min_sq_dist = std::numeric_limits<double>::max();
     for (face_descriptor fd : mesh1.faces()) {
         halfedge_descriptor h = mesh1.halfedge(fd);
         Point_3 p0 = mesh1.point(mesh1.source(h));
@@ -351,135 +131,95 @@ py::list get_seam_vertices(
             (p0.z()+p1.z()+p2.z())/3.0
         );
 
-        double sq_d = tree.squared_distance(centroid);
-        if (sq_d < min_sq_dist) min_sq_dist = sq_d;
-
-        if (sq_d <= sq_epsilon) {
-            proximity_set[static_cast<size_t>(fd)] = fd;
+        for (const Point_3& q : {p0, p1, p2, centroid}) {
+            if (tree.squared_distance(q) <= sq_epsilon) {
+                contact_set.insert(static_cast<size_t>(fd));
+                break;
+            }
         }
     }
 
-    std::unordered_map<size_t, EmittedFace> emitted;
-    std::unordered_map<size_t, face_descriptor> emitted_fd;
+    // Seed points: vertices of boundary halfedges — halfedges of a contact
+    // face whose opposite face is missing or outside the contact strip.
+    // Normals are accumulated from the emitting contact faces and averaged.
+    std::unordered_map<size_t, Vector_3> seed_normal_sum;
+    std::unordered_map<size_t, Point_3>  seed_position;
 
-    for (auto& [idx, fd] : proximity_set) {
-        std::vector<halfedge_descriptor> all_he = get_face_halfedges(mesh1, fd);
+    for (size_t idx : contact_set) {
+        face_descriptor fd(static_cast<SurfaceMesh::size_type>(idx));
 
-        std::vector<halfedge_descriptor> boundary_halfedges;
-
-        for (halfedge_descriptor h : all_he) {
-            halfedge_descriptor opp = mesh1.opposite(h);
-            face_descriptor nb = mesh1.face(opp);
-
-            bool nb_in_proximity = (
+        halfedge_descriptor h = mesh1.halfedge(fd);
+        halfedge_descriptor start = h;
+        do {
+            face_descriptor nb = mesh1.face(mesh1.opposite(h));
+            bool nb_in_contact = (
                 nb != SurfaceMesh::null_face() &&
-                proximity_set.count(static_cast<size_t>(nb))
+                contact_set.count(static_cast<size_t>(nb))
             );
 
-            if (!nb_in_proximity)
-                boundary_halfedges.push_back(h);
-        }
+            if (!nb_in_contact) {
+                for (vertex_descriptor v : {mesh1.source(h), mesh1.target(h)}) {
+                    size_t vi = static_cast<size_t>(v);
+                    seed_position[vi] = mesh1.point(v);
+                    auto it = seed_normal_sum.find(vi);
+                    if (it == seed_normal_sum.end())
+                        seed_normal_sum[vi] = face_normals[fd];
+                    else
+                        it->second = it->second + face_normals[fd];
+                }
+            }
+            h = mesh1.next(h);
+        } while (h != start);
+    }
 
-        if (boundary_halfedges.size() == 0)
-            continue;
+    size_t N = seed_position.size();
+    py::array_t<double> np_points ({(py::ssize_t)N, (py::ssize_t)3});
+    py::array_t<double> np_normals({(py::ssize_t)N, (py::ssize_t)3});
 
-        Point_3 seam_vertex;
-        bool ok = select_seam_vertex(
-            mesh1, fd, boundary_halfedges, mesh1_centroid, seam_vertex
-        );
+    auto pv = np_points.mutable_unchecked<2>();
+    auto nv = np_normals.mutable_unchecked<2>();
 
-        if (!ok) continue;
+    size_t i = 0;
+    for (const auto& [vi, p] : seed_position) {
+        pv(i,0) = p.x();
+        pv(i,1) = p.y();
+        pv(i,2) = p.z();
 
-        Vector_3 n = face_normals[fd];
+        Vector_3 n = seed_normal_sum.at(vi);
         double norm = std::sqrt(n.x()*n.x() + n.y()*n.y() + n.z()*n.z());
         if (norm > 1e-10)
             n = Vector_3(n.x()/norm, n.y()/norm, n.z()/norm);
         else
             n = Vector_3(0, 0, 1);
 
-        emitted[idx]    = EmittedFace{seam_vertex, n};
-        emitted_fd[idx] = fd;
+        nv(i,0) = n.x();
+        nv(i,1) = n.y();
+        nv(i,2) = n.z();
+        ++i;
     }
 
-    std::unordered_map<size_t, std::vector<size_t>> adj;
-    adj.reserve(emitted.size());
-
-    for (auto& [idx, fd] : emitted_fd) {
-        std::vector<size_t>& neighbours = adj[idx];
-        std::vector<halfedge_descriptor> all_he = get_face_halfedges(mesh1, fd);
-
-        for (halfedge_descriptor h : all_he) {
-            halfedge_descriptor opp = mesh1.opposite(h);
-            face_descriptor nb = mesh1.face(opp);
-            if (nb == SurfaceMesh::null_face()) continue;
-
-            size_t nb_idx = static_cast<size_t>(nb);
-            if (emitted.count(nb_idx))
-                neighbours.push_back(nb_idx);
-        }
-    }
-
-    std::vector<SeamPath> seam_paths = decompose_into_seams(adj);
-
-    const double dup_sq_tol = 1e-9 * 1e-9;
-    py::list result;
-
-    for (const SeamPath& sp : seam_paths) {
-        std::vector<Point_3>  verts;
-        std::vector<Vector_3> norms;
-
-        for (size_t idx : sp.faces) {
-            const EmittedFace& ef = emitted.at(idx);
-            if (!verts.empty() && sq_dist(verts.back(), ef.vertex) < dup_sq_tol)
-                continue;
-            verts.push_back(ef.vertex);
-            norms.push_back(ef.normal);
-        }
-
-        if (verts.size() < 2) continue;
-
-        size_t N = verts.size();
-        py::array_t<double> np_vertices({(py::ssize_t)N, (py::ssize_t)3});
-        py::array_t<double> np_normals ({(py::ssize_t)N, (py::ssize_t)3});
-
-        auto v = np_vertices.mutable_unchecked<2>();
-        auto n = np_normals.mutable_unchecked<2>();
-
-        for (size_t i = 0; i < N; ++i) {
-            v(i,0) = verts[i].x();
-            v(i,1) = verts[i].y();
-            v(i,2) = verts[i].z();
-
-            n(i,0) = norms[i].x();
-            n(i,1) = norms[i].y();
-            n(i,2) = norms[i].z();
-        }
-
-        py::dict seam;
-        seam["vertices"]  = np_vertices;
-        seam["normals"]   = np_normals;
-        seam["is_closed"] = sp.is_closed;
-        result.append(seam);
-    }
-
+    py::dict result;
+    result["points"]  = np_points;
+    result["normals"] = np_normals;
     return result;
 }
 
 
 PYBIND11_MODULE(mesh_intersection, m) {
-    m.doc() = "CGAL-based ordered seam vertex extraction from mesh contact zones";
+    m.doc() = "CGAL-based contact-boundary seed point extraction between meshes";
 
     m.def(
-        "get_seam_vertices",
-        &get_seam_vertices,
+        "get_contact_points",
+        &get_contact_points,
         py::arg("verts1"),
         py::arg("faces1"),
         py::arg("verts2"),
         py::arg("faces2"),
         py::arg("epsilon") = 1e-3,
         R"doc(
-Extract ordered seam vertices from mesh_1 relative to mesh_2, grouped into seams.
-Each returned dict has 'vertices' (K,3), 'normals' (K,3), and 'is_closed' (bool).
+Extract unordered contact-boundary seed points of mesh_1 relative to mesh_2.
+Returns a dict with 'points' (N,3) and 'normals' (N,3). Points are the unique
+vertices of the contact strip's boundary halfedges, unordered.
 )doc"
     );
 }
