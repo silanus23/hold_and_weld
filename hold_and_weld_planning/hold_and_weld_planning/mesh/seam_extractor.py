@@ -148,8 +148,6 @@ class SeamExtractor:
         # as a noise floor for fit tolerances.
         self.ridge_jitter: float = 0.0
 
-    # ------------------------------------------------------------------ seeds
-
     def _collect_seeds(self) -> NDArray:
         """Pool unordered contact-boundary seeds from both call directions."""
         arrays = []
@@ -170,7 +168,6 @@ class SeamExtractor:
 
         return np.vstack(arrays)
 
-    # ---------------------------------------------------------------- passes
 
     def _classify_seed(
         self, position: NDArray

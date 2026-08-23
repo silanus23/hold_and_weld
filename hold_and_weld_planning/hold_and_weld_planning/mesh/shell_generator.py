@@ -175,7 +175,7 @@ class ShellGenerator:
                             f'radius={geom.radius}, length={geom.length}'
                         )
                     manifold_obj = manifold3d.Manifold.cylinder(
-                        geom.length, geom.radius, circular_segments=32, center=True
+                        geom.length, geom.radius, circular_segments=128, center=True
                     )
                     logger.debug(f'Created cylinder: radius={geom.radius}, length={geom.length}')
 
@@ -185,7 +185,7 @@ class ShellGenerator:
                             f'Sphere radius must be positive: {geom.radius}'
                         )
                     manifold_obj = manifold3d.Manifold.sphere(
-                        geom.radius, circular_segments=32
+                        geom.radius, circular_segments=128
                     )
                     logger.debug(f'Created sphere: radius={geom.radius}')
 

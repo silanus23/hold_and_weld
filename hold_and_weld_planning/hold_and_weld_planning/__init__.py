@@ -16,6 +16,7 @@
 
 from .core import ArcSegment, LineSegment, PtPSegment, Seam
 from .mesh import (
+    ContactBoundaryExtractor,
     MeshLoader,
     PathCreator,
     SeamExtractor,
@@ -48,6 +49,7 @@ __all__ = [
     'ShellGenerator',
     'PathCreator',
     'SeamExtractor',
+    'ContactBoundaryExtractor',
     'JobPlanner',
     'load_urdf_config',
     'export_to_json',
