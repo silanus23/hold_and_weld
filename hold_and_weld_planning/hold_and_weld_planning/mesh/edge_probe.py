@@ -49,6 +49,19 @@ _MIN_FACES = 4
 _FLAT_SPREAD = 1e-8
 
 
+def _kernel(t: NDArray) -> NDArray:
+    """Smooth compactly-supported radial weight, (1 - t^2)^3 on t in [0, 1].
+
+    Both the value and its derivative vanish at t = 1, so a face entering the
+    probe ball does so with zero weight *and* zero rate. That makes every
+    probe statistic a smooth function of the probe centre rather than a
+    staircase that only changes when a centroid crosses the radius, which is
+    what allows the ridge walk to converge to a sub-triangle position.
+    """
+    u = np.clip(1.0 - t * t, 0.0, None)
+    return u * u * u
+
+
 @dataclass
 class ProbeResult:
     """Result of probing one point against one mesh.
@@ -161,10 +174,19 @@ class EdgeProbe:
         radius: Optional[float] = None,
     ) -> ProbeResult:
         """Probe one point against one mesh; see ProbeResult for semantics."""
+        if radius is None:
+            radius = probe_mesh.probe_radius
+
         faces = self.collect_faces(probe_mesh, point, radius)
 
         normals = probe_mesh.face_normals[faces]
-        areas = probe_mesh.face_areas[faces]
+        # Area weighted by a smooth radial kernel: hard in/out membership makes
+        # every statistic a step function of the probe centre, which pins the
+        # walk to the triangle lattice. See _kernel.
+        distances = np.linalg.norm(
+            probe_mesh.face_centroids[faces] - point, axis=1
+        ) if len(faces) else np.zeros(0)
+        areas = probe_mesh.face_areas[faces] * _kernel(distances / radius)
         total_area = float(np.sum(areas))
 
         if len(faces) < _MIN_FACES or total_area <= 0.0:
