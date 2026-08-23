@@ -29,6 +29,9 @@
 workpiece:
   auto_detect_seams: true
   mode: mesh
+  # NOTE: only mode / auto_detect_seams / part paths / world_pose are read from
+  # this block. seam_method, epsilon and every other tuning key belong under
+  # `parameters:` below — put here they are silently ignored.
   main_part:
     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:
@@ -38,18 +41,18 @@ workpiece:
       - 0.65
       rpy:
       - 0
-      - 0.7853982
+      - 0
       - 0
   secondary_part:
-    secondary_path: "package://hold_and_weld_description/urdf/environment/cube.urdf.xacro"
+    secondary_path: "package://hold_and_weld_description/urdf/environment/cylinder.urdf.xacro"
     world_pose:
       xyz:
-      - 1.394
+      - 1.6
       - -0.5
-      - 0.844
+      - 0.925
       rpy:
       - 0
-      - 0.7853982
+      - 0
       - 0
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -60,67 +63,99 @@ parameters:
   travel_angle_deg: 5.0
   waypoint_spacing_mm: 10.0
 
-  # ── Mesh intersection ──────────────────────────────────────────────────────
-  epsilon: 0.02
-  pairing_radius: 0.02
-  inflate: 1.0
-  refine_iterations: 24
-
-  # ── Newton refinement ──────────────────────────────────────────────────────
-  # Refines CGAL vertices from tessellation-pinned positions onto the true
-  # geometric intersection curve. Set to false to use legacy PathCreator pipeline.
-  newton_enabled: false
-  newton_max_iterations: 15
-  newton_tolerance: 1.0e-7
-
-  # ── Ridge-valley detection ─────────────────────────────────────────────────
-  # Finds geometric boundary edges to seed Newton with better starting points.
-  # Only active when newton_enabled is true.
-  ridge_valley_enabled: false
-  crease_zone_radius_ratio: 0.05
-
-  # ── Edge detection (bimodality) ────────────────────────────────────────────
-  edge_detection_search_radius_ratio: 0.02
-  edge_detection_threshold: 0.5
-  gaussian_sigma_ratio: 0.3
-  normal_outlier_threshold_std: 2.0
-
-  # ── Classification (sliding window) ───────────────────────────────────────
-  # Only active when newton_enabled is true.
-  classification_window_size: 0.05
-  line_fit_threshold: 1.0e-4
-  circle_fit_threshold: 1.0e-4
-  resample_points_per_meter: 1000
-
-  # ── Subdivision ────────────────────────────────────────────────────────────
-  # Only active when newton_enabled is true.
-  max_lin_segment_length_mm: 200.0
-  max_circ_arc_angle_deg: 90.0
-  ptp_waypoint_spacing_mm: 10.0
-  ptp_curvature_density_factor: 3.0
-
-  # ── Legacy PathCreator parameters ─────────────────────────────────────────
-  # Only used when newton_enabled is false. Kept for backward compatibility.
+  # ── Seam extraction method ─────────────────────────────────────────────────
+  # ridge:            probe/ridge-walk pipeline (default, unchanged)
+  # contact_boundary: seam from the contact face set, with per-point edge
+  #                   ownership: at each point whichever mesh carries the
+  #                   geometric edge there owns it, so a single chain may
+  #                   change owner along its length (a part that overhangs
+  #                   owns the arc, the part below owns the chord on its rim).
+  #                   Detection is combinatorial and ownership is a comparison,
+  #                   so neither has a threshold to tune.
+  #                   See MESH_MATH_REVIEW.md sections 0.6 and 0.8.
   #
-  # num_smooth_points: 40
-  # outlier_std_threshold: 5.0
-  # min_sub_path_length: 10
-  # min_points_for_corner_detection: 20
-  # corner_min_angle: 25
-  # corner_angle_window: 10
-  # corner_curvature_window: 10
-  # corner_curvature_threshold: 0.8
-  # corner_min_agreement: 1
-  # corner_tolerance: 5
-  # corner_filter_window: 5
-  # arc_radius_tolerance: 0.05
-  # arc_merge_num_points: 100
-  # line_angle_tolerance_deg: 10.0
-  # line_merge_max_error: 0.001
-  # line_merge_max_iterations: 20
-  # min_line_size: 70
-  # line_absorption_max_error: 0.01
-  # line_absorption_max_iterations: 10
-  # first_last_angle_tolerance: 10
-  # first_last_radius_tolerance: 0.05
-  # first_last_gap_threshold: 0.01
+  #                   Wants epsilon 0.002. An explicit epsilon below WINS over
+  #                   that default, so the two must be changed together: at
+  #                   epsilon 0.02 this method returns 0 seams, then fails with
+  #                   "Cannot build base frame: normal and tangent are
+  #                   parallel". Switch back to ridge => restore epsilon 0.02.
+  #
+  #                   Unlike the old contact_boundary, this now WANTS mesh
+  #                   refinement: every seam point is an existing vertex, so a
+  #                   coarse part cannot represent where the seam starts and
+  #                   ends on its own rim. Measured on the overhang scene:
+  #                   refine 0 finds the arc but MISSES the 450mm chord
+  #                   entirely; refine 32 gives one chain at 1156.60mm against
+  #                   1156.9mm analytic. Set refine_iterations explicitly
+  #                   (16-32) when using this method.
+  seam_method: contact_boundary
+
+  # ── Contact boundary tuning (seam_method: contact_boundary only) ───────────
+  # Both are multipliers on mesh-derived lengths, not absolute distances, so
+  # they do not need changing when part size changes. Defaults are measured.
+  #
+  # near_contact_edge_fraction: how far off the other mesh a sharp edge may sit
+  #   and still count as seam, as a fraction of this mesh's MEDIAN edge length
+  #   (on top of epsilon). Guards against welding a part's own edges away from
+  #   the joint. Only meaningful when the mesh resolves the joint — on a
+  #   12-face box the median edge is 500mm and the resulting slack admits
+  #   almost anything. If stray far-from-joint seams appear, refine the mesh
+  #   before lowering this.
+  #
+  # stitch_gap_factor: endpoint gap below which two chain pieces from
+  #   DIFFERENT meshes are joined, as a multiple of the local sampling density
+  #   of the two pieces. The meshes share no vertices, so a handoff gap of
+  #   about one segment is expected. Raise if pieces that clearly belong to one
+  #   seam stay separate; lower if unrelated seams get spliced end to end.
+  #near_contact_edge_fraction: 0.5
+  #stitch_gap_factor: 3.0
+
+  # ── Edge probe (seam_method: ridge only) ───────────────────────────────────
+  # Read by EdgeProbe.__init__ (mesh/edge_probe.py:133-135). NOTHING on the
+  # contact_boundary path reads these — they have no effect unless seam_method
+  # is 'ridge'. Shown at their built-in defaults (edge_probe.py:40-41).
+  #
+  # edge_angle_min_deg: minimum dihedral for the probe to call something an
+  #   edge at all. Below this the two normal clusters are treated as one
+  #   smoothly curving surface rather than a crease.
+  #
+  # gap_dominance: the detection threshold in the sorted-gap test — an edge is
+  #   declared when gap_ratio exceeds this. Handle with care: on a PERFECT
+  #   analytic 90-degree edge this measured 0.604 against the 0.600 threshold,
+  #   a 0.7% margin, and refine 16/24 missed the seam entirely (0/197 and
+  #   0/289 in-plane detections). See MESH_MATH_REVIEW.md 0.5. Raising it makes
+  #   detection stricter and drops more real seam; lowering it admits noise.
+  #   This fragility is the reason contact_boundary exists.
+  #edge_angle_min_deg: 15.0
+  #gap_dominance: 0.6
+
+  # ── Mesh intersection ──────────────────────────────────────────────────────
+  # 0.02 for seam_method: ridge, 0.002 for contact_boundary (see above).
+  epsilon: 0.002
+  # contact_boundary defaults to 16. 32 is where this scene converged in
+  # measurement: 1212.58mm at 16, 1173.88 at 24, 1156.60 at 32, against
+  # 1156.9mm analytic. Cost is ~4x per doubling (32 => 12288 plate faces,
+  # 520192 cylinder faces), and per-point deviation is already flat from 16
+  # onward (median 0.051mm), so past 32 you buy coverage, not precision.
+  refine_iterations: 42
+
+  # ── Path classification (PathCreator) ──────────────────────────────────────
+  # These are the keys that actually decide line vs arc vs PTP. All are shown
+  # at their built-in defaults (mesh/path_creator.py:62-72); uncomment to
+  # override. Cascade: fit within path_tolerance_mm => LINE (preferred), fit
+  # within arc_strictness x that AND subtend >= min_arc_angle_deg AND consume
+  # 1.5x the run a line would => ARC, else PTP. The asymmetry is deliberate —
+  # a false PTP is safe, a false arc breaks the torch.
+  #
+  # path_tolerance_mm: 1.0     # master fit tolerance
+  # arc_strictness: 0.5        # arc tolerance = this x path_tolerance_mm
+  # min_arc_angle_deg: 15.0    # below this an arc is not worth calling an arc
+  # max_line_length: 0.5       # metres; hard split, not geometric
+  # max_arc_length: 0.5        # metres; hard split. This is why a 706.79mm
+  #                            # semicircle comes out as 2 arcs of 353.39mm.
+  # max_ptp_length: 0.1        # metres
+  #
+  # num_smooth_points is NOT read in mesh mode — it is OCCT-only
+  # (occt/seam_extractor_occt.py:155, points per B-spline curve). job_planner
+  # sets a default of 100 and seam_generator prints it, but nothing under
+  # mesh/ ever reads it. It has no effect on this config.
