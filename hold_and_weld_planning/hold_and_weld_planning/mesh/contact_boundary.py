@@ -100,10 +100,14 @@ class ContactBoundaryExtractor:
         self._distance_cache: Dict[int, NDArray] = {}
         self._dihedral_cache: Dict[int, Dict[Tuple[int, int], float]] = {}
         self._sharp_tree_cache: Dict[int, Optional[KDTree]] = {}
+        self._route_cache: Optional[str] = None
 
     def route(self) -> str:
         """'contact' when the parts meet at a surface, 'intersect' when one is
         buried in the other."""
+        if self._route_cache is not None:
+            return self._route_cache
+
         volume = float(
             (self._manifold(1) ^ self._manifold(2)).volume()
         )
@@ -112,8 +116,10 @@ class ContactBoundaryExtractor:
                 f'Parts interpenetrate ({volume * 1e9:.1f} mm^3 of overlap); '
                 'the contact boundary is the buried rim, not the seam'
             )
-            return 'intersect'
-        return 'contact'
+            self._route_cache = 'intersect'
+        else:
+            self._route_cache = 'contact'
+        return self._route_cache
 
     def extract_seams(self) -> List[Seam]:
         """Extract classified Seam objects."""
@@ -154,6 +160,9 @@ class ContactBoundaryExtractor:
         for side in (1, 2):
             contact, boundary = self._boundary_edges(side, self.epsilon)
             touching = touching or bool(boundary)
+            # Before the early returns below, so a bad epsilon is reported as
+            # a bad epsilon rather than as "the parts do not touch".
+            self._validate_epsilon(side, self.epsilon)
             marked[side] = (contact, self._sharp_boundary(side, boundary))
             if boundary and not marked[side][1]:
                 logger.info(
@@ -176,7 +185,6 @@ class ContactBoundaryExtractor:
             contact, sharp = marked[side]
             if not sharp:
                 continue
-            self._validate_epsilon(side, self.epsilon)
             for loop, is_closed in self._loops(side, sharp):
                 if is_closed:
                     loop = self._oriented(side, loop, contact)
@@ -293,6 +301,14 @@ class ContactBoundaryExtractor:
         """
         _, reference = self._boundary_edges(side, epsilon)
         base = {v for edge in reference for v in edge}
+        if not base:
+            logger.warning(
+                f'mesh_{side}: no contact boundary at epsilon='
+                f'{epsilon * 1000:.2f}mm; too small for the fit-up gap, or the '
+                'parts do not meet'
+            )
+            return
+
         counts = [f'{epsilon * 1000:.2f}mm -> {len(base)}']
         stable = True
 
