@@ -37,9 +37,14 @@ from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.ptp_segment import PtPSegment
 from ..core.seam import Seam
-from .seam_extractor import SeamPoint
+from .seam_point import SeamPoint
 
 logger = logging.getLogger(__name__)
+
+# Fallback used only when the caller passes no 'waypoint_spacing_mm'. Matches
+# the planner's own default so PathCreator standalone behaves like the
+# pipeline. See PathCreator.min_contact_run.
+_DEFAULT_WAYPOINT_SPACING_MM = 10.0
 
 
 class PathCreator:
@@ -47,9 +52,7 @@ class PathCreator:
 
     Configuration Parameters:
         path_tolerance_mm: Max allowed deviation of a fitted primitive from
-                           the seam points, in mm (default 1.0). Floored at
-                           2x the measured ridge jitter when the extractor
-                           provides 'ridge_jitter'.
+                           the seam points, in mm (default 1.0).
         arc_strictness:    Arc tolerance as a fraction of path tolerance
                            (default 0.5). Arcs must also subtend at least
                            min_arc_angle_deg.
@@ -71,6 +74,7 @@ class PathCreator:
     _MIN_FIT_POINTS = 4      # fewest points that count as a fitted primitive
     _ARC_GAIN = 1.5          # arc must consume this multiple of the line run
 
+
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Args:
             config: Optional configuration dict (see class docstring).
@@ -86,14 +90,16 @@ class PathCreator:
             return cfg.get(key, self._DEFAULTS[key])
 
         tolerance = get('path_tolerance_mm') * 1e-3
-        jitter = float(cfg.get('ridge_jitter', 0.0))
-        floor = 2.0 * jitter
-        if floor > tolerance:
-            logger.warning(
-                f'path_tolerance {tolerance * 1000:.3f}mm below measured ridge '
-                f'jitter; floored to {floor * 1000:.3f}mm'
-            )
-            tolerance = floor
+
+        # 'ridge_jitter' was supplied only by the retired ridge extractor.
+        # jitter = float(cfg.get('ridge_jitter', 0.0))
+        # floor = 2.0 * jitter
+        # if floor > tolerance:
+        #     logger.warning(
+        #         f'path_tolerance {tolerance * 1000:.3f}mm below measured ridge '
+        #         f'jitter; floored to {floor * 1000:.3f}mm'
+        #     )
+        #     tolerance = floor
 
         self.tolerance = tolerance
         self.arc_tolerance = get('arc_strictness') * tolerance
@@ -101,6 +107,16 @@ class PathCreator:
         self.max_line_length = get('max_line_length')
         self.max_arc_length = get('max_arc_length')
         self.max_ptp_length = get('max_ptp_length')
+
+        # Contact-type runs shorter than this are absorbed as flicker (see
+        # _split_on_contact_type). Deliberately NOT its own tuning key: it is
+        # the welding process's own resolution. A run shorter than one
+        # waypoint spacing cannot carry two distinct weld poses, so it is not
+        # a weld segment whatever the geometry says. That makes the threshold
+        # physical and independent of mesh density, unlike a point count.
+        self.min_contact_run = float(
+            cfg.get('waypoint_spacing_mm', _DEFAULT_WAYPOINT_SPACING_MM)
+        ) * 1e-3
 
     def process_path(
         self,
@@ -111,7 +127,7 @@ class PathCreator:
         """Process ordered SeamPoints into classified Seam objects.
 
         Args:
-            seam_points: Ordered SeamPoint list from SeamExtractor.
+            seam_points: Ordered SeamPoint list from the extractor.
             config:      Optional per-call config overriding construction config.
             is_closed:   True when the points form a closed loop; the loop is
                          closed by wrapping the first point so a full circle
@@ -147,17 +163,31 @@ class PathCreator:
 
     # ------------------------------------------------------------- splitting
 
-    _MIN_CONTACT_RUN = 3  # shorter contact-type runs are flicker, not joints
-
     def _split_on_contact_type(
         self, seam_points: List[SeamPoint]
     ) -> List[List[SeamPoint]]:
         """Split at (is_edge_joint, refined_side) transitions.
 
-        Runs shorter than _MIN_CONTACT_RUN are classification flicker at
+        Runs shorter than `min_contact_run` are classification flicker at
         ambiguous zones, not genuine joint changes; they are absorbed into
-        their longer neighbour so a single flickering point cannot shatter
-        a seam.
+        their longer neighbour so a flickering handful of points cannot
+        shatter a seam.
+
+        The test is on run LENGTH, not point count. A point count is not a
+        physical quantity: the two meshes of one joint are sampled at wildly
+        different densities and a single chain crosses both. Measured on the
+        overhang scene at refine 40, within the SAME chain:
+
+            plate rim      51 points over 600.00 mm  ->  12.0   mm/point
+            cylinder arc 1755 points over 484.26 mm  ->   0.276 mm/point
+
+        so the old fixed `_MIN_CONTACT_RUN = 3` meant 36 mm on the plate and
+        0.83 mm on the cylinder — a 43x difference in what it physically
+        enforced. It absorbed the plate-side flicker correctly and was
+        effectively disabled on the cylinder, where two 30-point runs
+        spanning 8.01 mm and two 7-point runs spanning 1.66 mm survived as
+        four spurious Seams. Worse, it got weaker as `refine_iterations`
+        rose: every doubling halves the millimetres a point represents.
         """
         def contact_type(sp: SeamPoint) -> Tuple[bool, int]:
             return (sp.on_edge_1 and sp.on_edge_2, sp.refined_side)
@@ -170,13 +200,28 @@ class PathCreator:
             else:
                 runs.append([t, 1])
 
+        positions = np.asarray([sp.position for sp in seam_points], dtype=float)
+        cumulative = np.concatenate((
+            [0.0], np.cumsum(np.linalg.norm(np.diff(positions, axis=0), axis=1))
+        ))
+
+        def run_lengths() -> List[float]:
+            """Arc length spanned by each run, in metres (1-point run -> 0)."""
+            lengths, start = [], 0
+            for _, count in runs:
+                end = start + count
+                lengths.append(float(cumulative[end - 1] - cumulative[start]))
+                start = end
+            return lengths
+
         while len(runs) > 1:
-            shortest = min(range(len(runs)), key=lambda i: runs[i][1])
-            if runs[shortest][1] >= self._MIN_CONTACT_RUN:
+            lengths = run_lengths()
+            shortest = min(range(len(runs)), key=lambda i: lengths[i])
+            if lengths[shortest] >= self.min_contact_run:
                 break
             neighbours = [i for i in (shortest - 1, shortest + 1)
                           if 0 <= i < len(runs)]
-            absorber = max(neighbours, key=lambda i: runs[i][1])
+            absorber = max(neighbours, key=lambda i: lengths[i])
             runs[absorber][1] += runs[shortest][1]
             runs.pop(shortest)
             # Re-merge neighbours that now share a type.

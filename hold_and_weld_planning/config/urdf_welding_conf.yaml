@@ -63,81 +63,60 @@ parameters:
   travel_angle_deg: 5.0
   waypoint_spacing_mm: 10.0
 
-  # ── Seam extraction method ─────────────────────────────────────────────────
-  # ridge:            probe/ridge-walk pipeline (default, unchanged)
-  # contact_boundary: seam from the contact face set, with per-point edge
-  #                   ownership: at each point whichever mesh carries the
-  #                   geometric edge there owns it, so a single chain may
-  #                   change owner along its length (a part that overhangs
-  #                   owns the arc, the part below owns the chord on its rim).
-  #                   Detection is combinatorial and ownership is a comparison,
-  #                   so neither has a threshold to tune.
-  #                   See MESH_MATH_REVIEW.md sections 0.6 and 0.8.
-  #
-  #                   Wants epsilon 0.002. An explicit epsilon below WINS over
-  #                   that default, so the two must be changed together: at
-  #                   epsilon 0.02 this method returns 0 seams, then fails with
-  #                   "Cannot build base frame: normal and tangent are
-  #                   parallel". Switch back to ridge => restore epsilon 0.02.
-  #
-  #                   Unlike the old contact_boundary, this now WANTS mesh
-  #                   refinement: every seam point is an existing vertex, so a
-  #                   coarse part cannot represent where the seam starts and
-  #                   ends on its own rim. Measured on the overhang scene:
-  #                   refine 0 finds the arc but MISSES the 450mm chord
-  #                   entirely; refine 32 gives one chain at 1156.60mm against
-  #                   1156.9mm analytic. Set refine_iterations explicitly
-  #                   (16-32) when using this method.
-  seam_method: contact_boundary
-
-  # ── Contact boundary tuning (seam_method: contact_boundary only) ───────────
+  # ── Contact boundary tuning ────────────────────────────────────────────────
   # Both are multipliers on mesh-derived lengths, not absolute distances, so
   # they do not need changing when part size changes. Defaults are measured.
   #
   # near_contact_edge_fraction: how far off the other mesh a sharp edge may sit
   #   and still count as seam, as a fraction of this mesh's MEDIAN edge length
   #   (on top of epsilon). Guards against welding a part's own edges away from
-  #   the joint. Only meaningful when the mesh resolves the joint — on a
-  #   12-face box the median edge is 500mm and the resulting slack admits
-  #   almost anything. If stray far-from-joint seams appear, refine the mesh
-  #   before lowering this.
+  #   the joint — the rim of a cylinder where it overhangs the plate is a real
+  #   90-degree edge but is not a weld.
+  #
+  #   The slack exists to absorb TESSELLATION error, measured at 0.051mm here,
+  #   so keep it small. Swept on this scene at refine 40 / epsilon 0.002
+  #   against 1098.87mm analytic:
+  #
+  #       ncf    total_mm    err_mm    worst stray off plate
+  #       0.50    1135.18    +36.31           5.076mm
+  #       0.20    1126.35    +27.48           3.273mm
+  #       0.10    1103.58     +4.71           2.653mm
+  #       0.05    1101.93     +3.06           2.280mm
+  #
+  #   At 0.50 the bound is 2.00 + 0.5*6.25 = 5.12mm and the strays came in at
+  #   5.076mm — admitted with 0.04mm to spare. The floor on stray distance is
+  #   epsilon itself (~2mm), not this, so below ~0.05 there is nothing left to
+  #   win. NOTE this does NOT change the segment COUNT: 8 seams at every value
+  #   above. That fragmentation is edge-flag flicker driving
+  #   PathCreator._split_on_contact_type and needs code, not config.
+  #
+  #   Only meaningful when the mesh resolves the joint — on a 12-face box the
+  #   median edge is 500mm and even a small fraction admits almost anything.
+  #   If stray far-from-joint seams appear, refine the mesh first.
   #
   # stitch_gap_factor: endpoint gap below which two chain pieces from
   #   DIFFERENT meshes are joined, as a multiple of the local sampling density
   #   of the two pieces. The meshes share no vertices, so a handoff gap of
   #   about one segment is expected. Raise if pieces that clearly belong to one
   #   seam stay separate; lower if unrelated seams get spliced end to end.
-  #near_contact_edge_fraction: 0.5
+  near_contact_edge_fraction: 0.1
   #stitch_gap_factor: 3.0
 
-  # ── Edge probe (seam_method: ridge only) ───────────────────────────────────
-  # Read by EdgeProbe.__init__ (mesh/edge_probe.py:133-135). NOTHING on the
-  # contact_boundary path reads these — they have no effect unless seam_method
-  # is 'ridge'. Shown at their built-in defaults (edge_probe.py:40-41).
-  #
-  # edge_angle_min_deg: minimum dihedral for the probe to call something an
-  #   edge at all. Below this the two normal clusters are treated as one
-  #   smoothly curving surface rather than a crease.
-  #
-  # gap_dominance: the detection threshold in the sorted-gap test — an edge is
-  #   declared when gap_ratio exceeds this. Handle with care: on a PERFECT
-  #   analytic 90-degree edge this measured 0.604 against the 0.600 threshold,
-  #   a 0.7% margin, and refine 16/24 missed the seam entirely (0/197 and
-  #   0/289 in-plane detections). See MESH_MATH_REVIEW.md 0.5. Raising it makes
-  #   detection stricter and drops more real seam; lowering it admits noise.
-  #   This fragility is the reason contact_boundary exists.
-  #edge_angle_min_deg: 15.0
-  #gap_dominance: 0.6
-
   # ── Mesh intersection ──────────────────────────────────────────────────────
-  # 0.02 for seam_method: ridge, 0.002 for contact_boundary (see above).
   epsilon: 0.002
-  # contact_boundary defaults to 16. 32 is where this scene converged in
-  # measurement: 1212.58mm at 16, 1173.88 at 24, 1156.60 at 32, against
-  # 1156.9mm analytic. Cost is ~4x per doubling (32 => 12288 plate faces,
-  # 520192 cylinder faces), and per-point deviation is already flat from 16
-  # onward (median 0.051mm), so past 32 you buy coverage, not precision.
-  refine_iterations: 42
+  # contact_boundary defaults to 16; 40 is the last value measured clean here.
+  # Refinement buys COVERAGE, not precision — per-point deviation is already
+  # flat from 16 onward (median 0.051mm), but a coarse part cannot represent
+  # where the seam ends on its own rim. Cost is ~4x per doubling.
+  #
+  # HARD UPPER BOUND, do not exceed without re-checking: wall row height is
+  # 250mm/refine and the bottom row's centroid sits at h/3, so wall faces get
+  # wrongly marked as contact once h/3 <= epsilon, i.e.
+  #     refine >= 250 / (3 * epsilon_mm) = 41.7 at epsilon 2mm.
+  # Measured clean at 40, broken at 42 (climb 1.984mm, sharp edges 1870 => 969).
+  # _validate_epsilon already warns at 40 — that warning is the cliff being
+  # 4% away, not an error. Raising refine REQUIRES lowering epsilon.
+  refine_iterations: 40
 
   # ── Path classification (PathCreator) ──────────────────────────────────────
   # These are the keys that actually decide line vs arc vs PTP. All are shown

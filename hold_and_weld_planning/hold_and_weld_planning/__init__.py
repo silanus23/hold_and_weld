@@ -19,7 +19,7 @@ from .mesh import (
     ContactBoundaryExtractor,
     MeshLoader,
     PathCreator,
-    SeamExtractor,
+    SeamPoint,
     ShellGenerator,
 )
 from .occt import (
@@ -48,7 +48,7 @@ __all__ = [
     'MeshLoader',
     'ShellGenerator',
     'PathCreator',
-    'SeamExtractor',
+    'SeamPoint',
     'ContactBoundaryExtractor',
     'JobPlanner',
     'load_urdf_config',

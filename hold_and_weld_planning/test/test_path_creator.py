@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 from hold_and_weld_planning.mesh.path_creator import PathCreator
-from hold_and_weld_planning.mesh.seam_extractor import SeamPoint
+from hold_and_weld_planning.mesh.seam_point import SeamPoint
 
 
 def make_seam_points(positions):

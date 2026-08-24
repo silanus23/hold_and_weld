@@ -17,13 +17,16 @@
 from .contact_boundary import ContactBoundaryExtractor
 from .mesh_loader import MeshLoader
 from .path_creator import PathCreator
-from .seam_extractor import SeamExtractor
+from .seam_point import SeamPoint
 from .shell_generator import ShellGenerator
+
+# Ridge method retired; contact_boundary is the only mesh extractor.
+# from .seam_extractor import SeamExtractor
 
 __all__ = [
     'MeshLoader',
     'ShellGenerator',
     'PathCreator',
-    'SeamExtractor',
+    'SeamPoint',
     'ContactBoundaryExtractor',
 ]

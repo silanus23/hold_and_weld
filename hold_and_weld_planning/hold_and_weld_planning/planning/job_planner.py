@@ -25,7 +25,8 @@ import trimesh
 from .weld_planner import WeldPlanner
 from ..mesh.contact_boundary import ContactBoundaryExtractor
 from ..mesh.mesh_loader import MeshLoader
-from ..mesh.seam_extractor import SeamExtractor
+# Ridge method retired; contact_boundary is the only mesh extractor.
+# from ..mesh.seam_extractor import SeamExtractor
 from ..mesh.shell_generator import ShellGenerator
 from ..occt.occt_generator import OCCTGenerator
 from ..occt.occt_loader import OCCTLoader
@@ -60,15 +61,11 @@ class JobPlanner:
             secondary_world_pose: Dict with 'xyz' and 'rpy' for secondary
             parameters: Dict with work_angle_deg, travel_angle_deg, gap_mm,
                        epsilon (optional), num_smooth_points (optional),
-                       refine_iterations (optional), seam_method (optional:
-                       'ridge' default, or 'contact_boundary' — mesh mode
-                       only; changes the epsilon and refine_iterations
-                       defaults, see MESH_MATH_REVIEW.md 0.6)
+                       refine_iterations (optional)
             mode: 'auto', 'mesh', or 'occt'
 
         Raises:
-            ValueError: If parameters missing, mode invalid, or seam_method
-                unrecognized
+            ValueError: If parameters missing or mode invalid
         """
         self.main_path = main_path
         self.secondary_path = secondary_path
@@ -86,51 +83,26 @@ class JobPlanner:
         else:
             self.mode = mode
 
-        self.parameters.setdefault('seam_method', 'ridge')
-        seam_method = self.parameters['seam_method']
-        if seam_method not in ('ridge', 'contact_boundary'):
-            raise ValueError(
-                "seam_method must be 'ridge' or 'contact_boundary', got "
-                f"'{seam_method}'"
-            )
-
         explicit_refine = 'refine_iterations' in self.parameters
 
         if self.mode == 'occt':
             self.parameters.setdefault('epsilon', 1e-3)
-        elif seam_method == 'contact_boundary':
-            # Contact boundary needs epsilon between the fit-up gap and about
-            # half the transverse face size; both test geometries are exact at
-            # 1-2mm. The ridge default of 10mm is already past the box T-joint
-            # failure point. See MESH_MATH_REVIEW.md 0.6.2 and 0.6.4.
-            self.parameters.setdefault('epsilon', 0.002)
         else:
-            self.parameters.setdefault('epsilon', 0.01)
+            # Epsilon must sit between the fit-up gap and about half the
+            # transverse face size.
+            self.parameters.setdefault('epsilon', 0.002)
 
         self.parameters.setdefault('num_smooth_points', 100)
 
-        if seam_method == 'contact_boundary':
-            # Refinement DOES help this method, contrary to the earlier note
-            # here. Refining costs a little tessellation accuracy on a rim
-            # (0.000mm at refine 0 against 0.068mm at refine 8), but every seam
-            # point is an existing mesh vertex, so a coarse part cannot
-            # represent where the seam begins and ends on its own edge at all.
-            # Measured on the overhang scene: refine 0 finds the 707mm arc and
-            # MISSES the 450mm chord entirely; refine 32 returns one chain of
-            # 1156.60mm against 1156.9mm analytic. Losing 40% of a weld beats
-            # 0.068mm of sagitta. See MESH_MATH_REVIEW.md 0.8.
-            self.parameters.setdefault('refine_iterations', 16)
-            if explicit_refine and self.parameters['refine_iterations'] == 0:
-                logger.warning(
-                    "refine_iterations=0 with seam_method='contact_boundary': "
-                    'seam points are mesh vertices, so a part whose edges are '
-                    'long compared with the joint cannot represent where the '
-                    'seam starts and ends on them, and that portion is '
-                    'silently dropped. Use 16-32 unless the mesh is already '
-                    'fine at the joint.'
-                )
-        else:
-            self.parameters.setdefault('refine_iterations', 32)
+        self.parameters.setdefault('refine_iterations', 16)
+        if explicit_refine and self.parameters['refine_iterations'] == 0:
+            logger.warning(
+                'refine_iterations=0: seam points are mesh vertices, so a part '
+                'whose edges are long compared with the joint cannot represent '
+                'where the seam starts and ends on them, and that portion is '
+                'silently dropped. Use 16-32 unless the mesh is already fine '
+                'at the joint.'
+            )
 
         required = ['work_angle_deg', 'travel_angle_deg', 'gap_mm']
         for param in required:
@@ -189,27 +161,17 @@ class JobPlanner:
         logger.debug(f'Mesh 2: watertight={mesh_secondary.is_watertight}, '
                      f'faces={len(mesh_secondary.faces)}, bounds={mesh_secondary.bounds}')
 
-        if self.parameters['seam_method'] == 'contact_boundary':
-            logger.info('Extracting seams as the contact boundary...')
-            extractor = ContactBoundaryExtractor(
-                mesh_main, mesh_secondary, self.parameters
+        logger.info('Extracting seams as the contact boundary...')
+        extractor = ContactBoundaryExtractor(
+            mesh_main, mesh_secondary, self.parameters
+        )
+        if extractor.route() == 'intersect':
+            raise RuntimeError(
+                'Parts interpenetrate. Interpenetration is out of scope: the '
+                'contact boundary is the buried rim, not the seam. Fix the '
+                'part poses so the parts meet at a surface.'
             )
-            if extractor.route() == 'intersect':
-                logger.warning(
-                    'Parts interpenetrate; the contact boundary is not the '
-                    "seam here. Falling back to seam_method='ridge'."
-                )
-                seams = SeamExtractor(
-                    mesh_main, mesh_secondary, self.parameters
-                ).extract_seams()
-            else:
-                seams = extractor.extract_seams()
-        else:
-            logger.info('Extracting seams from geometry (CGAL)...')
-            seam_extractor = SeamExtractor(
-                mesh_main, mesh_secondary, self.parameters
-            )
-            seams = seam_extractor.extract_seams()
+        seams = extractor.extract_seams()
 
         if not seams:
             logger.warning('No seams detected')
