@@ -12,19 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Classify ordered SeamPoints into geometric segments via a tolerance cascade.
+"""PathCreator - Classify ordered SeamPoints into geometric segments.
 
-The classification is anchored on one physical parameter, the process path
-tolerance: the maximum distance the executed torch path may deviate from the
-true seam. A run of points is a LINE when a straight line stays within that
-tolerance (preferred even when an arc fits "better" — below tolerance the
-welder cannot tell the difference), an ARC when a circle stays within the
-*stricter* arc tolerance, and PTP otherwise.
-
-The arc test is deliberately harsher than the line test (max-residual against
-arc_strictness * tolerance, plus a minimum subtended angle): misclassifying a
-true circle as PTP merely densifies waypoints, while forcing a near-circle
-(e.g. an ellipse) into an arc makes the torch physically leave the seam.
+A run is a LINE when a straight line holds the process path tolerance, an ARC
+when a circle holds the stricter arc tolerance over a minimum angle, and PTP
+otherwise. Line wins ties; forcing a near-circle into an arc leaves the seam,
+while demoting a true arc to PTP only densifies waypoints.
 """
 
 import logging
@@ -41,44 +34,16 @@ from .seam_point import SeamPoint
 
 logger = logging.getLogger(__name__)
 
-# Fallback used only when the caller passes no 'waypoint_spacing_mm'. Matches
-# the planner's own default so PathCreator standalone behaves like the
-# pipeline. See PathCreator.min_contact_run.
-_DEFAULT_WAYPOINT_SPACING_MM = 10.0
-
 
 class PathCreator:
     """Classify ordered SeamPoints into segments wrapped in Seam objects.
 
-    Configuration Parameters:
-        path_tolerance_mm: Max allowed deviation of a fitted primitive from
-                           the seam points, in mm (default 1.0).
-        arc_strictness:    Arc tolerance as a fraction of path tolerance
-                           (default 0.5). Arcs must also subtend at least
-                           min_arc_angle_deg.
-        min_arc_angle_deg: Minimum subtended angle for an arc (default 15).
-        max_line_length:   Maximum line segment length in meters (default 0.5).
-        max_arc_length:    Maximum arc segment arc length in meters (default 0.5).
-        max_ptp_length:    Maximum PtP segment arc length in meters (default 0.1).
+    Args:
+        config: Configuration dict; see PARAMS.md.
     """
 
-    _DEFAULTS = {
-        'path_tolerance_mm': 1.0,
-        'arc_strictness': 0.5,
-        'min_arc_angle_deg': 15.0,
-        'max_line_length': 0.5,
-        'max_arc_length': 0.5,
-        'max_ptp_length': 0.1,
-    }
-
-    _MIN_FIT_POINTS = 4      # fewest points that count as a fitted primitive
-    _ARC_GAIN = 1.5          # arc must consume this multiple of the line run
-
-
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
-        """Args:
-            config: Optional configuration dict (see class docstring).
-        """
+        """Initialize the classifier; see the class docstring for arguments."""
         self._init_config: Dict[str, Any] = config or {}
         self._apply_config(None)
 
@@ -86,37 +51,47 @@ class PathCreator:
         """Merge per-call config > init config > defaults into attributes."""
         cfg = {**self._init_config, **(config or {})}
 
-        def get(key):
-            return cfg.get(key, self._DEFAULTS[key])
-
-        tolerance = get('path_tolerance_mm') * 1e-3
-
-        # 'ridge_jitter' was supplied only by the retired ridge extractor.
-        # jitter = float(cfg.get('ridge_jitter', 0.0))
-        # floor = 2.0 * jitter
-        # if floor > tolerance:
-        #     logger.warning(
-        #         f'path_tolerance {tolerance * 1000:.3f}mm below measured ridge '
-        #         f'jitter; floored to {floor * 1000:.3f}mm'
-        #     )
-        #     tolerance = floor
+        tolerance = float(cfg.get('path_tolerance_mm', 1.0)) * 1e-3
 
         self.tolerance = tolerance
-        self.arc_tolerance = get('arc_strictness') * tolerance
-        self.min_arc_angle = np.radians(get('min_arc_angle_deg'))
-        self.max_line_length = get('max_line_length')
-        self.max_arc_length = get('max_arc_length')
-        self.max_ptp_length = get('max_ptp_length')
+        self.arc_tolerance = float(cfg.get('arc_strictness', 0.5)) * tolerance
+        self.min_arc_angle = np.radians(
+            float(cfg.get('min_arc_angle_deg', 15.0)))
+        self.max_line_length = float(cfg.get('max_line_length', 0.5))
+        self.max_arc_length = float(cfg.get('max_arc_length', 0.5))
+        self.max_ptp_length = float(cfg.get('max_ptp_length', 0.1))
+        self.min_fit_points = int(cfg.get('min_fit_points', 4))
+        self.arc_gain = float(cfg.get('arc_gain', 1.5))
 
-        # Contact-type runs shorter than this are absorbed as flicker (see
-        # _split_on_contact_type). Deliberately NOT its own tuning key: it is
-        # the welding process's own resolution. A run shorter than one
-        # waypoint spacing cannot carry two distinct weld poses, so it is not
-        # a weld segment whatever the geometry says. That makes the threshold
-        # physical and independent of mesh density, unlike a point count.
+        # Not its own key: a run too short to carry two weld poses is not a
+        # weld segment, so the process spacing is the threshold.
         self.min_contact_run = float(
-            cfg.get('waypoint_spacing_mm', _DEFAULT_WAYPOINT_SPACING_MM)
-        ) * 1e-3
+            cfg.get('waypoint_spacing_mm', 10.0)) * 1e-3
+
+        self._validate_config(cfg)
+
+    def _validate_config(self, cfg: Dict[str, Any]) -> None:
+        """Reject config that silently collapses the cascade or divides by zero."""
+        for key, default in (('path_tolerance_mm', 1.0),
+                             ('max_line_length', 0.5),
+                             ('max_arc_length', 0.5),
+                             ('max_ptp_length', 0.1),
+                             ('arc_gain', 1.5),
+                             ('waypoint_spacing_mm', 10.0)):
+            value = float(cfg.get(key, default))
+            if not value > 0.0:
+                raise ValueError(f'{key} must be > 0, got {value}')
+
+        # Zero is a legitimate way to disable each of these, negative is not.
+        for key, default in (('arc_strictness', 0.5),
+                             ('min_arc_angle_deg', 15.0)):
+            value = float(cfg.get(key, default))
+            if value < 0.0:
+                raise ValueError(f'{key} must be >= 0, got {value}')
+
+        if self.min_fit_points < 3:
+            raise ValueError(
+                f'min_fit_points must be >= 3, got {self.min_fit_points}')
 
     def process_path(
         self,
@@ -143,6 +118,21 @@ class PathCreator:
             logger.warning(f'Too few SeamPoints to process: {len(seam_points)}')
             return []
 
+        # The fits below are SVD-based: a single non-finite coordinate raises
+        # LinAlgError from inside LAPACK, naming neither the chain nor the point.
+        raw = [np.asarray(sp.position, dtype=float).ravel()
+               for sp in seam_points]
+        if any(p.shape != (3,) for p in raw):
+            logger.warning('SeamPoint positions are not 3D; skipping chain')
+            return []
+        bad = int(sum(not np.isfinite(p).all() for p in raw))
+        if bad:
+            logger.warning(
+                f'{bad} of {len(raw)} SeamPoint position(s) non-finite; '
+                'skipping chain'
+            )
+            return []
+
         working = list(seam_points)
         if is_closed and len(working) >= 3:
             working.append(working[0])
@@ -161,40 +151,20 @@ class PathCreator:
         logger.info(f'PathCreator produced {len(seams)} Seam object(s)')
         return seams
 
-    # ------------------------------------------------------------- splitting
-
     def _split_on_contact_type(
         self, seam_points: List[SeamPoint]
     ) -> List[List[SeamPoint]]:
-        """Split at (is_edge_joint, refined_side) transitions.
+        """Group the chain into sublists of uniform joint character.
 
-        Runs shorter than `min_contact_run` are classification flicker at
-        ambiguous zones, not genuine joint changes; they are absorbed into
-        their longer neighbour so a flickering handful of points cannot
-        shatter a seam.
-
-        The test is on run LENGTH, not point count. A point count is not a
-        physical quantity: the two meshes of one joint are sampled at wildly
-        different densities and a single chain crosses both. Measured on the
-        overhang scene at refine 40, within the SAME chain:
-
-            plate rim      51 points over 600.00 mm  ->  12.0   mm/point
-            cylinder arc 1755 points over 484.26 mm  ->   0.276 mm/point
-
-        so the old fixed `_MIN_CONTACT_RUN = 3` meant 36 mm on the plate and
-        0.83 mm on the cylinder — a 43x difference in what it physically
-        enforced. It absorbed the plate-side flicker correctly and was
-        effectively disabled on the cylinder, where two 30-point runs
-        spanning 8.01 mm and two 7-point runs spanning 1.66 mm survived as
-        four spurious Seams. Worse, it got weaker as `refine_iterations`
-        rose: every doubling halves the millimetres a point represents.
+        The character is (is_edge_joint, refined_side); a change in either ends
+        a sublist. Runs shorter than `min_contact_run` are flicker at ambiguous
+        zones, not genuine changes, and are absorbed into their longer
+        neighbour. The test is on LENGTH, not point count: one chain crosses
+        both meshes, which sample at very different densities.
         """
-        def contact_type(sp: SeamPoint) -> Tuple[bool, int]:
-            return (sp.on_edge_1 and sp.on_edge_2, sp.refined_side)
-
         runs: List[List[Any]] = []  # [type, count]
         for sp in seam_points:
-            t = contact_type(sp)
+            t = (sp.on_edge_1 and sp.on_edge_2, sp.refined_side)
             if runs and runs[-1][0] == t:
                 runs[-1][1] += 1
             else:
@@ -205,18 +175,15 @@ class PathCreator:
             [0.0], np.cumsum(np.linalg.norm(np.diff(positions, axis=0), axis=1))
         ))
 
-        def run_lengths() -> List[float]:
-            """Arc length spanned by each run, in metres (1-point run -> 0)."""
+        while len(runs) > 1:
+            # Arc length per run, recomputed because absorption mutates `runs`.
             lengths, start = [], 0
             for _, count in runs:
                 end = start + count
                 lengths.append(float(cumulative[end - 1] - cumulative[start]))
                 start = end
-            return lengths
 
-        while len(runs) > 1:
-            lengths = run_lengths()
-            shortest = min(range(len(runs)), key=lambda i: lengths[i])
+            shortest = int(np.argmin(lengths))
             if lengths[shortest] >= self.min_contact_run:
                 break
             neighbours = [i for i in (shortest - 1, shortest + 1)
@@ -242,8 +209,6 @@ class PathCreator:
                 sublists.append(chunk)
         return sublists
 
-    # -------------------------------------------------------- classification
-
     def _classify(self, positions: NDArray) -> List[Tuple[NDArray, str]]:
         """Greedy tolerance-cascade consumer over the ordered positions."""
         n = len(positions)
@@ -253,8 +218,7 @@ class PathCreator:
 
         while k < n:
             remaining = n - k
-            if remaining < self._MIN_FIT_POINTS:
-                # Tail too short to fit: absorb into ptp.
+            if remaining < self.min_fit_points:
                 if ptp_start is None:
                     ptp_start = k
                 k = n
@@ -266,10 +230,10 @@ class PathCreator:
             take_type: Optional[str] = None
             take_end = k
 
-            line_ok = (m_line - k) >= self._MIN_FIT_POINTS
-            arc_ok = (m_arc - k) >= self._MIN_FIT_POINTS
+            line_ok = (m_line - k) >= self.min_fit_points
+            arc_ok = (m_arc - k) >= self.min_fit_points
 
-            if arc_ok and (not line_ok or m_arc - k >= self._ARC_GAIN * (m_line - k)):
+            if arc_ok and (not line_ok or m_arc - k >= self.arc_gain * (m_line - k)):
                 take_type, take_end = 'arc', m_arc
             elif line_ok:
                 take_type, take_end = 'line', m_line
@@ -308,7 +272,7 @@ class PathCreator:
         arc tolerance and subtends at least the minimum arc angle."""
         n = len(positions)
         best = k
-        m = k + self._MIN_FIT_POINTS
+        m = k + self.min_fit_points
         while m <= n:
             fit = self._fit_circle(positions[k:m])
             if fit is None or fit['max_deviation'] > self.arc_tolerance:
@@ -317,8 +281,6 @@ class PathCreator:
                 best = m
             m += 1
         return best
-
-    # ---------------------------------------------------------------- fitting
 
     def _line_max_deviation(self, points: NDArray) -> float:
         """Max perpendicular distance of points from their best-fit line."""
@@ -332,13 +294,9 @@ class PathCreator:
     def _fit_circle(self, points: NDArray) -> Optional[Dict[str, Any]]:
         """Kasa circle fit in the PCA plane, with full 3D max deviation.
 
-        The deviation of each point combines the in-plane radial error and
-        the out-of-plane height, so helical or warped runs cannot pass as
-        planar arcs.
-
-        Returns:
-            Dict with center (3,), radius, max_deviation, subtended (rad),
-            or None on degenerate geometry.
+        Each point's deviation combines the in-plane radial error and the
+        out-of-plane height, so helical or warped runs cannot pass as planar
+        arcs. None on degenerate geometry.
         """
         if len(points) < 3:
             return None
@@ -353,10 +311,7 @@ class PathCreator:
         h = centered @ e3  # out-of-plane height
 
         A = np.column_stack([x, y, np.ones(len(points))])
-        try:
-            params, _, _, _ = np.linalg.lstsq(A, x ** 2 + y ** 2, rcond=None)
-        except np.linalg.LinAlgError:
-            return None
+        params, _, _, _ = np.linalg.lstsq(A, x ** 2 + y ** 2, rcond=None)
 
         a, b = params[0] / 2.0, params[1] / 2.0
         r_sq = a ** 2 + b ** 2 + params[2]
@@ -380,8 +335,6 @@ class PathCreator:
             'subtended': subtended,
         }
 
-    # --------------------------------------------------------------- output
-
     def _split_by_length(
         self, points: NDArray, seg_type: str
     ) -> List[NDArray]:
@@ -390,9 +343,6 @@ class PathCreator:
             'line': self.max_line_length,
             'arc': self.max_arc_length,
         }.get(seg_type, self.max_ptp_length)
-
-        if len(points) < 2:
-            return [points]
 
         step_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
         total = float(np.sum(step_lengths))

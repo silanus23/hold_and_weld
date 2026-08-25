@@ -605,10 +605,25 @@ class ContactBoundaryExtractor:
         wall = incident[~contact[incident]]
         if not len(wall):
             wall = incident
-        weights = mesh.area_faces[wall]
-        normal = weights @ mesh.face_normals[wall]
+
+        # A degenerate face carries zero area AND a zero normal in trimesh, so
+        # an all-degenerate fan weights to zero rather than to a direction; so
+        # does an empty fan, at a vertex no face references.
+        normal = mesh.area_faces[wall] @ mesh.face_normals[wall]
         norm = np.linalg.norm(normal)
-        return normal / norm if norm > 1e-12 else mesh.face_normals[wall[0]]
+        if norm > 1e-12:
+            return normal / norm
+
+        normal = mesh.vertex_normals[vertex]
+        norm = np.linalg.norm(normal)
+        if norm > 1e-12:
+            return normal / norm
+
+        logger.warning(
+            f'mesh_{side}: vertex {vertex} has no usable wall normal; '
+            'emitting a zero normal, the weld pose there will be unusable'
+        )
+        return np.zeros(3)
 
     def _manifold(self, side: int) -> manifold3d.Manifold:
         """Convert one mesh to a manifold3d solid for boolean tests."""
