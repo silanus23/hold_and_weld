@@ -105,9 +105,13 @@ parameters:
   # ── Mesh intersection ──────────────────────────────────────────────────────
   epsilon: 0.002
   # contact_boundary defaults to 16; 40 is the last value measured clean here.
-  # Refinement buys COVERAGE, not precision — per-point deviation is already
-  # flat from 16 onward (median 0.051mm), but a coarse part cannot represent
-  # where the seam ends on its own rim. Cost is ~4x per doubling.
+  #
+  # Refinement now buys PRECISION, not just coverage: the kernel refinement
+  # slides each point onto the half level set of contact coverage, and that
+  # level set approximates the true rim better the more triangles describe
+  # it. Below refine ~20 the kernel is worse than snapping to a vertex; see
+  # PARAMS.md (Sub-vertex refinement) for the measured error curve. Cost is
+  # ~4x per doubling.
   #
   # HARD UPPER BOUND, do not exceed without re-checking: wall row height is
   # 250mm/refine and the bottom row's centroid sits at h/3, so wall faces get

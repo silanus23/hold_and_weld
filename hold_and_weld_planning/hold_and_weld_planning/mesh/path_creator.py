@@ -148,8 +148,60 @@ class PathCreator:
                     if seam is not None:
                         seams.append(seam)
 
+        self._join_consecutive(seams, is_closed)
+
         logger.info(f'PathCreator produced {len(seams)} Seam object(s)')
         return seams
+
+    def _join_consecutive(self, seams: List[Seam], is_closed: bool) -> None:
+        """Extend each seam to where the next one begins, in place.
+
+        A polyline of N points carries N-1 segments, so partitioning the
+        POINTS into k sublists emits only N-k of them: the step across each
+        boundary needs both its endpoints, and the split hands them to
+        different sublists. `_classify` already shares a junction point
+        between consecutive segments WITHIN a sublist; this extends the same
+        rule across sublist boundaries.
+
+        Runs after fitting rather than before: moving a sample between
+        sublists to close the gap feeds a foreign-curve point into that
+        sublist's fit (a plate vertex into an arc, a rim vertex into a line)
+        and fragments the result, whereas an already-fitted segment's extent
+        can be moved without distorting it.
+
+        The joined point is traversed by both seams, exactly as an internal
+        junction already is, and contributes no length to either.
+        """
+        if len(seams) < 2:
+            return
+
+        pairs = list(zip(seams, seams[1:]))
+        if is_closed:
+            pairs.append((seams[-1], seams[0]))
+
+        for seam, following in pairs:
+            points = seam.config.get('smoothed_points')
+            nxt = following.config.get('smoothed_points')
+            if points is None or nxt is None or not len(nxt):
+                continue
+            if np.allclose(points[-1], nxt[0]):
+                continue
+
+            seam.config['smoothed_points'] = np.vstack([points, nxt[0]])
+            # The normals belong to the position, so take the NEXT seam's -
+            # they were evaluated there. WeldPlanner requires one per point.
+            for key in ('normals_main', 'normals_secondary'):
+                have, take = seam.config.get(key), following.config.get(key)
+                if have is None or take is None or not len(take):
+                    continue
+                seam.config[key] = np.vstack([have, take[0]])
+
+            if seam.line_segment is not None:
+                seam.line_segment.end = nxt[0]
+            elif seam.arc_segment is not None:
+                seam.arc_segment.points = seam.config['smoothed_points']
+            elif seam.ptp_segment is not None:
+                seam.ptp_segment.points = seam.config['smoothed_points']
 
     def _split_on_contact_type(
         self, seam_points: List[SeamPoint]
@@ -161,6 +213,12 @@ class PathCreator:
         zones, not genuine changes, and are absorbed into their longer
         neighbour. The test is on LENGTH, not point count: one chain crosses
         both meshes, which sample at very different densities.
+
+        Absorption never crosses a mesh handoff, however short the run. A run
+        that borders two different meshes is a handoff, not flicker, and
+        merging across it relabels the other mesh's points and hands them to
+        a fit shaped by this mesh's geometry. A run with no same-mesh
+        neighbour is left as its own boundary instead.
         """
         runs: List[List[Any]] = []  # [type, count]
         for sp in seam_points:
@@ -183,14 +241,28 @@ class PathCreator:
                 lengths.append(float(cumulative[end - 1] - cumulative[start]))
                 start = end
 
-            shortest = int(np.argmin(lengths))
-            if lengths[shortest] >= self.min_contact_run:
+            # Shortest first, but a run whose neighbours are all on the other
+            # mesh is skipped rather than merged, so the search has to carry on
+            # to the next-shortest instead of stopping at the minimum.
+            absorbed = False
+            for shortest in np.argsort(lengths):
+                shortest = int(shortest)
+                if lengths[shortest] >= self.min_contact_run:
+                    break
+                side = runs[shortest][0][1]
+                neighbours = [i for i in (shortest - 1, shortest + 1)
+                              if 0 <= i < len(runs)
+                              and runs[i][0][1] == side]
+                if not neighbours:
+                    continue
+                absorber = max(neighbours, key=lambda i: lengths[i])
+                runs[absorber][1] += runs[shortest][1]
+                runs.pop(shortest)
+                absorbed = True
                 break
-            neighbours = [i for i in (shortest - 1, shortest + 1)
-                          if 0 <= i < len(runs)]
-            absorber = max(neighbours, key=lambda i: lengths[i])
-            runs[absorber][1] += runs[shortest][1]
-            runs.pop(shortest)
+            if not absorbed:
+                break
+
             # Re-merge neighbours that now share a type.
             i = 1
             while i < len(runs):
@@ -203,10 +275,17 @@ class PathCreator:
         sublists: List[List[SeamPoint]] = []
         cursor = 0
         for _, count in runs:
+            # Sublists are disjoint, so the step across each boundary is lost
+            # here; _join_consecutive repairs it downstream after fitting.
             chunk = seam_points[cursor: cursor + count]
             cursor += count
             if len(chunk) >= 2:
                 sublists.append(chunk)
+            elif sublists:
+                # One point cannot carry a segment of its own; it is a
+                # junction, so it goes to the sublist it follows rather than
+                # being dropped and opening a gap in the path.
+                sublists[-1].extend(chunk)
         return sublists
 
     def _classify(self, positions: NDArray) -> List[Tuple[NDArray, str]]:

@@ -29,13 +29,74 @@ Parameters for the mesh-based seam extractor. Only used when `mode` is `mesh` or
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.refine_iterations` | int | 32 | Mesh subdivision iterations for density increase before intersection |
-| `parameters.inflate` | double | 1.002 | Scale factor applied to secondary mesh to create overlap for CGAL corefinement |
-| `parameters.min_segment_length` | int | 5 | Minimum number of points for a chained path to be kept |
-| `parameters.edge_detection_search_radius_ratio` | double | 0.05 | Search radius for edge detection as ratio of mesh bounding box size |
-| `parameters.edge_detection_threshold` | double | 0.5 | Weighted edge score threshold above which a seam point is classified as edge contact |
-| `parameters.gaussian_sigma_ratio` | double | 0.3 | Width of Gaussian weight window used in edge detection and normal outlier rejection |
-| `parameters.normal_outlier_threshold_std` | double | 2.0 | Standard deviation threshold for normal outlier rejection |
+| `parameters.refine_iterations` | int | 16 | Mesh subdivision iterations, applied per collision primitive |
+
+`refine_iterations` is bounded from above by the contact test, per PART and set
+by the THINNEST one: a wall row is `thickness/refine` high and its bottom
+centroid sits at a third of that, so once `thickness/(3*refine) <= epsilon` the
+wall is wrongly marked as contact and the seam collapses. At `epsilon` 2mm a
+250mm wall breaks past refine 41.7; measured clean at 40, broken at 42. Raising
+refinement requires lowering epsilon in step.
+
+Note it subdivides each collision primitive, so parts do not end up equally
+dense: at refine 40 a box (12 base faces) reaches 19,200 while a 128-segment
+cylinder reaches 812,800.
+
+### Contact boundary
+
+The seam extractor proper. `epsilon` is the central tolerance here as well as
+in OCCT mode; the rest are mesh-derived multipliers or candidate counts, so
+they do not need changing when part size changes.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `parameters.epsilon` | double | 0.002 | Face is in contact when its centroid is within this of the other surface [m]. Also the fit-up gap the parts are allowed to stand off by. |
+| `parameters.edge_angle_min_deg` | double | 0.0057 | Dihedral angle above which a mesh edge counts as a real part edge [deg]. Near zero by design, so a tessellated curved surface's facet edges all qualify. |
+| `parameters.near_contact_edge_fraction` | double | 0.1 | How far off the other mesh a sharp edge may sit and still count as seam, as a fraction of this mesh's median edge length, on top of `epsilon`. Guards against welding a part's own edges away from the joint. |
+| `parameters.stitch_gap_factor` | double | 3.0 | Endpoint gap below which two chain pieces are joined, as a multiple of the sampling density local to the two ends being joined. |
+| `parameters.min_loop_points` | int | 4 | Fewest points that can constitute a loop. Also the window used for that end-local density. |
+| `parameters.sharp_edge_candidates` | int | 32 | Sharp edges considered per query, taken by nearest midpoint, before exact point-to-segment distance. |
+| `parameters.closest_face_candidates` | int | 12 | Faces considered per point when finding the nearest surface, taken by nearest centroid. |
+| `parameters.closest_vertex_candidates` | int | 4 | Vertices whose incident faces are added to that candidate set, so a face whose centroid is far but whose body is near is not missed. |
+| `parameters.eps_stability_factors` | list | [0.75, 1.5] | Multipliers on `epsilon` used to probe whether the contact boundary is stable against it. Must be positive and not 1.0. |
+| `parameters.interpenetration_volume_m3` | double | 1e-12 | Intersection volume above which the parts are treated as interpenetrating rather than touching, which is out of scope [m^3]. |
+
+#### Sub-vertex refinement
+
+Seam points come out of the extractor as mesh vertices, so the seam is only as
+fine as the tessellation and a contact boundary falling between two vertices is
+lost. These control the field that recovers it: around each point the other
+mesh's triangles are weighted by `area x (1-t^2)^3`, `t = d/rho`, and again by
+how squarely each opposes the owner's own mating surface. Normalised by the
+full-plane weight `pi*rho^2/4` that reads 1 inside the contact, 0 outside and
+1/2 on the boundary, so the boundary is the half level set and can be solved
+between vertices.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `parameters.kernel_radius_factor` | double | 1.0 | Kernel radius as a multiple of the local mean edge length, taken as `max(owner mesh, other mesh)` at the point |
+| `parameters.coverage_bisection_steps` | int | 20 | Bisection steps used to land a point on the half level set |
+
+`kernel_radius_factor` multiplies the **local mean** edge, not a global one:
+global mean and median both understate the scale at the joint by 30-40% here,
+and mean rather than median because at a vertex fan most incident edges are
+short, so the median tracks the degenerate cluster (0.414mm against a mean of
+2.314mm on this mesh). The `max` of the two meshes is required, not a
+refinement: the coverage sum is a centroid-sampled integral over the *other*
+mesh, and a radius below that mesh's triangle size caught zero centroids for
+962 of 1829 points, leaving survival to be decided by whether a face centroid
+happened to sit nearby.
+
+Keep the factor small. Measured position error against analytic: k=1 -> 0.07mm,
+k=2 -> 0.54mm, k=4 -> 1.85mm, as a larger neighbourhood starts seeing the rim's
+curvature and the local half-plane assumption breaks.
+
+This improves with refinement, unlike the vertex lattice it replaces: measured
+error falls 4.31mm -> 0.065mm going from `refine_iterations` 16 -> 40, because
+the level set is a better approximation of the true rim the more triangles
+describe it. Below about refine 20 it is *worse* than snapping to vertices, and
+where the mesh is too coarse for the half crossing to bracket at all the point
+is left on its vertex, so a coarse part degrades to the old behaviour.
 
 ## OCCT
 
@@ -43,62 +104,34 @@ Parameters for the OCCT-based seam extractor. Only used when `mode` is `occt` or
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.epsilon` | double | 1e-3 | Distance tolerance for face contact detection and surface normal evaluation [m] |
+| `parameters.epsilon` | double | 1e-3 | Distance tolerance for face-pair proximity [m]. Shared with mesh mode, see Contact boundary above. |
 
 ## Path Creator
 
-Optional tuning parameters for geometric path processing. Applied to mesh pipeline only.
+Classifies the ordered seam points into LINE, ARC and PTP segments. Every
+parameter below is read by `mesh/path_creator.py`; all are optional.
 
-### Outlier Removal
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `parameters.outlier_std_threshold` | double | 5.0 | Standard deviations above mean inter-point distance to classify a point as outlier |
-
-### Corner Detection
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `parameters.min_sub_path_length` | int | 10 | Minimum points per sub-path after corner splitting |
-| `parameters.min_points_for_corner_detection` | int | 20 | Minimum total points required to attempt corner detection |
-| `parameters.corner_min_angle` | double | 25.0 | Minimum angle change to detect a corner [deg] |
-| `parameters.corner_angle_window` | int | 10 | Window size for angle-based corner detection [points] |
-| `parameters.corner_curvature_window` | int | 10 | Window size for curvature-based corner detection [points] |
-| `parameters.corner_curvature_threshold` | double | 0.8 | Normalized curvature threshold for corner detection. Higher = sharper corners only |
-| `parameters.corner_min_agreement` | int | 1 | Minimum number of detection methods that must agree on a corner |
-| `parameters.corner_tolerance` | int | 5 | Maximum index distance between detections to group as same corner [points] |
-| `parameters.corner_filter_window` | int | 5 | Window size for local maxima filtering of corner candidates [points] |
-
-### Arc Merging
+The cascade, in order: a run is a LINE if a straight line holds
+`path_tolerance_mm`; an ARC if a circle holds the stricter
+`arc_strictness x path_tolerance_mm` AND subtends at least `min_arc_angle_deg`
+AND consumes `arc_gain` times the run a line would; otherwise PTP. The
+asymmetry is deliberate - a false PTP only densifies waypoints, a false arc
+leaves the seam.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.arc_radius_tolerance` | double | 0.05 | Maximum radius difference to merge consecutive arcs [m] |
-| `parameters.arc_merge_num_points` | int | 100 | Number of points for smoothed merged arc |
+| `parameters.path_tolerance_mm` | double | 1.0 | Master fit tolerance: max deviation from a fitted line [mm] |
+| `parameters.arc_strictness` | double | 0.5 | Arc tolerance as a fraction of `path_tolerance_mm`. 0 disables arcs. |
+| `parameters.min_arc_angle_deg` | double | 15.0 | Below this subtended angle a run is not worth calling an arc [deg] |
+| `parameters.arc_gain` | double | 1.5 | An arc must consume this multiple of the run a line would, or the line wins |
+| `parameters.min_fit_points` | int | 4 | Fewest points a segment may be fitted from. Must be >= 3. |
+| `parameters.max_line_length` | double | 0.5 | Hard split length for a line, not geometric [m] |
+| `parameters.max_arc_length` | double | 0.5 | Hard split length for an arc [m]. Why a 706.79mm semicircle emerges as two arcs of 353.39mm. |
+| `parameters.max_ptp_length` | double | 0.1 | Hard split length for a PTP run [m] |
 
-### Line Merging
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `parameters.line_angle_tolerance_deg` | double | 10.0 | Maximum angle difference to merge consecutive lines [deg] |
-| `parameters.line_merge_max_error` | double | 0.001 | Maximum fit error to allow line merge |
-| `parameters.line_merge_max_iterations` | int | 20 | Maximum iterations for iterative line merging |
-
-### Small Line Absorption
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `parameters.min_line_size` | int | 70 | Minimum line segment size to keep separate from adjacent arcs [points] |
-| `parameters.line_absorption_max_error` | double | 0.01 | Maximum fit error to absorb a small line into an adjacent arc |
-| `parameters.line_absorption_max_iterations` | int | 10 | Maximum iterations for absorption process |
-
-### First/Last Segment Merging
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `parameters.first_last_angle_tolerance` | double | 10.0 | Angle tolerance for merging first and last line segments [deg] |
-| `parameters.first_last_radius_tolerance` | double | 0.05 | Radius tolerance for merging first and last arc segments [m] |
-| `parameters.first_last_gap_threshold` | double | 0.01 | Maximum spatial gap between first and last segment endpoints to allow merge [m] |
+`waypoint_spacing_mm` (see Planner) is also read here: a run too short to carry
+two weld poses is not a segment, so the process spacing doubles as the minimum
+length of a joint-character run before it is absorbed into its neighbour.
 
 ## Planned Parameters
 
@@ -106,7 +139,7 @@ These parameters exist in the codebase but are not yet fully exposed or stabiliz
 
 | Parameter | Description |
 |---|---|
-| `parameters.epsilon` | Currently named inconsistently between `JobPlanner` (epsilon) and `SeamExtractor` (inflate/tolerance). Will be unified and properly namespaced in a future version. |
+| `parameters.epsilon` | One key serves two jobs in mesh mode: the contact test in `_boundary_edges` and the fit-up gap. Splitting them is open work. |
 | `parameters.line_error_threshold` | Line fit error threshold. Not yet implemented or exposed to YAML configuration. |
 | `parameters.circle_error_threshold` | Circle fit error threshold. Not yet implemented or exposed to YAML configuration. |
 | `parameters.angle_threshold_deg` | Angle threshold in degrees. Not yet implemented or exposed to YAML configuration. |

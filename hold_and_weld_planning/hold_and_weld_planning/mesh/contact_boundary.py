@@ -22,44 +22,16 @@ meshes, then decide per POINT which mesh carries the edge there. Ownership is
 per point because it alternates wherever a part overhangs.
 """
 
-# TODO: (@silanus23) Solve the transition points
-# Every seam point is an existing mesh vertex, so the seam is only as fine as
-# the tessellation. Where a part edge is much longer than the contact region
-# crossing it, the transition is simply not in the mesh — an 800mm plate rim
-# carrying a 206mm chord has no vertex where the chord starts, and no tolerance
-# recovers it. The crossing has to be solved and the edge split there.
-#
-# A second mechanism damages the same zone: the on_edge flags flicker there,
-# because epsilon answers two different questions and the second is marginal
-# by construction.
-#
-#   _sharp_boundary SELECTS edges within epsilon + slack of the other mesh
-#                   (2.000 + 0.1 * 6.25 median edge = 2.625mm here)
-#   _seam_points    TESTS points against those same edges at epsilon (2.000mm)
-#
-# The edges were chosen for sitting near 2.6mm, so the distances thresholded
-# at 2.0mm cluster on the threshold. Measured on this scene:
-#
-#   side 1: distance to sharp edge 1.88-2.09mm across idx 57..1872,
-#           26 points within +-20% of the threshold,
-#           4 of 5 raw flips are +-0.1mm wobbles across the line
-#   side 2: 0 points near the threshold; its 2 flips are 1.3 -> 9.5mm
-#
-# Only the side sharing the constant flickers. 8 contact-type flips reach
-# PathCreator as 9 runs where the geometry has 2, and the min_contact_run
-# absorption in _split_on_contact_type exists to glue them back together —
-# the order-dependent cascade that leaves the 1.3mm and 6.9mm stubs.
-#
-# Sweeping epsilon cannot fix it: selection and test move together, which is
-# why the seam count held at 8 across the near_contact_edge_fraction sweep in
-# the config. The fix is to stop sharing the constant — give the on_edge test
-# its own threshold above the selection bound — and only then smooth by arc
-# length if anything still flickers. Hysteresis is the wrong tool: a seam has
-# no canonical traversal direction.
-#
-# The two are independent: inserting the missing crossing point does not make
-# the flags less marginal, and separating the thresholds does not create the
-# point. Either alone shrinks the stubs; both are needed to remove them.
+# TODO: (@silanus23) Decide is_edge_joint comparatively
+# What survives of the flag problem. `_owner` is already threshold-free - it
+# compares which mesh's edge is nearer - while on_edge still tests an absolute
+# epsilon. The comparative form is that edge-to-edge is where that comparison
+# TIES, both parts terminating on the same curve. On a real butt joint the
+# loser-distance histogram would show a cluster pinned at the tessellation
+# floor, well separated from the rest, and that separation is the test. This
+# scene has no edge-to-edge geometry to validate it, and weld_planner switches
+# the entire torch pose on is_edge_joint, so it needs a butt-joint part before
+# anyone leans on it.
 
 # TODO: (@silanus23) Weigh ownership by sharpness, not proximity alone
 # _owner picks whichever mesh has the NEAREST sharp edge, and every edge above
@@ -126,19 +98,29 @@ class ContactBoundaryExtractor:
                 'eps_stability_factors must be a list of probe factors, '
                 f'e.g. [0.75, 1.5]; got {factors!r}'
             )
+        self.eps_stability_tolerance = float(
+            self.params.get('eps_stability_tolerance', 0.25))
         self.closest_face_candidates = int(
             self.params.get('closest_face_candidates', 12))
         self.closest_vertex_candidates = int(
             self.params.get('closest_vertex_candidates', 4))
         self.min_loop_points = int(self.params.get('min_loop_points', 4))
-        self.sharp_edge_max_samples = int(
-            self.params.get('sharp_edge_max_samples', 256))
+        self.sharp_edge_candidates = int(
+            self.params.get('sharp_edge_candidates', 32))
+        self.kernel_radius_factor = float(
+            self.params.get('kernel_radius_factor', 1.0))
+        self.coverage_bisection_steps = int(
+            self.params.get('coverage_bisection_steps', 20))
         self._validate_params()
         self.mesh = {1: mesh_1, 2: mesh_2}
 
         self._distance_cache: Dict[int, NDArray] = {}
         self._dihedral_cache: Dict[int, Dict[Tuple[int, int], float]] = {}
+        self._sharp_edge_cache: Dict[int, Optional[Tuple[NDArray, NDArray]]] = {}
         self._sharp_tree_cache: Dict[int, Optional[KDTree]] = {}
+        self._centroid_tree_cache: Dict[int, KDTree] = {}
+        self._vertex_tree_cache: Dict[int, KDTree] = {}
+        self._edge_scale_cache: Dict[int, NDArray] = {}
         self._route_cache: Optional[str] = None
 
     def _validate_params(self) -> None:
@@ -155,11 +137,21 @@ class ContactBoundaryExtractor:
             ('epsilon', self.epsilon),
             ('closest_face_candidates', self.closest_face_candidates),
             ('closest_vertex_candidates', self.closest_vertex_candidates),
+            ('kernel_radius_factor', self.kernel_radius_factor),
         ):
             if not value > 0:
                 raise ValueError(f'{key} must be > 0, got {value}')
 
+        # One step halves the bracket; below a handful the level set is no
+        # better located than the vertices it exists to escape.
+        if self.coverage_bisection_steps < 4:
+            raise ValueError(
+                'coverage_bisection_steps must be >= 4, got '
+                f'{self.coverage_bisection_steps}')
+
         # Zero is a legitimate way to disable each of these, negative is not.
+        # eps_stability_tolerance at 0 warns on any movement at all, which is
+        # the behaviour this replaced.
         # edge_angle_min is reported in the degrees the user wrote, not the
         # radians it is stored as.
         for key, value in (
@@ -167,6 +159,7 @@ class ContactBoundaryExtractor:
             ('near_contact_edge_fraction', self.near_contact_fraction),
             ('stitch_gap_factor', self.stitch_gap_factor),
             ('interpenetration_volume_m3', self.interpenetration_volume),
+            ('eps_stability_tolerance', self.eps_stability_tolerance),
         ):
             if value < 0.0:
                 raise ValueError(f'{key} must be >= 0, got {value}')
@@ -176,12 +169,12 @@ class ContactBoundaryExtractor:
             raise ValueError(
                 f'min_loop_points must be >= 3, got {self.min_loop_points}')
 
-        # `steps` in _sharp_edge_tree has a floor of 2, so a smaller cap would
-        # not cap anything.
-        if self.sharp_edge_max_samples < 2:
+        # The nearest sharp edge is found among the nearest edge MIDPOINTS, so
+        # one candidate would trust the midpoint ordering completely.
+        if self.sharp_edge_candidates < 2:
             raise ValueError(
-                'sharp_edge_max_samples must be >= 2, got '
-                f'{self.sharp_edge_max_samples}')
+                'sharp_edge_candidates must be >= 2, got '
+                f'{self.sharp_edge_candidates}')
 
         if not self.eps_stability_factors:
             raise ValueError(
@@ -298,6 +291,10 @@ class ContactBoundaryExtractor:
 
         chains: List[Tuple[List[SeamPoint], bool]] = []
         for positions, is_closed in self._stitch(pieces):
+            # Off the vertex lattice before anything is read off the points:
+            # the attributes below are all evaluated AT a position, so they
+            # have to be evaluated at the refined one.
+            positions = self._refine_positions(positions, marked)
             if len(positions) < 2:
                 continue
             chains.append((self._seam_points(positions, marked), is_closed))
@@ -390,11 +387,15 @@ class ContactBoundaryExtractor:
         return [edge for edge, ok in zip(sharp, keep) if ok]
 
     def _validate_epsilon(self, side: int, epsilon: float) -> None:
-        """Warn when epsilon is not on the plateau where the boundary is fixed.
+        """Report how far the contact boundary moves when epsilon is nudged.
 
         Measured rather than modelled: extraction is repeated at neighbouring
-        epsilon values and the boundary vertex set compared. On the plateau the
-        set is identical.
+        epsilon values and the size of the boundary compared, per direction,
+        because the two fail differently and only one is dangerous - too
+        small reads the parts as apart, too large climbs the wall at
+        `thickness / (3 * epsilon)` face rows. Reported as a relative change
+        rather than exact vertex-set equality, since a single vertex moving
+        anywhere would otherwise trip it on every run of a valid config.
         """
         _, reference = self._boundary_edges(side, epsilon)
         base = {v for edge in reference for v in edge}
@@ -407,24 +408,42 @@ class ContactBoundaryExtractor:
             return
 
         counts = [f'{epsilon * 1000:.2f}mm -> {len(base)}']
-        stable = True
-
+        moved = {False: 0.0, True: 0.0}      # keyed by "probe was upward"
         for factor in self.eps_stability_factors:
             _, probe = self._boundary_edges(side, epsilon * factor)
             vertices = {v for edge in probe for v in edge}
-            counts.append(f'{epsilon * factor * 1000:.2f}mm -> {len(vertices)}')
-            if vertices != base:
-                stable = False
+            change = abs(len(vertices) - len(base)) / len(base)
+            counts.append(
+                f'{epsilon * factor * 1000:.2f}mm -> {len(vertices)} '
+                f'({change * 100:+.0f}%)'
+            )
+            moved[factor > 1.0] = max(moved[factor > 1.0], change)
 
         message = f'mesh_{side} boundary vertices: ' + ', '.join(counts)
-        if stable:
-            logger.info(f'epsilon is on the stable plateau ({message})')
+        limit = self.eps_stability_tolerance
+        unstable = {up for up, change in moved.items() if change >= limit}
+
+        # Severity is about whether a SAFE BAND exists, not about whether some
+        # probe moved. Sensitivity in ONE direction means epsilon sits near
+        # that end of its band - true, worth printing, but nothing to act on,
+        # and warning about it every run is what teaches the reader to skip
+        # these lines. BOTH directions moving means there is no band at all.
+        if not unstable:
+            logger.info(f'epsilon is stable within {limit * 100:.0f}% '
+                        f'({message})')
+        elif len(unstable) == 1:
+            edge = 'upper' if unstable.pop() else 'lower'
+            logger.info(
+                f'epsilon={epsilon * 1000:.2f}mm sits near the {edge} end of '
+                f'its band ({message}); stable the other way, so this is '
+                'headroom rather than a fault'
+            )
         else:
             logger.warning(
-                f'epsilon={epsilon * 1000:.2f}mm is NOT on a stable plateau '
-                f'({message}). Below the fit-up gap the parts read as apart; '
-                'above ~half the transverse face size the boundary climbs the '
-                'wall. Re-check epsilon against MESH_MATH_REVIEW.md 0.6.'
+                f'epsilon={epsilon * 1000:.2f}mm has no stable band - the '
+                f'contact boundary moves either way it is nudged ({message}). '
+                'Too small and the parts read as apart; too large and the '
+                'boundary climbs the wall instead of following the joint.'
             )
 
     def _loops(
@@ -562,12 +581,21 @@ class ContactBoundaryExtractor:
         result = [(p, True) for p, closed in pieces if closed]
 
         def span(piece: List[NDArray]) -> float:
-            """Local sampling density of one piece."""
+            """Measure the sampling density local to the ENDS of one piece.
+
+            Measured at the ends, not pooled over the whole piece: a stitched
+            chain crosses meshes sampled at very different densities, so a
+            pooled median is dominated by the finer mesh and judges a coarse
+            end's gap far too tight. The window is min_loop_points, already
+            this class's statement of how many points mean anything.
+            """
             if len(piece) < 2:
                 return 0.0
-            return float(np.median(
-                np.linalg.norm(np.diff(np.asarray(piece), axis=0), axis=1)
-            ))
+            array = np.asarray(piece)
+            window = min(self.min_loop_points, len(array))
+            head = np.linalg.norm(np.diff(array[:window], axis=0), axis=1)
+            tail = np.linalg.norm(np.diff(array[-window:], axis=0), axis=1)
+            return float(max(np.median(head), np.median(tail)))
 
         # No early return for a lone open piece: the merge loop below already
         # no-ops on one piece, and that piece still has to reach the closure
@@ -621,6 +649,322 @@ class ContactBoundaryExtractor:
             result.append((array, closed))
         return result
 
+    def _coverage(
+        self, side: int, point: NDArray, rho: float, mating: NDArray
+    ) -> float:
+        """Facing-weighted fraction of the other mesh's surface around a point.
+
+        Reads 1 where the other mesh's mating surface fills the neighbourhood,
+        0 where it is absent, and 1/2 on the boundary between them, because a
+        plane through the point integrates to half of the full-plane weight
+        `pi*rho^2/4` it is normalised by.
+
+        `mating` is the owner's own contact-surface normal, and weighting each
+        triangle by how squarely it opposes that is not a refinement - it is
+        what makes the measure exist. The other part's WALL stands ON the joint
+        rather than lying against it, and it is well inside rho: unweighted,
+        it fills the neighbourhood on BOTH sides of the boundary, the measure
+        reads about 1 either way, and there is no half crossing to find.
+        """
+        return float(self._coverage_terms(side, point, rho, mating).sum())
+
+    def _coverage_terms(
+        self, side: int, point: NDArray, rho: float, mating: NDArray
+    ) -> NDArray:
+        """Return the per-triangle normalised contributions `_coverage` sums.
+
+        Separate so the granularity of the measure is inspectable: the integral
+        is sampled per triangle, so one straddling the boundary is counted
+        whole or not at all. Where rho is barely wider than a triangle a single
+        term reaches 0.499, which is why that granularity cannot serve as a
+        tolerance on the half - it is the same size as the thing it would be
+        qualifying.
+        """
+        if not rho > 0.0:
+            return np.zeros(0)
+        other_side = 2 if side == 1 else 1
+        other = self.mesh[other_side]
+        index = self._centroid_tree(other_side).query_ball_point(point, rho)
+        if not len(index):
+            return np.zeros(0)
+        index = np.asarray(index, dtype=np.int64)
+        t = np.linalg.norm(other.triangles_center[index] - point, axis=1) / rho
+        facing = np.clip(-(other.face_normals[index] @ mating), 0.0, None)
+        weight = (1.0 - t ** 2) ** 3 * other.area_faces[index] * facing
+        return weight / (np.pi * rho ** 2 / 4.0)
+
+    def _slide_to_boundary(
+        self,
+        position: NDArray,
+        direction: NDArray,
+        side: int,
+        rho: float,
+        mating: NDArray,
+    ) -> Optional[NDArray]:
+        """Slide a point along `direction` onto the half level set of coverage.
+
+        Searches BOTH ways along `direction`, since the run end is not
+        guaranteed to start inside - it can sit just past the boundary and
+        still belong on the level set, only backwards.
+
+        None when neither span brackets the crossing: the mesh is too coarse
+        there to resolve a boundary, or the point is not near one. The caller
+        then leaves the point on its vertex, the pre-refinement behaviour.
+        """
+        if not rho > 0.0:
+            return None
+
+        here = self._coverage(side, position, rho, mating)
+        ahead = self._coverage(side, position + rho * direction, rho, mating)
+        if here >= 0.5 > ahead:
+            within, beyond = 0.0, rho
+        else:
+            behind = self._coverage(
+                side, position - rho * direction, rho, mating)
+            if behind >= 0.5 > here:
+                within, beyond = -rho, 0.0
+            else:
+                return None
+
+        # Invariant: coverage at `within` is >= 1/2 and at `beyond` is < 1/2.
+        for _ in range(self.coverage_bisection_steps):
+            middle = 0.5 * (within + beyond)
+            if self._coverage(
+                side, position + middle * direction, rho, mating
+            ) >= 0.5:
+                within = middle
+            else:
+                beyond = middle
+        return position + 0.5 * (within + beyond) * direction
+
+    def _refine_positions(
+        self,
+        positions: NDArray,
+        marked: Dict[int, Tuple[NDArray, List[Tuple[int, int]]]],
+    ) -> NDArray:
+        """Move seam points off the vertex lattice onto the true contact boundary.
+
+        Every seam point is an existing mesh vertex, so the seam is only as
+        fine as the tessellation: where a part edge is much longer than the
+        contact region crossing it, the true boundary falls between vertices
+        and is simply not in the input.
+
+        `_coverage` supplies a per-point field that is 1 inside the contact, 0
+        outside and 1/2 on the boundary, so the boundary is its half level set
+        and can be solved between vertices. The field CLASSIFIES each point,
+        it does not displace it: a point inside the contact already lies on
+        the seam and does not move, a point past the boundary is dropped, and
+        only the surviving points at each run's ends have a position to solve
+        for, sliding along the chain onto the level set.
+        """
+        owner, _ = self._owner(positions)
+        rho = np.zeros(len(positions))
+        mating = np.zeros((len(positions), 3))
+        for side in (1, 2):
+            rows = np.nonzero(owner == side)[0]
+            if not len(rows):
+                continue
+            other = 2 if side == 1 else 1
+            _, nearest = self._vertex_tree(side).query(positions[rows])
+            _, across = self._vertex_tree(other).query(positions[rows])
+
+            # rho has to span the mesh being INTEGRATED, not only the one that
+            # owns the point: the coverage sum is a centroid-sampled integral
+            # over the OTHER mesh, so a radius below that mesh's triangle size
+            # can catch no centroid at all (reads 0) or exactly one and count
+            # its whole area (reads past 3) - decided by the other part's
+            # triangulation rather than by any geometry.
+            rho[rows] = self.kernel_radius_factor * np.maximum(
+                self._vertex_edge_scale(side)[nearest],
+                self._vertex_edge_scale(other)[across],
+            )
+            contact = marked[side][0]
+            mating[rows] = [
+                self._contact_normal(side, int(v), contact) for v in nearest
+            ]
+
+        coverage = np.array([
+            self._coverage(int(owner[i]), positions[i], rho[i], mating[i])
+            for i in range(len(positions))
+        ])
+
+        # A point lying ON the boundary reads exactly a half BY CONSTRUCTION,
+        # so this test is a coin flip for that one point, settled by sampling
+        # noise. Harmless: the slide below reaches the same level set from
+        # either neighbour regardless of which way the flip goes. A margin
+        # on this threshold was tried and reverted - it made the granularity
+        # of a single triangle term the tolerance, which fragments the seam
+        # once rho is close to a triangle's size.
+        inside = coverage >= 0.5
+
+        # A field that rejects nearly everything is not reporting geometry, it
+        # is reporting that rho or the mating normal is wrong here. Dropping
+        # the seam on that basis would be worse than the tessellation error
+        # this exists to remove.
+        if int(inside.sum()) < self.min_loop_points:
+            logger.warning(
+                f'Contact coverage puts only {int(inside.sum())} of '
+                f'{len(positions)} seam point(s) inside the contact; leaving '
+                'the chain on its mesh vertices. The mesh is probably too '
+                'coarse at the joint for the half level set to exist.'
+            )
+            return positions
+
+        inside = self._reject_holes(inside, positions, rho)
+
+        keep = np.nonzero(inside)[0]
+        refined = positions[keep].copy()
+
+        # Contiguous kept stretches. Their outer ends are where the contact
+        # actually stops, so those are the points with a boundary to find.
+        runs: List[Tuple[int, int]] = []
+        start = 0
+        for j in range(1, len(keep) + 1):
+            if j == len(keep) or keep[j] != keep[j - 1] + 1:
+                runs.append((start, j - 1))
+                start = j
+
+        moved = 0
+        for first, last in runs:
+            if last <= first:
+                continue
+            for outer, inner in ((first, first + 1), (last, last - 1)):
+                direction = refined[outer] - refined[inner]
+                length = float(np.linalg.norm(direction))
+                if length < 1e-12:
+                    continue
+                landed = self._slide_to_boundary(
+                    refined[outer], direction / length,
+                    int(owner[keep[outer]]), rho[keep[outer]],
+                    mating[keep[outer]],
+                )
+                if landed is not None:
+                    moved += 1
+                    refined[outer] = landed
+
+        dropped = len(positions) - len(keep)
+        logger.info(
+            f'Refined {len(positions)} seam point(s) against the contact half '
+            f'level set: dropped {dropped} lying past the boundary, slid '
+            f'{moved} end point(s) onto it'
+        )
+        return refined
+
+    def _reject_holes(
+        self, inside: NDArray, positions: NDArray, rho: NDArray
+    ) -> NDArray:
+        """Restore interior drop blocks that are holes rather than corners.
+
+        A dropped block at a chain END is an ordinary trim. A block in the
+        MIDDLE splits the chain, and the ends either side are then slid inward
+        onto the level set - which is right at a crossing and catastrophic
+        anywhere else, because it carves a stretch out of the middle of a weld.
+
+        The two cases are geometrically distinct. At a real crossing the seam
+        leaves and re-enters the contact at the SAME place, so the surviving
+        points either side sit almost on top of each other. A coverage
+        failure mid-seam leaves a hole, so its ends are as far apart as the
+        stretch that was lost.
+
+        So: farther apart than the analysis scale means it is not a corner.
+        Keep those points and say so, rather than trusting a field that has
+        evidently gone wrong there.
+        """
+        blocks: List[Tuple[int, int]] = []
+        start: Optional[int] = None
+        for i, ok in enumerate(inside):
+            if not ok and start is None:
+                start = i
+            elif ok and start is not None:
+                blocks.append((start, i - 1))
+                start = None
+        if start is not None:
+            blocks.append((start, len(inside) - 1))
+
+        restored = 0
+        for first, last in blocks:
+            if first == 0 or last == len(inside) - 1:
+                continue                      # a chain end, so an ordinary trim
+            span = float(np.linalg.norm(positions[last + 1] - positions[first - 1]))
+            scale = float(np.max(rho[first:last + 1]))
+            if span <= scale:
+                continue                      # ends meet: a crossing
+            inside[first:last + 1] = True
+            restored += last - first + 1
+            logger.warning(
+                f'Coverage drops {last - first + 1} point(s) mid-chain whose '
+                f'surviving ends are {span * 1000:.2f}mm apart, past the '
+                f'{scale * 1000:.2f}mm analysis scale; that is a hole, not a '
+                'corner, so the points are kept. Suspect rho or the mating '
+                'normal there.'
+            )
+
+        if restored:
+            logger.info(f'Restored {restored} point(s) over {len(blocks)} '
+                        'drop block(s)')
+        return inside
+
+    def _contact_normal(
+        self, side: int, vertex: int, contact: NDArray
+    ) -> NDArray:
+        """Area-weighted normal of the CONTACT faces meeting a vertex.
+
+        The mating surface, where `_wall_normal` takes the faces rising out of
+        the joint. Selected by contact membership, so the two are complements
+        and neither can tie.
+        """
+        mesh = self.mesh[side]
+        incident = mesh.vertex_faces[vertex]
+        incident = incident[incident >= 0]
+        mating = incident[contact[incident]]
+        if not len(mating):
+            mating = incident
+
+        normal = mesh.area_faces[mating] @ mesh.face_normals[mating]
+        norm = np.linalg.norm(normal)
+        if norm > 1e-12:
+            return normal / norm
+        return np.zeros(3)
+
+    def _vertex_edge_scale(self, side: int) -> NDArray:
+        """Mean length of the edges meeting each vertex of one mesh.
+
+        The local analysis scale, and mean rather than median deliberately: at
+        a vertex fan most incident edges are short and only a few represent
+        the surface, so the median tracks that degenerate cluster instead of
+        the surface scale.
+        """
+        if side in self._edge_scale_cache:
+            return self._edge_scale_cache[side]
+
+        mesh = self.mesh[side]
+        edges = mesh.edges_unique
+        length = np.linalg.norm(
+            mesh.vertices[edges[:, 0]] - mesh.vertices[edges[:, 1]], axis=1)
+
+        total = np.zeros(len(mesh.vertices))
+        count = np.zeros(len(mesh.vertices))
+        for column in (0, 1):
+            np.add.at(total, edges[:, column], length)
+            np.add.at(count, edges[:, column], 1.0)
+
+        scale = total / np.maximum(count, 1.0)
+        self._edge_scale_cache[side] = scale
+        return scale
+
+    def _centroid_tree(self, side: int) -> KDTree:
+        """KD-tree over one mesh's triangle centroids."""
+        if side not in self._centroid_tree_cache:
+            self._centroid_tree_cache[side] = KDTree(
+                self.mesh[side].triangles_center)
+        return self._centroid_tree_cache[side]
+
+    def _vertex_tree(self, side: int) -> KDTree:
+        """KD-tree over one mesh's vertices."""
+        if side not in self._vertex_tree_cache:
+            self._vertex_tree_cache[side] = KDTree(self.mesh[side].vertices)
+        return self._vertex_tree_cache[side]
+
     def _seam_points(
         self,
         positions: NDArray,
@@ -644,7 +988,7 @@ class ContactBoundaryExtractor:
             # From the faces NOT in contact, so it points along the surface
             # rising out of the joint rather than into it.
             contact = marked[side][0]
-            _, nearest = KDTree(self.mesh[side].vertices).query(positions[rows])
+            _, nearest = self._vertex_tree(side).query(positions[rows])
             normal_wall[rows] = [
                 self._wall_normal(side, int(v), contact) for v in nearest
             ]
@@ -652,12 +996,7 @@ class ContactBoundaryExtractor:
         # Edge-to-edge where BOTH parts terminate; edge-to-surface otherwise.
         on_edge = {}
         for side in (1, 2):
-            tree = self._sharp_edge_tree(side)
-            near = (
-                tree.query(positions)[0] <= self.epsilon
-                if tree is not None
-                else np.zeros(len(positions), dtype=bool)
-            )
+            near = self._sharp_edge_distance(side, positions) <= self.epsilon
             on_edge[side] = np.asarray(near) | (owner == side)
 
         return [
@@ -681,13 +1020,9 @@ class ContactBoundaryExtractor:
         overhang does. Also returns the distance to the winner's sharp edge.
         """
         points = np.atleast_2d(points)
-        distance = {}
-        for side in (1, 2):
-            tree = self._sharp_edge_tree(side)
-            distance[side] = (
-                tree.query(points)[0] if tree is not None
-                else np.full(len(points), np.inf)
-            )
+        distance = {
+            side: self._sharp_edge_distance(side, points) for side in (1, 2)
+        }
         owner = np.where(distance[1] <= distance[2], 1, 2)
         won = np.where(owner == 1, distance[1], distance[2])
         return owner, won
@@ -790,32 +1125,68 @@ class ContactBoundaryExtractor:
             best = np.where(better, faces, best)
         return best
 
-    def _sharp_edge_tree(self, side: int) -> Optional[KDTree]:
-        """KD-tree over points sampled along every sharp edge of one mesh.
-
-        Ownership is a distance comparison against these, so sampling must be
-        dense enough that a long sharp edge is not represented by its endpoints.
-        """
-        if side in self._sharp_tree_cache:
-            return self._sharp_tree_cache[side]
+    def _sharp_edges(self, side: int) -> Optional[Tuple[NDArray, NDArray]]:
+        """Endpoints of every sharp edge of one mesh, or None if it has none."""
+        if side in self._sharp_edge_cache:
+            return self._sharp_edge_cache[side]
 
         mesh = self.mesh[side]
-        table = mesh.face_adjacency_angles
-        edges = mesh.face_adjacency_edges[table > self.edge_angle_min]
-        if not len(edges):
-            self._sharp_tree_cache[side] = None
-            return None
+        edges = mesh.face_adjacency_edges[
+            mesh.face_adjacency_angles > self.edge_angle_min]
+        pair = (
+            None if not len(edges)
+            else (mesh.vertices[edges[:, 0]], mesh.vertices[edges[:, 1]])
+        )
+        self._sharp_edge_cache[side] = pair
+        return pair
 
-        start, end = mesh.vertices[edges[:, 0]], mesh.vertices[edges[:, 1]]
-        longest = float(np.linalg.norm(end - start, axis=1).max())
-        steps = max(2, int(np.ceil(longest / max(self.epsilon, 1e-9))) + 1)
-        steps = min(steps, self.sharp_edge_max_samples)
-        t = np.linspace(0.0, 1.0, steps)[:, None, None]
-        samples = (start[None] * (1.0 - t) + end[None] * t).reshape(-1, 3)
+    def _sharp_midpoint_tree(self, side: int) -> Optional[KDTree]:
+        """KD-tree over the midpoints of one mesh's sharp edges."""
+        if side not in self._sharp_tree_cache:
+            pair = self._sharp_edges(side)
+            self._sharp_tree_cache[side] = (
+                None if pair is None else KDTree(0.5 * (pair[0] + pair[1]))
+            )
+        return self._sharp_tree_cache[side]
 
-        tree = KDTree(samples)
-        self._sharp_tree_cache[side] = tree
-        return tree
+    def _sharp_edge_distance(self, side: int, points: NDArray) -> NDArray:
+        """Exact distance from each point to the nearest sharp edge of a mesh.
+
+        Point-to-SEGMENT, over the edges whose midpoints are nearest. This
+        replaced a sampled-point KD-tree, whose quantization error was
+        harmless while every seam point sat exactly on a mesh vertex, but
+        once points are refined off the lattice they sit close to both
+        meshes' sharp edges and the sampling error was enough to flip
+        ownership at a corner.
+        """
+        points = np.atleast_2d(points)
+        pair = self._sharp_edges(side)
+        if pair is None:
+            return np.full(len(points), np.inf)
+
+        start, end = pair
+        count = min(self.sharp_edge_candidates, len(start))
+        _, candidates = self._sharp_midpoint_tree(side).query(points, k=count)
+        candidates = candidates.reshape(len(points), count)
+
+        segment = end - start
+        # A degenerate edge collapses to its start, which the clip below then
+        # returns as the closest point; the guard only keeps the division safe.
+        span = np.einsum('ij,ij->i', segment, segment)
+        span = np.where(span > 0.0, span, 1e-30)
+
+        distance = np.full(len(points), np.inf)
+        for column in range(count):
+            index = candidates[:, column]
+            offset = points - start[index]
+            t = np.clip(
+                np.einsum('ij,ij->i', offset, segment[index]) / span[index],
+                0.0, 1.0,
+            )
+            closest = start[index] + t[:, None] * segment[index]
+            distance = np.minimum(
+                distance, np.linalg.norm(closest - points, axis=1))
+        return distance
 
     def _median_edge(self, side: int) -> float:
         """Median edge length of one mesh."""
