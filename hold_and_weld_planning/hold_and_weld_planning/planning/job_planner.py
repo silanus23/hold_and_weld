@@ -25,8 +25,6 @@ import trimesh
 from .weld_planner import WeldPlanner
 from ..mesh.contact_boundary import ContactBoundaryExtractor
 from ..mesh.mesh_loader import MeshLoader
-# Ridge method retired; contact_boundary is the only mesh extractor.
-# from ..mesh.seam_extractor import SeamExtractor
 from ..mesh.shell_generator import ShellGenerator
 from ..occt.occt_generator import OCCTGenerator
 from ..occt.occt_loader import OCCTLoader

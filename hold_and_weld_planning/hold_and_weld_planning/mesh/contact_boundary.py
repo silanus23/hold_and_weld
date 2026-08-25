@@ -750,3 +750,73 @@ class ContactBoundaryExtractor:
         }
         self._dihedral_cache[side] = table
         return table
+
+    # ---------------------------------------------------- retired with ridge
+    # Kept for the transition-points TODO at the top of this file: the only
+    # corner reconstruction this package has had. It takes two nearby OPEN
+    # chain ends, extends both end tangents, and solves the skew-line closest
+    # approach for where they would meet. Measured on the current scene,
+    # intersecting the fitted arc with the plate's rim line places the corner
+    # within 0.10mm, against the 3-6mm the stubs sit at now.
+    #
+    # Three ridge-era dependencies need substituting to rewire it here:
+    #   probe_radius        -> a length scale from this class (median edge)
+    #   _project_to_surface -> trimesh closest_point on the owning mesh
+    #   _RidgePoint.side    -> SeamPoint.refined_side
+    #
+    # def _end_tangent(self, chain, at_head):
+    #     """Return (end_position, outward unit tangent) of one chain end."""
+    #     pts = chain[:5] if at_head else chain[-5:]
+    #     local = np.array([p.position for p in pts])
+    #     centroid = local.mean(axis=0)
+    #     _, _, vt = np.linalg.svd(local - centroid, full_matrices=False)
+    #     tangent = vt[0]
+    #     end_pos = local[0] if at_head else local[-1]
+    #     if np.dot(end_pos - centroid, tangent) < 0.0:
+    #         tangent = -tangent
+    #     return end_pos, tangent
+    #
+    # def _extend_corners(self, chains):
+    #     """Reconstruct corner points the extractor cannot see, in place."""
+    #     ends = []
+    #     for ci, (chain, is_closed) in enumerate(chains):
+    #         if is_closed or len(chain) < 3:
+    #             continue
+    #         for at_head in (True, False):
+    #             ends.append((ci, at_head) + self._end_tangent(chain, at_head))
+    #
+    #     pairs = []
+    #     for i in range(len(ends)):
+    #         for j in range(i + 1, len(ends)):
+    #             if ends[i][0] == ends[j][0]:
+    #                 continue            # never bridge a chain to itself
+    #             gap = float(np.linalg.norm(ends[i][2] - ends[j][2]))
+    #             if gap <= radius:
+    #                 pairs.append((gap, i, j, radius))
+    #     pairs.sort()
+    #
+    #     used = set()
+    #     for gap, i, j, radius in pairs:
+    #         if i in used or j in used:
+    #             continue
+    #         _, _, p1, t1 = ends[i]
+    #         _, _, p2, t2 = ends[j]
+    #         # Closest point between p = p1 + s*t1 and q = p2 + u*t2.
+    #         cross = np.cross(t1, t2)
+    #         denom = float(np.dot(cross, cross))
+    #         if denom < 1e-10:
+    #             continue                # near-parallel ends: not a corner
+    #         w = p2 - p1
+    #         s = float(np.dot(np.cross(w, t2), cross)) / denom
+    #         u = float(np.dot(np.cross(w, t1), cross)) / denom
+    #         if s <= 0.0 or u <= 0.0:
+    #             continue                # intersection behind an end
+    #         corner = 0.5 * ((p1 + s * t1) + (p2 + u * t2))
+    #         if (np.linalg.norm(corner - p1) > radius
+    #                 or np.linalg.norm(corner - p2) > radius):
+    #             continue
+    #         # A straight tangent extended from a curved chain leaves the
+    #         # surface (chord error); pull the corner back onto the mesh.
+    #         corner = project_to_surface(corner)
+    #         used.update((i, j))
+    #         # then insert `corner` at the head/tail of both chains
