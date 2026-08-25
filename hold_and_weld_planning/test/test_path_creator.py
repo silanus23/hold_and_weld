@@ -27,11 +27,11 @@ def make_seam_points(positions):
     return [
         SeamPoint(
             position=np.asarray(p, dtype=float),
-            normal_main=up,
-            normal_secondary=side,
+            normal_base=up,
+            normal_wall=side,
             on_edge_1=False,
             on_edge_2=True,
-            refined_side=2,
+            owner_side=2,
         )
         for p in positions
     ]

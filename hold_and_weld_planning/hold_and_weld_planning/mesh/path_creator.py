@@ -156,7 +156,7 @@ class PathCreator:
     ) -> List[List[SeamPoint]]:
         """Group the chain into sublists of uniform joint character.
 
-        The character is (is_edge_joint, refined_side); a change in either ends
+        The character is (is_edge_joint, owner_side); a change in either ends
         a sublist. Runs shorter than `min_contact_run` are flicker at ambiguous
         zones, not genuine changes, and are absorbed into their longer
         neighbour. The test is on LENGTH, not point count: one chain crosses
@@ -164,7 +164,7 @@ class PathCreator:
         """
         runs: List[List[Any]] = []  # [type, count]
         for sp in seam_points:
-            t = (sp.on_edge_1 and sp.on_edge_2, sp.refined_side)
+            t = (sp.on_edge_1 and sp.on_edge_2, sp.owner_side)
             if runs and runs[-1][0] == t:
                 runs[-1][1] += 1
             else:
@@ -382,12 +382,15 @@ class PathCreator:
 
         subset_positions = np.array([sp.position for sp in seam_points_subset])
 
+        # SeamPoint names its normals for the surface they come off; the seam
+        # config keys are the main/secondary vocabulary shared with the OCCT
+        # extractor and WeldPlanner. base -> main, wall -> secondary.
         normals_main = []
         normals_secondary = []
         for pt in points:
             idx = int(np.argmin(np.linalg.norm(subset_positions - pt, axis=1)))
-            normals_main.append(seam_points_subset[idx].normal_main)
-            normals_secondary.append(seam_points_subset[idx].normal_secondary)
+            normals_main.append(seam_points_subset[idx].normal_base)
+            normals_secondary.append(seam_points_subset[idx].normal_wall)
 
         half = len(seam_points_subset) / 2.0
         on_edge_1 = sum(sp.on_edge_1 for sp in seam_points_subset) > half

@@ -28,6 +28,38 @@ per point because it alternates wherever a part overhangs.
 # crossing it, the transition is simply not in the mesh — an 800mm plate rim
 # carrying a 206mm chord has no vertex where the chord starts, and no tolerance
 # recovers it. The crossing has to be solved and the edge split there.
+#
+# A second mechanism damages the same zone: the on_edge flags flicker there,
+# because epsilon answers two different questions and the second is marginal
+# by construction.
+#
+#   _sharp_boundary SELECTS edges within epsilon + slack of the other mesh
+#                   (2.000 + 0.1 * 6.25 median edge = 2.625mm here)
+#   _seam_points    TESTS points against those same edges at epsilon (2.000mm)
+#
+# The edges were chosen for sitting near 2.6mm, so the distances thresholded
+# at 2.0mm cluster on the threshold. Measured on this scene:
+#
+#   side 1: distance to sharp edge 1.88-2.09mm across idx 57..1872,
+#           26 points within +-20% of the threshold,
+#           4 of 5 raw flips are +-0.1mm wobbles across the line
+#   side 2: 0 points near the threshold; its 2 flips are 1.3 -> 9.5mm
+#
+# Only the side sharing the constant flickers. 8 contact-type flips reach
+# PathCreator as 9 runs where the geometry has 2, and the min_contact_run
+# absorption in _split_on_contact_type exists to glue them back together —
+# the order-dependent cascade that leaves the 1.3mm and 6.9mm stubs.
+#
+# Sweeping epsilon cannot fix it: selection and test move together, which is
+# why the seam count held at 8 across the near_contact_edge_fraction sweep in
+# the config. The fix is to stop sharing the constant — give the on_edge test
+# its own threshold above the selection bound — and only then smooth by arc
+# length if anything still flickers. Hysteresis is the wrong tool: a seam has
+# no canonical traversal direction.
+#
+# The two are independent: inserting the missing crossing point does not make
+# the flags less marginal, and separating the thresholds does not create the
+# point. Either alone shrinks the stubs; both are needed to remove them.
 
 # TODO: (@silanus23) Weigh ownership by sharpness, not proximity alone
 # _owner picks whichever mesh has the NEAREST sharp edge, and every edge above
@@ -86,8 +118,14 @@ class ContactBoundaryExtractor:
             self.params.get('stitch_gap_factor', 3.0))
         self.interpenetration_volume = float(
             self.params.get('interpenetration_volume_m3', 1e-12))
-        self.eps_stability_factors = tuple(
-            self.params.get('eps_stability_factors', (0.75, 1.5)))
+        factors = self.params.get('eps_stability_factors', (0.75, 1.5))
+        try:
+            self.eps_stability_factors = tuple(float(f) for f in factors)
+        except (TypeError, ValueError):
+            raise ValueError(
+                'eps_stability_factors must be a list of probe factors, '
+                f'e.g. [0.75, 1.5]; got {factors!r}'
+            )
         self.closest_face_candidates = int(
             self.params.get('closest_face_candidates', 12))
         self.closest_vertex_candidates = int(
@@ -95,12 +133,71 @@ class ContactBoundaryExtractor:
         self.min_loop_points = int(self.params.get('min_loop_points', 4))
         self.sharp_edge_max_samples = int(
             self.params.get('sharp_edge_max_samples', 256))
+        self._validate_params()
         self.mesh = {1: mesh_1, 2: mesh_2}
 
         self._distance_cache: Dict[int, NDArray] = {}
         self._dihedral_cache: Dict[int, Dict[Tuple[int, int], float]] = {}
         self._sharp_tree_cache: Dict[int, Optional[KDTree]] = {}
         self._route_cache: Optional[str] = None
+
+    def _validate_params(self) -> None:
+        """Reject parameter values that fail late, or silently reassure.
+
+        Every failure caught here is a misleading one rather than a loud one:
+        a non-positive epsilon marks no face as contact and is reported as
+        'the parts do not touch', a stability factor of exactly 1.0 probes
+        epsilon against itself and always reports a stable plateau, and a
+        min_loop_points below 3 reaches _oriented as an index error on a loop
+        that was never a loop.
+        """
+        for key, value in (
+            ('epsilon', self.epsilon),
+            ('closest_face_candidates', self.closest_face_candidates),
+            ('closest_vertex_candidates', self.closest_vertex_candidates),
+        ):
+            if not value > 0:
+                raise ValueError(f'{key} must be > 0, got {value}')
+
+        # Zero is a legitimate way to disable each of these, negative is not.
+        # edge_angle_min is reported in the degrees the user wrote, not the
+        # radians it is stored as.
+        for key, value in (
+            ('edge_angle_min_deg', float(np.degrees(self.edge_angle_min))),
+            ('near_contact_edge_fraction', self.near_contact_fraction),
+            ('stitch_gap_factor', self.stitch_gap_factor),
+            ('interpenetration_volume_m3', self.interpenetration_volume),
+        ):
+            if value < 0.0:
+                raise ValueError(f'{key} must be >= 0, got {value}')
+
+        # _oriented reads loop[1] and loop[-1]; below 3 there is no loop.
+        if self.min_loop_points < 3:
+            raise ValueError(
+                f'min_loop_points must be >= 3, got {self.min_loop_points}')
+
+        # `steps` in _sharp_edge_tree has a floor of 2, so a smaller cap would
+        # not cap anything.
+        if self.sharp_edge_max_samples < 2:
+            raise ValueError(
+                'sharp_edge_max_samples must be >= 2, got '
+                f'{self.sharp_edge_max_samples}')
+
+        if not self.eps_stability_factors:
+            raise ValueError(
+                'eps_stability_factors must name at least one probe factor; '
+                'with none, the plateau check has nothing to compare against '
+                'and reports every epsilon as stable'
+            )
+        for factor in self.eps_stability_factors:
+            if not factor > 0.0:
+                raise ValueError(
+                    f'eps_stability_factors must all be > 0, got {factor}')
+            if factor == 1.0:
+                raise ValueError(
+                    'eps_stability_factors of exactly 1.0 probes epsilon '
+                    'against itself and always reports a stable plateau'
+                )
 
     def route(self) -> str:
         """'contact' when the parts meet at a surface, 'intersect' when one is
@@ -206,11 +303,11 @@ class ContactBoundaryExtractor:
             chains.append((self._seam_points(positions, marked), is_closed))
 
         total = sum(len(points) for points, _ in chains)
-        owners = [p.refined_side for points, _ in chains for p in points]
+        owners = [p.owner_side for points, _ in chains for p in points]
         switches = sum(
             1 for points, _ in chains
             for a, b in zip(points, points[1:])
-            if a.refined_side != b.refined_side
+            if a.owner_side != b.owner_side
         )
         logger.info(
             f'{len(chains)} seam chain(s), {total} seam point(s); ownership '
@@ -463,8 +560,6 @@ class ContactBoundaryExtractor:
         """
         open_pieces = [list(p) for p, closed in pieces if not closed]
         result = [(p, True) for p, closed in pieces if closed]
-        if len(open_pieces) < 2:
-            return result + [(np.asarray(p), False) for p in open_pieces]
 
         def span(piece: List[NDArray]) -> float:
             """Local sampling density of one piece."""
@@ -473,6 +568,10 @@ class ContactBoundaryExtractor:
             return float(np.median(
                 np.linalg.norm(np.diff(np.asarray(piece), axis=0), axis=1)
             ))
+
+        # No early return for a lone open piece: the merge loop below already
+        # no-ops on one piece, and that piece still has to reach the closure
+        # test — a seam that closes on itself needs no second piece to do it.
 
         # Tolerance comes from the two pieces being joined, never pooled across
         # all of them: the meshes are sampled at wildly different densities, so
@@ -513,7 +612,7 @@ class ContactBoundaryExtractor:
         for piece in open_pieces:
             array = np.asarray(piece)
             closed = (
-                len(array) > self.min_loop_points
+                len(array) >= self.min_loop_points
                 and float(np.linalg.norm(array[0] - array[-1]))
                 <= self.stitch_gap_factor * span(piece)
             )
@@ -532,21 +631,21 @@ class ContactBoundaryExtractor:
 
         # The edge-carrying mesh supplies the wall normal, the other the base
         # surface. Both read off the owner, so neither can tie and flip.
-        normal_main = np.zeros((len(positions), 3))
-        normal_secondary = np.zeros((len(positions), 3))
+        normal_base = np.zeros((len(positions), 3))
+        normal_wall = np.zeros((len(positions), 3))
         for side in (1, 2):
             rows = np.nonzero(owner == side)[0]
             if not len(rows):
                 continue
             other = self.mesh[2 if side == 1 else 1]
             base = self._closest_faces(other, positions[rows])
-            normal_main[rows] = other.face_normals[base]
+            normal_base[rows] = other.face_normals[base]
 
             # From the faces NOT in contact, so it points along the surface
             # rising out of the joint rather than into it.
             contact = marked[side][0]
             _, nearest = KDTree(self.mesh[side].vertices).query(positions[rows])
-            normal_secondary[rows] = [
+            normal_wall[rows] = [
                 self._wall_normal(side, int(v), contact) for v in nearest
             ]
 
@@ -564,11 +663,11 @@ class ContactBoundaryExtractor:
         return [
             SeamPoint(
                 position=positions[i],
-                normal_main=normal_main[i],
-                normal_secondary=normal_secondary[i],
+                normal_base=normal_base[i],
+                normal_wall=normal_wall[i],
                 on_edge_1=bool(on_edge[1][i]),
                 on_edge_2=bool(on_edge[2][i]),
-                refined_side=int(owner[i]),
+                owner_side=int(owner[i]),
             )
             for i in range(len(positions))
         ]
@@ -762,7 +861,7 @@ class ContactBoundaryExtractor:
     # Three ridge-era dependencies need substituting to rewire it here:
     #   probe_radius        -> a length scale from this class (median edge)
     #   _project_to_surface -> trimesh closest_point on the owning mesh
-    #   _RidgePoint.side    -> SeamPoint.refined_side
+    #   _RidgePoint.side    -> SeamPoint.owner_side
     #
     # def _end_tangent(self, chain, at_head):
     #     """Return (end_position, outward unit tangent) of one chain end."""

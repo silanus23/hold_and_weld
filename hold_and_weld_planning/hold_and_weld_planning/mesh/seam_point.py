@@ -27,17 +27,17 @@ class SeamPoint:
     """Single ordered point on a weld seam with surface normal information.
 
     Attributes:
-        position:          3D position on the geometric edge (3,).
-        normal_main:       Surface normal of the base (non-edge) side (3,).
-        normal_secondary:  Wall normal of the edge side (3,).
-        on_edge_1:         True if mesh_1 shows a geometric edge here.
-        on_edge_2:         True if mesh_2 shows a geometric edge here.
-        refined_side:      Mesh carrying the edge at this point: 1 or 2.
+        position:     3D position on the geometric edge (3,).
+        normal_base:  Surface normal of the base (non-edge) side (3,).
+        normal_wall:  Wall normal of the edge side (3,).
+        on_edge_1:    True if mesh_1 shows a geometric edge here.
+        on_edge_2:    True if mesh_2 shows a geometric edge here.
+        owner_side:   Mesh carrying the edge at this point: 1 or 2.
     """
 
     position: NDArray
-    normal_main: NDArray
-    normal_secondary: NDArray
+    normal_base: NDArray
+    normal_wall: NDArray
     on_edge_1: bool
     on_edge_2: bool
-    refined_side: int
+    owner_side: int
