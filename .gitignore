@@ -54,3 +54,4 @@ tempCodeRunnerFile.py
 
 .clang-format
 .clangd/
+.aider*

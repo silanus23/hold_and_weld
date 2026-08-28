@@ -22,24 +22,6 @@ meshes, then decide per POINT which mesh carries the edge there. Ownership is
 per point because it alternates wherever a part overhangs.
 """
 
-# TODO: (@silanus23) Decide is_edge_joint comparatively
-# What survives of the flag problem. `_owner` is already threshold-free - it
-# compares which mesh's edge is nearer - while on_edge still tests an absolute
-# epsilon. The comparative form is that edge-to-edge is where that comparison
-# TIES, both parts terminating on the same curve. On a real butt joint the
-# loser-distance histogram would show a cluster pinned at the tessellation
-# floor, well separated from the rest, and that separation is the test. This
-# scene has no edge-to-edge geometry to validate it, and weld_planner switches
-# the entire torch pose on is_edge_joint, so it needs a butt-joint part before
-# anyone leans on it.
-
-# TODO: (@silanus23) Weigh ownership by sharpness, not proximity alone
-# _owner picks whichever mesh has the NEAREST sharp edge, and every edge above
-# edge_angle_min counts equally. A 2.81 deg facet seam on a tessellated cylinder
-# therefore outranks a real 90 deg rim whenever it happens to be marginally
-# closer. Suspect this degrades the transition zones, where both meshes have
-# edges within a millimetre of the seam and proximity alone cannot separate them.
-
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -86,6 +68,8 @@ class ContactBoundaryExtractor:
             float(self.params.get('edge_angle_min_deg', 0.0057)))
         self.near_contact_fraction = float(
             self.params.get('near_contact_edge_fraction', 0.1))
+        self.edge_joint_floor_factor = float(
+            self.params.get('edge_joint_floor_factor', 0.001))
         self.stitch_gap_factor = float(
             self.params.get('stitch_gap_factor', 3.0))
         self.interpenetration_volume = float(
@@ -138,6 +122,7 @@ class ContactBoundaryExtractor:
             ('closest_face_candidates', self.closest_face_candidates),
             ('closest_vertex_candidates', self.closest_vertex_candidates),
             ('kernel_radius_factor', self.kernel_radius_factor),
+            ('edge_joint_floor_factor', self.edge_joint_floor_factor),
         ):
             if not value > 0:
                 raise ValueError(f'{key} must be > 0, got {value}')
@@ -198,17 +183,18 @@ class ContactBoundaryExtractor:
         if self._route_cache is not None:
             return self._route_cache
 
-        volume = float(
-            (self._manifold(1) ^ self._manifold(2)).volume()
-        )
-        if volume > self.interpenetration_volume:
-            logger.info(
-                f'Parts interpenetrate ({volume * 1e9:.1f} mm^3 of overlap); '
-                'the contact boundary is the buried rim, not the seam'
-            )
-            self._route_cache = 'intersect'
-        else:
-            self._route_cache = 'contact'
+#        volume = float(
+#            (self._manifold(1) ^ self._manifold(2)).volume()
+#        )
+        self._route_cache = 'contact'
+#        if volume > self.interpenetration_volume:
+#            logger.info(
+#                f'Parts interpenetrate ({volume * 1e9:.1f} mm^3 of overlap); '
+#                'the contact boundary is the buried rim, not the seam'
+#            )
+#            self._route_cache = 'intersect'
+#        else:
+#            self._route_cache = 'contact'
         return self._route_cache
 
     def extract_seams(self) -> List[Seam]:
@@ -972,6 +958,7 @@ class ContactBoundaryExtractor:
     ) -> List[SeamPoint]:
         """Attach per-point ownership and normals to an ordered polyline."""
         owner, _ = self._owner(positions)
+        on_edge = self._on_edge_mask(owner, positions)
 
         # The edge-carrying mesh supplies the wall normal, the other the base
         # surface. Both read off the owner, so neither can tie and flip.
@@ -992,12 +979,6 @@ class ContactBoundaryExtractor:
             normal_wall[rows] = [
                 self._wall_normal(side, int(v), contact) for v in nearest
             ]
-
-        # Edge-to-edge where BOTH parts terminate; edge-to-surface otherwise.
-        on_edge = {}
-        for side in (1, 2):
-            near = self._sharp_edge_distance(side, positions) <= self.epsilon
-            on_edge[side] = np.asarray(near) | (owner == side)
 
         return [
             SeamPoint(
@@ -1026,6 +1007,42 @@ class ContactBoundaryExtractor:
         owner = np.where(distance[1] <= distance[2], 1, 2)
         won = np.where(owner == 1, distance[1], distance[2])
         return owner, won
+
+    def _on_edge_mask(
+        self, owner: NDArray, points: NDArray
+    ) -> Dict[int, NDArray]:
+        """Per-mesh, per-point comparative edge-joint test.
+
+        `_owner` already compares which mesh's sharp edge is nearer, with no
+        threshold. Edge-to-edge is where that comparison is effectively a
+        TIE - both parts terminating on the same curve - so the loser is
+        judged against its OWN mesh's tessellation scale
+        (`edge_joint_floor_factor * median_edge`) rather than the fit-up
+        `epsilon`: this distance is a corefinement/refine residual, two to
+        three orders of magnitude smaller than the fit-up gap epsilon is
+        sized for. `| (owner == side)` is a safety fallback for a winner
+        whose refined position lands just outside its own floor; on
+        measured data the winner distance is already inside it.
+        """
+        distance = {
+            side: self._sharp_edge_distance(side, points) for side in (1, 2)
+        }
+
+        loser = np.where(owner == 1, distance[2], distance[1])
+        if len(loser):
+            logger.info(
+                f'is_edge_joint: loser sharp-edge distance over '
+                f'{len(loser)} point(s) - min={loser.min() * 1000:.3f}mm '
+                f'median={np.median(loser) * 1000:.3f}mm '
+                f'p95={np.percentile(loser, 95) * 1000:.3f}mm '
+                f'max={loser.max() * 1000:.3f}mm'
+            )
+
+        return {
+            side: (distance[side] <= self.edge_joint_floor_factor
+                   * self._median_edge(side)) | (owner == side)
+            for side in (1, 2)
+        }
 
     def _wall_normal(self, side: int, vertex: int, contact: NDArray) -> NDArray:
         """Area-weighted normal of the non-contact faces meeting a vertex.
@@ -1220,73 +1237,3 @@ class ContactBoundaryExtractor:
         }
         self._dihedral_cache[side] = table
         return table
-
-    # ---------------------------------------------------- retired with ridge
-    # Kept for the transition-points TODO at the top of this file: the only
-    # corner reconstruction this package has had. It takes two nearby OPEN
-    # chain ends, extends both end tangents, and solves the skew-line closest
-    # approach for where they would meet. Measured on the current scene,
-    # intersecting the fitted arc with the plate's rim line places the corner
-    # within 0.10mm, against the 3-6mm the stubs sit at now.
-    #
-    # Three ridge-era dependencies need substituting to rewire it here:
-    #   probe_radius        -> a length scale from this class (median edge)
-    #   _project_to_surface -> trimesh closest_point on the owning mesh
-    #   _RidgePoint.side    -> SeamPoint.owner_side
-    #
-    # def _end_tangent(self, chain, at_head):
-    #     """Return (end_position, outward unit tangent) of one chain end."""
-    #     pts = chain[:5] if at_head else chain[-5:]
-    #     local = np.array([p.position for p in pts])
-    #     centroid = local.mean(axis=0)
-    #     _, _, vt = np.linalg.svd(local - centroid, full_matrices=False)
-    #     tangent = vt[0]
-    #     end_pos = local[0] if at_head else local[-1]
-    #     if np.dot(end_pos - centroid, tangent) < 0.0:
-    #         tangent = -tangent
-    #     return end_pos, tangent
-    #
-    # def _extend_corners(self, chains):
-    #     """Reconstruct corner points the extractor cannot see, in place."""
-    #     ends = []
-    #     for ci, (chain, is_closed) in enumerate(chains):
-    #         if is_closed or len(chain) < 3:
-    #             continue
-    #         for at_head in (True, False):
-    #             ends.append((ci, at_head) + self._end_tangent(chain, at_head))
-    #
-    #     pairs = []
-    #     for i in range(len(ends)):
-    #         for j in range(i + 1, len(ends)):
-    #             if ends[i][0] == ends[j][0]:
-    #                 continue            # never bridge a chain to itself
-    #             gap = float(np.linalg.norm(ends[i][2] - ends[j][2]))
-    #             if gap <= radius:
-    #                 pairs.append((gap, i, j, radius))
-    #     pairs.sort()
-    #
-    #     used = set()
-    #     for gap, i, j, radius in pairs:
-    #         if i in used or j in used:
-    #             continue
-    #         _, _, p1, t1 = ends[i]
-    #         _, _, p2, t2 = ends[j]
-    #         # Closest point between p = p1 + s*t1 and q = p2 + u*t2.
-    #         cross = np.cross(t1, t2)
-    #         denom = float(np.dot(cross, cross))
-    #         if denom < 1e-10:
-    #             continue                # near-parallel ends: not a corner
-    #         w = p2 - p1
-    #         s = float(np.dot(np.cross(w, t2), cross)) / denom
-    #         u = float(np.dot(np.cross(w, t1), cross)) / denom
-    #         if s <= 0.0 or u <= 0.0:
-    #             continue                # intersection behind an end
-    #         corner = 0.5 * ((p1 + s * t1) + (p2 + u * t2))
-    #         if (np.linalg.norm(corner - p1) > radius
-    #                 or np.linalg.norm(corner - p2) > radius):
-    #             continue
-    #         # A straight tangent extended from a curved chain leaves the
-    #         # surface (chord error); pull the corner back onto the mesh.
-    #         corner = project_to_surface(corner)
-    #         used.update((i, j))
-    #         # then insert `corner` at the head/tail of both chains

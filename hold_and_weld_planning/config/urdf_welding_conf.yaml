@@ -26,12 +26,39 @@
 #      - 0
 
 # ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
+#workpiece:
+#  auto_detect_seams: true
+#  mode: mesh
+#  # NOTE: only mode / auto_detect_seams / part paths / world_pose are read from
+#  # this block. seam_method, epsilon and every other tuning key belong under
+#  # `parameters:` below — put here they are silently ignored.
+#  main_part:
+#    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
+#    world_pose:
+#      xyz:
+#      - 1.2
+#      - -0.5
+#      - 0.65
+#      rpy:
+#      - 0
+#      - 0
+#      - 0
+#  secondary_part:
+#    secondary_path: "package://hold_and_weld_description/urdf/environment/cylinder.urdf.xacro"
+#    world_pose:
+#      xyz:
+#      - 1.6
+#      - -0.5
+#      - 0.925
+#      rpy:
+#      - 0
+#      - 0
+#      - 0
+# ──────────────────────────────────────────────────────────────────────────────
+
 workpiece:
   auto_detect_seams: true
   mode: mesh
-  # NOTE: only mode / auto_detect_seams / part paths / world_pose are read from
-  # this block. seam_method, epsilon and every other tuning key belong under
-  # `parameters:` below — put here they are silently ignored.
   main_part:
     main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:
@@ -42,20 +69,18 @@ workpiece:
       rpy:
       - 0
       - 0
-      - 0
+      - 1.5708
   secondary_part:
-    secondary_path: "package://hold_and_weld_description/urdf/environment/cylinder.urdf.xacro"
+    secondary_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
     world_pose:
       xyz:
-      - 1.6
-      - -0.5
-      - 0.925
+      - 1.2
+      - 0.30
+      - 0.65
       rpy:
       - 0
       - 0
-      - 0
-# ──────────────────────────────────────────────────────────────────────────────
-
+      - 1.5708
 parameters:
   # ── Planner ────────────────────────────────────────────────────────────────
   gap_mm: 40.0

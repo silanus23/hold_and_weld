@@ -87,6 +87,20 @@ mesh, and a radius below that mesh's triangle size caught zero centroids for
 962 of 1829 points, leaving survival to be decided by whether a face centroid
 happened to sit nearby.
 
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `parameters.edge_joint_floor_factor` | double | 0.001 | How close a chain point must sit to the LOSING mesh's own sharp edge to count as edge-to-edge there, as a fraction of that mesh's median edge length. |
+
+`_owner` is already threshold-free: it compares which mesh's sharp edge is
+nearer, and edge-to-edge is where that comparison is effectively a tie - both
+parts terminating on the same curve. `edge_joint_floor_factor` floors the
+LOSER's distance against its own mesh's tessellation scale rather than
+`epsilon`, because this residual is a corefinement/refine artifact, two to
+three orders of magnitude smaller than the fit-up gap `epsilon` is sized for.
+Measured on a real butt-joint part: loser distance min=0.000/median=0.001/
+p95=0.003/max=0.003mm over a 158-point chain whose mesh has a ~12.5mm median
+edge, well inside the 0.0125mm floor the default factor gives there.
+
 Keep the factor small. Measured position error against analytic: k=1 -> 0.07mm,
 k=2 -> 0.54mm, k=4 -> 1.85mm, as a larger neighbourhood starts seeing the rim's
 curvature and the local half-plane assumption breaks.
