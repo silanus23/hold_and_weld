@@ -90,6 +90,46 @@ happened to sit nearby.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `parameters.edge_joint_floor_factor` | double | 0.001 | How close a chain point must sit to the LOSING mesh's own sharp edge to count as edge-to-edge there, as a fraction of that mesh's median edge length. |
+| `parameters.ownership_radius_factor` | double | 2.0 | Radius of the turning-density neighbourhood used to break a sharp-edge distance TIE, as a multiple of the coarser mesh's median edge length. |
+| `parameters.ownership_tie_tolerance` | double | 1e-9 | Relative tolerance at which the two meshes' sharp-edge distances count as tied, and the density comparison takes over. |
+
+`_owner` compares distance to each mesh's own nearest sharp edge, which is
+informative wherever one part terminates and the other does not. Where the two
+distances TIE it carries no information at all, and the comparison used to fall
+through to `<=`, handing every tied point to whichever part was passed as
+`mesh_1`. That made the output depend on config order: measured 8 owner flips
+on a saddle at refine=16, every one at `d1 == d2 == 0.0000mm`, which
+`PathCreator._split_on_contact_type` then turns into extra seam segments.
+
+The tie is not a coincidence. On a curved mating surface the tessellation's own
+facet seams clear `edge_angle_min` too, so both meshes report a sharp edge
+underfoot. Ties are broken on turning density instead - `sum(dihedral *
+edge_length) / sum(face area)` over a ball, measured on each mesh separately -
+which is comparative in the same way the distance is, with no absolute angle
+anywhere. Measured: flat reads 0, a cylinder of radius r reads 1/r at ANY
+tessellation, a sharp crease reads `pi/(4*radius)`, a fillet of radius r_f
+reads about 1/r_f. On the reproduced tie (coarse pipe through a plate with a
+round hole) the pipe reads 0.1011 against a predicted 1/r = 0.100 and the plate
+0.354, so the plate wins 15/15 tied points and the swap test goes to **0 owner
+flips**. Points where distance already decides are untouched.
+
+`ownership_radius_factor` is bounded below by the coarser mesh's facet size -
+under that there is nothing to measure. It also has an upper bound: a crease's
+density falls as `pi/(4*radius)` while a curved wall's stays at 1/r, so the two
+cross at radius ~ `0.79*r` and looking WIDER weakens the discrimination. The
+default sits just above the resolution floor for that reason. The working band
+is `local facet size < radius < 0.79 * radius of the curved side`; on a mesh
+coarse enough to close that band the question is undecidable at any radius.
+
+The density is an integral over an area, not a per-edge `angle / width` ratio.
+That is deliberate: coplanar refinement (`refine_iterations`) does not move a
+facet seam or change its dihedral, it only narrows the strip around it, so a
+per-edge form inflates without bound under refinement and eventually ranks a
+smooth wall above a real edge (measured 0.151 -> 19.3 on a cylinder while a
+real crease at comparable mesh size read 5.3). Both sums here are conserved
+under retriangulation instead - measured 0.5% drift across a 60x face count
+increase - which also makes it robust to sliver triangles, since a sliver
+contributes a small area and only its own real turning.
 
 `_owner` is already threshold-free: it compares which mesh's sharp edge is
 nearer, and edge-to-edge is where that comparison is effectively a tie - both

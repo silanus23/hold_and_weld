@@ -1,29 +1,29 @@
-#workpiece:
-#  auto_detect_seams: true
-#  mode: mesh
-#
-#  main_part:
-#    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
-#    world_pose:
-#      xyz:
-#      - 1.2
-#      - -0.5
-#      - 0.65
-#      rpy:
-#      - 0
-#      - 0
-#      - 0
-#  secondary_part:
-#    secondary_path: "package://hold_and_weld_description/urdf/environment/cylinder.urdf.xacro"
-#    world_pose:
-#      xyz:
-#      - 1.6
-#      - -0.5
-#      - 0.925
-#      rpy:
-#      - 0
-#      - 0
-#      - 0
+workpiece:
+  auto_detect_seams: true
+  mode: mesh
+
+  main_part:
+    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
+    world_pose:
+      xyz:
+      - 1.2
+      - -0.5
+      - 0.65
+      rpy:
+      - 0
+      - 0
+      - 0
+  secondary_part:
+    secondary_path: "package://hold_and_weld_description/urdf/environment/cylinder.urdf.xacro"
+    world_pose:
+      xyz:
+      - 1.6
+      - -0.5
+      - 0.925
+      rpy:
+      - 0
+      - 0
+      - 0
 
 # ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
 #workpiece:
@@ -56,31 +56,31 @@
 #      - 0
 # ──────────────────────────────────────────────────────────────────────────────
 
-workpiece:
-  auto_detect_seams: true
-  mode: mesh
-  main_part:
-    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
-    world_pose:
-      xyz:
-      - 1.2
-      - -0.5
-      - 0.65
-      rpy:
-      - 0
-      - 0
-      - 1.5708
-  secondary_part:
-    secondary_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
-    world_pose:
-      xyz:
-      - 1.2
-      - 0.30
-      - 0.65
-      rpy:
-      - 0
-      - 0
-      - 1.5708
+#workpiece:
+#  auto_detect_seams: true
+#  mode: mesh
+#  main_part:
+#    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
+#    world_pose:
+#      xyz:
+#      - 1.2
+#      - -0.5
+#      - 0.65
+#      rpy:
+#      - 0
+#      - 0
+#      - 1.5708
+#  secondary_part:
+#    secondary_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
+#    world_pose:
+#      xyz:
+#      - 1.2
+#      - 0.30
+#      - 0.65
+#      rpy:
+#      - 0
+#      - 0
+#      - 1.5708
 parameters:
   # ── Planner ────────────────────────────────────────────────────────────────
   gap_mm: 40.0
