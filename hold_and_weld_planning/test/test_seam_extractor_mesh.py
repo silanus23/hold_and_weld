@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the contact-boundary coverage field on synthetic boxes.
+"""Unit tests for `SeamExtractorMesh` and its fields, on synthetic boxes.
 
 Every expected value here is derived from the geometry, never from what the
 code happens to return. Two boxes give an exactly known contact region, and a
@@ -20,7 +20,10 @@ box overhanging a plate puts the true seam corner BETWEEN mesh vertices, which
 is the case the coverage field exists to solve.
 """
 
-from hold_and_weld_planning.mesh.contact_boundary import ContactBoundaryExtractor
+from hold_and_weld_planning.mesh.chaining import stitch
+from hold_and_weld_planning.mesh.mesh_fields import reject_holes
+from hold_and_weld_planning.mesh.params import SeamExtractorMeshParams
+from hold_and_weld_planning.mesh.seam_extractor_mesh import SeamExtractorMesh
 
 import numpy as np
 import pytest
@@ -60,7 +63,7 @@ def seated():
     """
     plate = box(PLATE, (0.0, 0.0, 0.0))
     block = box(BLOCK, (0.0, 0.0, PLATE_TOP + 0.2))
-    return ContactBoundaryExtractor(plate, block, PARAMS)
+    return SeamExtractorMesh(plate, block, PARAMS)
 
 
 @pytest.fixture
@@ -75,14 +78,14 @@ def overhanging():
     """
     plate = box(PLATE, (0.0, 0.0, 0.0))
     block = box(BLOCK, (0.6, 0.0, PLATE_TOP + 0.2))
-    return ContactBoundaryExtractor(plate, block, PARAMS)
+    return SeamExtractorMesh(plate, block, PARAMS)
 
 
 def brute_force_edge_distance(extractor, side, point):
     """Nearest point-to-segment distance over EVERY sharp edge of one mesh."""
     mesh = extractor.mesh[side]
     edges = mesh.face_adjacency_edges[
-        mesh.face_adjacency_angles > extractor.edge_angle_min]
+        mesh.face_adjacency_angles > extractor.cfg.edge_angle_min]
     a, b = mesh.vertices[edges[:, 0]], mesh.vertices[edges[:, 1]]
     ab = b - a
     span = np.einsum('ij,ij->i', ab, ab)
@@ -92,10 +95,10 @@ def brute_force_edge_distance(extractor, side, point):
 
 
 def unweighted_coverage(extractor, side, point, rho):
-    """`_coverage` with the facing weight removed, for comparison only."""
+    """`MeshFields.coverage` with the facing weight removed, for comparison only."""
     other = extractor.mesh[2 if side == 1 else 1]
     index = np.asarray(
-        extractor._centroid_tree(2 if side == 1 else 1)
+        extractor.fields.centroid_tree(2 if side == 1 else 1)
         .query_ball_point(point, rho), dtype=np.int64)
     if not len(index):
         return 0.0
@@ -112,29 +115,29 @@ class TestCoverage:
     def test_reads_one_well_inside_the_contact(self, seated):
         # The block's bottom face fills the neighbourhood, so the kernel sums
         # to the full-plane weight it is normalised by.
-        c = seated._coverage(1, np.array([0.0, 0.0, PLATE_TOP]), self.RHO, UP)
+        c = seated.fields.coverage(1, np.array([0.0, 0.0, PLATE_TOP]), self.RHO, UP)
         assert c == pytest.approx(1.0, abs=0.05)
 
     def test_reads_one_half_on_the_contact_boundary(self, seated):
         # On the block's rim its bottom face covers a HALF plane, which
         # integrates to half the full-plane weight. This is what makes 1/2 the
         # boundary by construction rather than by tuning.
-        c = seated._coverage(1, np.array([0.2, 0.0, PLATE_TOP]), self.RHO, UP)
+        c = seated.fields.coverage(1, np.array([0.2, 0.0, PLATE_TOP]), self.RHO, UP)
         assert c == pytest.approx(0.5, abs=0.05)
 
     def test_reads_zero_outside_the_contact(self, seated):
         # Further than rho beyond the rim, no block triangle is in range.
-        c = seated._coverage(1, np.array([0.32, 0.0, PLATE_TOP]), self.RHO, UP)
+        c = seated.fields.coverage(1, np.array([0.32, 0.0, PLATE_TOP]), self.RHO, UP)
         assert c == pytest.approx(0.0, abs=1e-9)
 
     def test_crosses_one_half_exactly_once(self, seated):
-        # What the bisection in _slide_to_boundary actually needs. NOT global
+        # What the bisection in slide_to_boundary actually needs. NOT global
         # monotonicity: on the saturated plateau the centroid-sampled integral
         # wobbles by a few parts in a thousand and does rise slightly. That is
         # harmless because the wobble sits entirely above 1/2, so it cannot
         # manufacture a second crossing - which is the property asserted here.
         xs = np.linspace(0.10, 0.30, 41)
-        c = np.array([seated._coverage(1, np.array([x, 0.0, PLATE_TOP]), self.RHO, UP)
+        c = np.array([seated.fields.coverage(1, np.array([x, 0.0, PLATE_TOP]), self.RHO, UP)
                       for x in xs])
         crossings = np.count_nonzero(np.diff(np.signbit(c - 0.5)))
         assert crossings == 1
@@ -143,7 +146,7 @@ class TestCoverage:
         # Away from the plateau, where the answer is actually decided, the
         # field has to fall cleanly.
         xs = np.linspace(0.10, 0.30, 41)
-        c = np.array([seated._coverage(1, np.array([x, 0.0, PLATE_TOP]), self.RHO, UP)
+        c = np.array([seated.fields.coverage(1, np.array([x, 0.0, PLATE_TOP]), self.RHO, UP)
                       for x in xs])
         band = c[(c < 0.95) & (c > 0.05)]
         assert all(later <= earlier + 1e-9
@@ -155,7 +158,7 @@ class TestCoverage:
         # 1 on the boundary - the same value as deep inside - and no half
         # crossing exists to find.
         rim = np.array([0.2, 0.0, PLATE_TOP])
-        assert seated._coverage(1, rim, self.RHO, UP) == pytest.approx(
+        assert seated.fields.coverage(1, rim, self.RHO, UP) == pytest.approx(
             0.5, abs=0.05)
         assert unweighted_coverage(seated, 1, rim, self.RHO) == pytest.approx(
             1.0, abs=0.1)
@@ -167,7 +170,7 @@ class TestSlideToBoundary:
     RHO = 0.05
 
     def test_lands_on_the_rim_from_inside(self, seated):
-        landed = seated._slide_to_boundary(
+        landed = seated.fields.slide_to_boundary(
             np.array([0.17, 0.0, PLATE_TOP]), np.array([1.0, 0.0, 0.0]),
             1, self.RHO, UP)
         assert landed is not None
@@ -175,7 +178,7 @@ class TestSlideToBoundary:
 
     def test_returns_none_when_already_outside(self, seated):
         # Coverage below 1/2 at the start: nothing to bracket.
-        assert seated._slide_to_boundary(
+        assert seated.fields.slide_to_boundary(
             np.array([0.30, 0.0, PLATE_TOP]), np.array([1.0, 0.0, 0.0]),
             1, self.RHO, UP) is None
 
@@ -184,7 +187,7 @@ class TestSlideToBoundary:
     ):
         # Deep inside, the far end of the span is still inside, so there is no
         # crossing in [0, rho] and the point must be left on its vertex.
-        assert seated._slide_to_boundary(
+        assert seated.fields.slide_to_boundary(
             np.array([0.0, 0.0, PLATE_TOP]), np.array([1.0, 0.0, 0.0]),
             1, self.RHO, UP) is None
 
@@ -197,7 +200,7 @@ class TestSharpEdgeDistance:
         points = rng.uniform(-0.3, 0.3, size=(25, 3))
         points[:, 2] = rng.uniform(0.15, 0.45, size=25)
         for side in (1, 2):
-            got = seated._sharp_edge_distance(side, points)
+            got = seated.fields.sharp_edge_distance(side, points)
             for i, point in enumerate(points):
                 assert got[i] == pytest.approx(
                     brute_force_edge_distance(seated, side, point), abs=1e-9)
@@ -205,7 +208,7 @@ class TestSharpEdgeDistance:
     def test_is_zero_on_a_sharp_edge(self, seated):
         # The block's bottom rim is a 90 degree edge at z=PLATE_TOP, x=0.2.
         on_edge = np.array([[0.2, 0.05, PLATE_TOP]])
-        assert seated._sharp_edge_distance(2, on_edge)[0] == pytest.approx(
+        assert seated.fields.sharp_edge_distance(2, on_edge)[0] == pytest.approx(
             0.0, abs=1e-9)
 
 
@@ -259,7 +262,7 @@ class TestRefinement:
         plate = box(PLATE, (0.0, 0.0, 0.0))
         block = box((0.4, 0.4, thickness),
                     (0.6, 0.0, PLATE_TOP + thickness / 2.0))
-        points, _ = ContactBoundaryExtractor(
+        points, _ = SeamExtractorMesh(
             plate, block, PARAMS).extract_chains()[0]
 
         positions = np.array([p.position for p in points])
@@ -301,7 +304,7 @@ class TestHoleGuard:
         pos[2] = [0.0, 0.0, 0.0]
         pos[3:6] = [[0.0, 0.004, 0.0], [0.001, 0.005, 0.0], [0.002, 0.004, 0.0]]
         pos[6] = [0.0008, 0.0, 0.0]          # 0.8mm from pos[2], well under rho
-        inside = seated._reject_holes(
+        inside = reject_holes(
             self._mask(9, slice(3, 6)), pos, np.full(9, self.RHO))
         assert not inside[3:6].any(), 'a crossing must stay dropped'
 
@@ -311,7 +314,7 @@ class TestHoleGuard:
         # this guard exists to refuse.
         pos = np.column_stack(
             [np.linspace(0.0, 0.040, 9), np.zeros(9), np.zeros(9)])
-        inside = seated._reject_holes(
+        inside = reject_holes(
             self._mask(9, slice(3, 6)), pos, np.full(9, self.RHO))
         assert inside.all(), 'a hole must be restored'
 
@@ -320,6 +323,72 @@ class TestHoleGuard:
         pos = np.column_stack(
             [np.linspace(0.0, 0.040, 9), np.zeros(9), np.zeros(9)])
         for dropped in (slice(0, 3), slice(6, 9)):
-            inside = seated._reject_holes(
+            inside = reject_holes(
                 self._mask(9, dropped), pos, np.full(9, self.RHO))
             assert not inside[dropped].any(), 'an end trim must stay dropped'
+
+
+class TestStitch:
+    """Joining polylines end to end without losing a point to closure."""
+
+    CFG = SeamExtractorMeshParams.from_dict({'min_loop_points': 4})
+
+    def square(self, side=1.0, per_side=9):
+        """An OPEN square outline sampled at a uniform spacing.
+
+        The last point stops one spacing short of the first, so the chain
+        closes on itself with a gap exactly equal to every other step - and
+        no point is a repeat of any other.
+        """
+        step = side / per_side
+        corners = [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side)]
+        points = []
+        for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
+            for i in range(per_side):
+                t = i / per_side
+                points.append([x0 + t * (x1 - x0), y0 + t * (y1 - y0), 0.0])
+        return np.asarray(points), step
+
+    def test_closing_a_chain_keeps_every_point(self):
+        positions, step = self.square()
+        assert len(positions) == 36
+
+        result = stitch([(positions, False)], self.CFG)
+
+        assert len(result) == 1
+        closed_points, is_closed = result[0]
+        assert is_closed, 'the ends are one spacing apart, so it closes'
+        assert len(closed_points) == len(positions), (
+            'closure does not make the last point a duplicate: it is a real '
+            'sample, one spacing from the first'
+        )
+        np.testing.assert_allclose(closed_points, positions)
+
+    def test_the_closing_gap_equals_the_sample_spacing(self):
+        positions, step = self.square()
+        closed_points, _ = stitch([(positions, False)], self.CFG)[0]
+
+        gap = float(np.linalg.norm(closed_points[0] - closed_points[-1]))
+        assert gap == pytest.approx(step, rel=1e-9)
+
+    def test_a_repeated_last_point_is_still_dropped(self):
+        # The case the strip exists for: the chain literally returns to its
+        # first point, so the last one carries no new position.
+        positions, _ = self.square()
+        repeated = np.vstack([positions, positions[0]])
+
+        closed_points, is_closed = stitch([(repeated, False)], self.CFG)[0]
+
+        assert is_closed
+        assert len(closed_points) == len(positions)
+        np.testing.assert_allclose(closed_points, positions)
+
+    def test_an_open_chain_is_left_open_and_whole(self):
+        # Ends far apart: no closure, and nothing trimmed either.
+        positions = np.column_stack(
+            [np.linspace(0.0, 1.0, 20), np.zeros(20), np.zeros(20)])
+
+        result_points, is_closed = stitch([(positions, False)], self.CFG)[0]
+
+        assert not is_closed
+        np.testing.assert_allclose(result_points, positions)

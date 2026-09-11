@@ -64,8 +64,15 @@ class PtPSegment:
                 f'Need at least 2 points for PtPSegment, got {len(self.points)}'
             )
 
-        self.start = self.points[0]
-        self.end = self.points[-1]
+    @property
+    def start(self) -> NDArray:
+        """Return first point of segment, derived from `points` on every access."""
+        return self.points[0]
+
+    @property
+    def end(self) -> NDArray:
+        """Return last point of segment, derived from `points` on every access."""
+        return self.points[-1]
 
     def length(self) -> float:
         """Return total arc length in meters."""

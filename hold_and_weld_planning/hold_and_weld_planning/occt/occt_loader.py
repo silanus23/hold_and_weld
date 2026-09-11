@@ -20,20 +20,18 @@ OCCT TopoDS_Shape objects for exact geometric seam extraction.
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
-from OCC.Core.gp import gp_Trsf
 from OCC.Core.IFSelect import IFSelect_RetDone
 from OCC.Core.IGESControl import IGESControl_Reader
 from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.TopoDS import TopoDS_Shape
 
-try:
-    from ament_index_python.packages import get_package_share_directory
-except ImportError:
-    get_package_share_directory = None
+from ..utils.path_utils import resolve_package_path
+from ..utils.transforms import numpy_to_gp_trsf
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +46,25 @@ class OCCTLoader:
     def __init__(
         self,
         cad_path: str | Path,
-        world_transform: NDArray = np.eye(4),
+        world_transform: Optional[NDArray] = None,
     ) -> None:
         """Initialize OCCT loader and build shape.
 
         Args:
             cad_path: Path to CAD file (supports package:// URIs)
-            world_transform: Global pose matrix (4x4) to apply after loading
+            world_transform: Global pose matrix (4x4) to apply after loading.
+                Defaults to identity.
 
         Raises:
             ValueError: If file format unsupported or loading fails
             FileNotFoundError: If file doesn't exist
         """
+        # Built here rather than in the signature: a default argument is one
+        # array shared by every caller, and a caller that transforms it in
+        # place moves every later part that took the default with it.
+        if world_transform is None:
+            world_transform = np.eye(4)
+
         if world_transform.shape != (4, 4):
             raise ValueError(
                 f'world_transform must be 4x4, got {world_transform.shape}'
@@ -68,7 +73,7 @@ class OCCTLoader:
         self.world_transform = world_transform
 
         logger.info(f'Loading CAD file: {cad_path}')
-        resolved_path = self._resolve_package_path(cad_path)
+        resolved_path = resolve_package_path(cad_path)
         logger.debug(f'Resolved path: {resolved_path}')
 
         try:
@@ -79,39 +84,6 @@ class OCCTLoader:
 
         self.shape = self._apply_transform(shape, world_transform)
         logger.info('CAD file loaded and transformed successfully')
-
-    def _resolve_package_path(self, path_str: str | Path) -> Path:
-        """Resolve package:// URI to absolute filesystem path."""
-        path_str = str(path_str)
-
-        if path_str.startswith('package://'):
-            if get_package_share_directory is None:
-                raise ImportError(
-                    'ament_index_python not available for package:// resolution'
-                )
-
-            without_prefix = path_str[len('package://'):]
-            parts = without_prefix.split('/', 1)
-
-            if len(parts) != 2:
-                raise ValueError(f'Invalid package path: {path_str}')
-
-            package_name = parts[0]
-            relative_path = parts[1]
-
-            try:
-                package_dir = get_package_share_directory(package_name)
-            except Exception as e:
-                raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
-
-            resolved = Path(package_dir) / relative_path
-        else:
-            resolved = Path(path_str)
-
-        if not resolved.exists():
-            raise FileNotFoundError(f'File not found: {resolved}')
-
-        return resolved
 
     def _load_cad_file(self, file_path: Path) -> TopoDS_Shape:
         """Load CAD file based on extension (.step/.stp or .iges/.igs)."""
@@ -165,21 +137,7 @@ class OCCTLoader:
         self, shape: TopoDS_Shape, transform: NDArray
     ) -> TopoDS_Shape:
         """Apply 4x4 homogeneous transformation matrix to OCCT shape."""
-        rot = transform[:3, :3]
-        det = np.linalg.det(rot)
-        if not np.isclose(det, 1.0, atol=1e-3):
-            logger.warning(
-                f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear'
-            )
-
-        trsf = gp_Trsf()
-
-        trsf.SetValues(
-            transform[0, 0], transform[0, 1], transform[0, 2], transform[0, 3],
-            transform[1, 0], transform[1, 1], transform[1, 2], transform[1, 3],
-            transform[2, 0], transform[2, 1], transform[2, 2], transform[2, 3],
-        )
-
+        trsf = numpy_to_gp_trsf(transform)
         transformed_shape = BRepBuilderAPI_Transform(shape, trsf).Shape()
 
         if transformed_shape.IsNull():

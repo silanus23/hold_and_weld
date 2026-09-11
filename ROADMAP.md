@@ -140,34 +140,29 @@ to weld seams.
 
 ## hold_and_weld_planning
 
-The OCCT pipeline is largely stable. Deterministic seam extraction, normal evaluation,
-and pose generation work reliably for the tested joint types. Pipe joint detection
-remains incomplete and is not planned for the near term.
+The OCCT pipeline produces exact geometry and reads only two parameters, but "stable"
+overstated it: several silent-output defects were found and fixed by hand-built probes,
+including normals reversed on any seam wrapping past 180 degrees and unnamed curves
+exported as zero-length lines. The package still has **no tests of its own**, which is
+why those needed probes to find, and that is the first thing to address here. Pipe joint
+detection remains incomplete and is not planned for the near term.
 
-The mesh pipeline has one fundamental open problem: CGAL corefinement produces
-intersection segments whose endpoints are pinned to triangle edges rather than the true
-geometric intersection curve. On simple geometry this approximation is acceptable. On
-complex or organic shapes the scatter becomes significant enough to corrupt path
-classification and normal extraction downstream.
+The mesh pipeline's fundamental problem used to be that CGAL corefinement pinned
+intersection-segment endpoints to triangle edges rather than the true intersection
+curve. That pipeline has been retired. The contact-boundary extractor that replaced it
+never computes an intersection curve at all — it locates the boundary of the contact
+region and then slides each point off the vertex lattice onto the half level set of a
+coverage field, which resolves the sub-vertex problem directly and, unlike the lattice
+it replaced, improves with refinement (measured 4.31mm -> 0.065mm going from
+`refine_iterations` 16 to 40).
 
-The candidate approaches to fix this without introducing learned components are:
+Of the two candidate fixes previously listed, ridge-valley detection was implemented and
+retired, and Newton refinement was not needed once the level-set approach worked.
 
-- **Newton refinement** — project each corefinement vertex onto the true intersection
-  by iteratively solving the two-tangent-plane system using per-vertex normals from both
-  meshes. Eliminates tessellation pinning at the cost of one closest-point query per
-  vertex per iteration.
-- **Ridge-valley detection on the edge-contributing mesh** — since all practical weld
-  joints involve at least one geometric edge, the intersection region always has a
-  curvature discontinuity on at least one mesh. Detecting that ridge directly may give
-  a cleaner curve than post-processing corefinement output.
-
-Neither approach is implemented. Both remain as research directions pending
-re-engagement with the mesh pipeline.
-
-A new core primitive is planned for complex curves that cannot be adequately represented
-as sequences of line and arc segments. This will support point-by-point pose generation
-directly from the raw seam geometry, allowing organic and irregular intersection shapes
-to be planned without requiring classification into geometric primitives.
+The core primitive planned here for complex curves — those not adequately represented as
+sequences of line and arc segments — now exists as `PtPSegment`, and both extractors emit
+it: the mesh path classifier demotes any run that fails the tolerance cascade, and the
+OCCT extractor uses it for any curve OCCT cannot identify as a line or a circle.
 
 A separate planned capability is seam extraction from scanned mesh inputs where CAD
 geometry is unavailable. This requires a different pipeline: plane segmentation from the

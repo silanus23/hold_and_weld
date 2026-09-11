@@ -12,20 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Load and process STL meshes for weld planning.
+"""MeshLoader - Load and process STL meshes for weld planning.
 
 Handles package:// URI resolution, mesh refinement, and manifold conversion.
 """
 
 import logging
 from pathlib import Path
-
-from ament_index_python.packages import get_package_share_directory
+from typing import Optional
 
 import manifold3d
 import numpy as np
 from numpy.typing import NDArray
 import trimesh
+
+from ..utils.path_utils import resolve_package_path
 
 logger = logging.getLogger(__name__)
 
@@ -42,20 +43,27 @@ class MeshLoader:
     def __init__(
         self,
         mesh_path: str | Path,
-        world_transform: NDArray = np.eye(4),
+        world_transform: Optional[NDArray] = None,
         refine_iterations: int = 32,
     ) -> None:
         """Initialize mesh loader and build manifold.
 
         Args:
             mesh_path: Path to mesh file (supports package:// URIs)
-            world_transform: Global pose matrix (4x4) to apply after loading
+            world_transform: Global pose matrix (4x4) to apply after loading.
+                Defaults to identity.
             refine_iterations: Number of mesh subdivision iterations (default: 32)
 
         Raises:
             ValueError: If mesh loading or conversion fails
             FileNotFoundError: If file doesn't exist
         """
+        # Built here rather than in the signature: a default argument is one
+        # array shared by every caller, and a caller that transforms it in
+        # place moves every later part that took the default with it.
+        if world_transform is None:
+            world_transform = np.eye(4)
+
         if world_transform.shape != (4, 4):
             raise ValueError(
                 f'world_transform must be 4x4, got {world_transform.shape}'
@@ -68,7 +76,7 @@ class MeshLoader:
         self.refine_iterations = refine_iterations
 
         logger.debug(f'Loading mesh from {mesh_path}')
-        resolved_path = self._resolve_package_path(mesh_path)
+        resolved_path = resolve_package_path(mesh_path)
         logger.debug(f'Resolved path: {resolved_path}')
 
         try:
@@ -88,37 +96,6 @@ class MeshLoader:
             )
         else:
             logger.info('Mesh loaded and converted to manifold (no refinement)')
-
-    def _resolve_package_path(self, path_str: str | Path) -> Path:
-        """Resolve package:// URI to absolute filesystem path."""
-        path_str = str(path_str)
-
-        # Handle ROS2 package:// URI scheme
-        if path_str.startswith('package://'):
-            without_prefix = path_str[len('package://'):]
-            parts = without_prefix.split('/', 1)
-
-            if len(parts) != 2:
-                raise ValueError(
-                    f'Invalid package path format (expected package://pkg_name/path): {path_str}'
-                )
-
-            package_name = parts[0]
-            relative_path = parts[1]
-
-            try:
-                package_dir = get_package_share_directory(package_name)
-            except Exception as e:
-                raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
-
-            resolved = Path(package_dir) / relative_path
-        else:
-            resolved = Path(path_str)
-
-        if not resolved.exists():
-            raise FileNotFoundError(f'File not found: {resolved}')
-
-        return resolved
 
     def _build_manifold(self, mesh: trimesh.Trimesh) -> manifold3d.Manifold:
         """Convert trimesh to manifold, refine for density, and apply world transform."""

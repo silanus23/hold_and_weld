@@ -23,8 +23,8 @@ from scipy.spatial.transform import Rotation
 import trimesh
 
 from .weld_planner import WeldPlanner
-from ..mesh.contact_boundary import ContactBoundaryExtractor
 from ..mesh.mesh_loader import MeshLoader
+from ..mesh.seam_extractor_mesh import SeamExtractorMesh
 from ..mesh.shell_generator import ShellGenerator
 from ..occt.occt_generator import OCCTGenerator
 from ..occt.occt_loader import OCCTLoader
@@ -32,6 +32,10 @@ from ..occt.seam_extractor_occt import SeamExtractorOCCT
 from ..urdf.urdf_processor import URDFProcessor
 
 logger = logging.getLogger(__name__)
+
+OCCT_EXTENSIONS = {'.step', '.stp', '.iges', '.igs'}
+MESH_EXTENSIONS = {'.stl'}
+URDF_EXTENSIONS = {'.urdf', '.xacro'}
 
 
 class JobPlanner:
@@ -70,7 +74,8 @@ class JobPlanner:
         self.main_world_transform = self._pose_to_matrix(main_world_pose)
         self.secondary_world_transform = self._pose_to_matrix(secondary_world_pose)
 
-        self.parameters = parameters or {}
+        explicit_refine = 'refine_iterations' in (parameters or {})
+        self.parameters = dict(parameters or {})
 
         if mode not in ['auto', 'mesh', 'occt']:
             raise ValueError(f"Mode must be 'auto', 'mesh', or 'occt', got '{mode}'")
@@ -81,7 +86,7 @@ class JobPlanner:
         else:
             self.mode = mode
 
-        explicit_refine = 'refine_iterations' in self.parameters
+        self._validate_inputs(main_path, secondary_path)
 
         if self.mode == 'occt':
             self.parameters.setdefault('epsilon', 1e-3)
@@ -118,22 +123,45 @@ class JobPlanner:
         main_ext = Path(main_path).suffix.lower()
         secondary_ext = Path(secondary_path).suffix.lower()
 
-        occt_extensions = {'.step', '.stp', '.iges', '.igs'}
-        mesh_extensions = {'.stl', '.urdf', '.xacro'}
-
-        if main_ext in occt_extensions or secondary_ext in occt_extensions:
+        if main_ext in OCCT_EXTENSIONS or secondary_ext in OCCT_EXTENSIONS:
             return 'occt'
 
-        if main_ext in mesh_extensions and secondary_ext in mesh_extensions:
+        if (main_ext in MESH_EXTENSIONS | URDF_EXTENSIONS
+                and secondary_ext in MESH_EXTENSIONS | URDF_EXTENSIONS):
             return 'mesh'
 
         raise ValueError(
             f'Cannot auto-detect mode: unsupported file extension(s)'
             f" '{main_ext}'/'{secondary_ext}'. "
-            f'Supported: {sorted(occt_extensions)} for OCCT mode, '
-            f'{sorted(mesh_extensions)} for mesh mode. '
+            f'Supported: {sorted(OCCT_EXTENSIONS)} for OCCT mode, '
+            f'{sorted(MESH_EXTENSIONS | URDF_EXTENSIONS)} for mesh mode. '
             f"Set mode explicitly via the 'mode' parameter."
         )
+
+    def _validate_inputs(self, main_path: str, secondary_path: str) -> None:
+        """Check both inputs are readable by the resolved pipeline.
+
+        Detection settles on a mode from whichever input is the more specific,
+        so a STEP paired with an STL selects OCCT and the STL then reaches the
+        URDF branch of the loader, where xacro fails on it as malformed XML.
+        Name the offending file here instead.
+
+        Raises:
+            ValueError: If either input's extension is foreign to `self.mode`.
+        """
+        allowed = URDF_EXTENSIONS | (
+            OCCT_EXTENSIONS if self.mode == 'occt' else MESH_EXTENSIONS
+        )
+
+        for label, path in (('main', main_path), ('secondary', secondary_path)):
+            extension = Path(path).suffix.lower()
+            if extension not in allowed:
+                raise ValueError(
+                    f'{self.mode.upper()} mode cannot read the {label} part '
+                    f"'{path}': extension '{extension}' is not one of "
+                    f'{sorted(allowed)}. Both parts must come from the same '
+                    f'family, or set the mode explicitly.'
+                )
 
     def plan_job(self) -> list:
         """Execute complete planning pipeline.
@@ -150,7 +178,7 @@ class JobPlanner:
             return self._plan_job_mesh()
 
     def _plan_job_mesh(self) -> list:
-        """Execute mesh-based planning pipeline using manifold3d and CGAL."""
+        """Execute mesh-based planning pipeline using manifold3d and trimesh."""
         logger.info('Generating mesh shells (manifold3d)...')
         mesh_main, mesh_secondary = self._generate_shells()
 
@@ -160,15 +188,9 @@ class JobPlanner:
                      f'faces={len(mesh_secondary.faces)}, bounds={mesh_secondary.bounds}')
 
         logger.info('Extracting seams as the contact boundary...')
-        extractor = ContactBoundaryExtractor(
+        extractor = SeamExtractorMesh(
             mesh_main, mesh_secondary, self.parameters
         )
-        if extractor.route() == 'intersect':
-            raise RuntimeError(
-                'Parts interpenetrate. Interpenetration is out of scope: the '
-                'contact boundary is the buried rim, not the seam. Fix the '
-                'part poses so the parts meet at a surface.'
-            )
         seams = extractor.extract_seams()
 
         if not seams:
@@ -262,7 +284,6 @@ class JobPlanner:
             manifold_obj = loader.manifold
         else:
             urdf = URDFProcessor(path)
-            urdf.world_transform = world_transform
             shell_gen = ShellGenerator(
                 urdf.robot, world_transform, refine_iterations=refine_iterations
             )
@@ -286,7 +307,6 @@ class JobPlanner:
             return loader.shape
         else:
             urdf = URDFProcessor(path)
-            urdf.world_transform = world_transform
             occt_gen = OCCTGenerator(urdf.robot, world_transform)
             return occt_gen.create_shape_for_all_links()
 

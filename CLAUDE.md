@@ -23,13 +23,8 @@ documenting every YAML config key.
 
 `hold_and_weld_gripper_sampler` requires OpenCASCADE 7.9.3, CGAL, FCL, and Embree 4.
 `hold_and_weld_application` requires MoveIt 2 and Google Ceres.
-`hold_and_weld_planning`'s mesh pipeline needs a manually built extension:
-
-```bash
-cd hold_and_weld_planning/hold_and_weld_planning/mesh
-mkdir build && cd build && cmake .. && make
-cp mesh_intersection*.so ../
-```
+`hold_and_weld_planning` is pure Python (trimesh, manifold3d, scipy, pythonocc-core)
+and needs no build step.
 
 ## Tests
 
@@ -116,18 +111,29 @@ and collision geometry during the Angle Finder phase.
 ## `hold_and_weld_planning` internals
 
 Two independent seam extractors feeding a common `Core` object model
-(`hold_and_weld_planning/core`: `Seam`, `LineSegment`, `ArcSegment`):
+(`hold_and_weld_planning/core`: `Seam`, `LineSegment`, `ArcSegment`,
+`PtPSegment`):
 
 - **OCCT extractor** (`occt/`): CAD-exact, uses `BRepExtrema_DistShapeShape` for
   face-pair proximity and `BRepAlgoAPI_Common` for exact intersection edges.
-  Deterministic, no parameter sensitivity. Pipe joint detection incomplete.
+  Geometry is exact and only two parameters are read (`epsilon`,
+  `num_smooth_points`), but it is NOT free of judgement: which part supplies the
+  base normal and which the wall is decided from boundary-edge topology, and a
+  curve OCCT cannot name as a line or circle is demoted to a PtP segment. Pipe
+  joint detection incomplete, and the package has no tests of its own.
 
-- **Mesh extractor** (`mesh/`): CGAL corefinement-based, requires the compiled
-  `mesh_intersection` C++ extension (see Build). Probabilistic/parameter-sensitive
-  — chains intersection segments via adjacency graph, corner-detects, B-spline
-  smooths, classifies line-vs-arc by best fit. Known limitation: corefinement
-  vertices are pinned to triangle edges, not the true intersection curve (see
-  ROADMAP.md for the two candidate fixes).
+- **Mesh extractor** (`mesh/`): contact-boundary based, pure Python. Marks faces
+  within `epsilon` of the other mesh, takes the edges bounding that set, keeps
+  those following a real part edge, chains them per mesh and stitches across
+  meshes, then slides each point off the vertex lattice onto the half level set
+  of a coverage field. Ownership — which mesh carries the edge — is decided per
+  POINT, so it alternates along a chain wherever a part overhangs.
+  Parameter-sensitive; `epsilon` is the central tolerance and is bounded above
+  by `refine_iterations` (see PARAMS.md).
+    - `mesh/params.py` — every tuning knob as a validated dataclass
+    - `mesh/mesh_fields.py` — cached geometric queries, and the contact measure
+    - `mesh/seam_extractor_mesh.py` — the extractor proper
+    - `mesh/path_creator.py` — LINE/ARC/PTP classification
 
 `planning/job_planner.py` and `planning/weld_planner.py` consume `Core` objects;
 `weld_planner.py` is the standardized planner producing the JSON weld path

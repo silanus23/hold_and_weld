@@ -1,7 +1,8 @@
 # hold_and_weld_planning
 
-A weld path creator for 6 DOF robots. Built on OCCT, CGAL, manifold3d, and trimesh.
-The current architecture assumes intersection lines between parts can be found reliably.
+A weld path creator for 6 DOF robots. Built on OCCT, manifold3d, trimesh and scipy.
+The current architecture assumes the region where two parts meet can be located
+reliably — as exact intersection edges in CAD, or as a contact boundary in mesh.
 Weld joint type (butt, fillet, lap) does not affect the planner since it operates purely
 on geometry outputs — any joint type is handled correctly given valid geometric values
 from the seam extraction side. Outputs weld paths as `JSON`.
@@ -27,20 +28,32 @@ automatically by the seam extractor output.
 
 ### Mesh
 
-Seam extractor for mesh inputs. Takes CGAL co-refinement as the starting point to get
-intersection curves between meshes. Working with meshes requires probabilistic approaches.
-Core objects need: contact type, which side of the intersection is surface or edge, and
-normals around each point.
+Seam extractor for mesh inputs. Meshes carry no exact intersection curve, so the seam
+is found as the boundary of the region where the two parts touch. Core objects need:
+contact type, which side of the seam is surface and which is edge, and normals around
+each point.
 
-To extract those values the current approach chains CGAL intersection segments into
-continuous paths using an adjacency graph, then applies aggressive corner detection
-combining angle-based and curvature-based methods with agreement voting. Sub-paths are
-split at detected corners, smoothed with B-splines, then classified as line or arc by
-comparing fit errors. The better fit is always chosen regardless of absolute error
-magnitude. A final merge pass tests compatibility between small segments and their
-neighbors — consecutive arcs, consecutive lines, and small lines are absorbed into
-adjacent larger segments where possible. Bimodality of normals around points is used to
-determine contact type.
+The pipeline: mark every face whose centroid lies within `epsilon` of the other mesh,
+take the edges bounding that marked set, and keep those that follow a real part edge —
+a sharp edge that also sits on the other mesh, so a part's own rim away from the joint
+is not welded. Those edges are chained into loops per mesh, pooled, and stitched across
+meshes, since each part contributes only the stretch where it terminates.
+
+Seam points then start life as mesh vertices, which caps the seam at the tessellation.
+A coverage field recovers the rest: around each point the other mesh's triangles are
+weighted by distance and by how squarely they oppose the mating surface, normalised so
+the field reads 1 inside the contact, 0 outside and 1/2 on the boundary. The boundary is
+that half level set, solved by bisection between vertices.
+
+Ownership — which mesh carries the geometric edge — is read per POINT, never per chain,
+because it alternates wherever a part overhangs. It is a comparison of each mesh's
+distance to its own nearest sharp edge, with no absolute threshold; genuine ties are
+broken on turning density, `sum(dihedral * edge_length) / sum(face area)` over a ball,
+which is conserved under retriangulation and so separates a real part edge from a merely
+tessellated curve.
+
+Classification into LINE, ARC and PTP is a tolerance cascade in `path_creator.py`, not a
+best-fit contest — see PARAMS.md.
 
 ### OCCT
 
@@ -48,11 +61,11 @@ Seam extractor for CAD inputs. Uses exact face-pair proximity detection via
 `BRepExtrema_DistShapeShape` to find kissing surfaces, then `BRepAlgoAPI_Common` to
 extract exact intersection edges. For each intersection edge, wall surfaces are selected
 based on whether a real boundary edge exists on the kissing face. Normals are evaluated
-directly from OCCT surface properties at each point. The result is more deterministic
-than the mesh pipeline with no parameter sensitivity on the geometry classification side.
-Pipe joint detection is under development.
-
-## Known Limitations
+directly from OCCT surface properties at each point; whichever part has a real boundary
+edge on the seam supplies the wall normal, and the other carries the base surface. The
+geometry is exact and only `epsilon` and `num_smooth_points` are read, so it is far less
+parameter-sensitive than the mesh pipeline — but it is not judgement-free, and it has no
+tests of its own. Pipe joint detection is under development.
 
 ## Results
 
@@ -64,12 +77,13 @@ Pipe joint detection is under development.
 
 ## Known Limitations
 
-- Mesh pipeline remains sensitive to parameters. Results may vary depending on mesh
-  density, inflation factor, and corner detection thresholds.
-- Mesh path classification always picks the better of line or arc regardless of absolute
-  fit error — no fallback for genuinely complex curves.
-- Seam chaining does not handle points where three or more surfaces meet — additional
-  branches are silently dropped.
+- Mesh pipeline remains sensitive to parameters, `epsilon` above all: too small and the
+  parts read as apart, too large and the contact boundary climbs the wall instead of
+  following the joint. `refine_iterations` bounds it from above. The extractor probes
+  neighbouring values each run and reports whether a stable band exists.
+- Seam chaining cuts at points where three or more boundary curves meet rather than
+  guessing which branch continues the seam, so those curves come out as separate open
+  chains. The cut is logged, not silent.
 - Pipe joint detection in the OCCT extractor is incomplete. Inner intersection curves
   are not distinguished from outer seam curves — users should verify output manually.
 - Tested on box, plate, and cylinder workpieces. Complex organic geometry is not yet

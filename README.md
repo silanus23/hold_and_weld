@@ -42,17 +42,7 @@ Key packages have detailed READMEs.
 - FCL
 - MoveIt 2
 
-**2. Build the mesh intersection extension**
-
-```bash
-cd hold_and_weld_planning/hold_and_weld_planning/mesh
-mkdir build && cd build
-cmake ..
-make
-cp mesh_intersection*.so ../
-```
-
-**3. Launch the system**
+**2. Launch the system**
 
 ```bash
 ros2 launch hold_and_weld_bringup system_bringup.launch.py

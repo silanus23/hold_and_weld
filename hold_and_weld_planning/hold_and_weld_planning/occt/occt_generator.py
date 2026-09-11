@@ -20,7 +20,7 @@ precise seam extraction without mesh approximation.
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -32,11 +32,12 @@ from OCC.Core.BRepPrimAPI import (
     BRepPrimAPI_MakeCylinder,
     BRepPrimAPI_MakeSphere,
 )
-from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf
+from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCC.Core.TopoDS import TopoDS_Compound
 from OCC.Core.TopoDS import TopoDS_Shape
-from scipy.spatial.transform import Rotation
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
+
+from ..utils.transforms import link_poses, numpy_to_gp_trsf, origin_to_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +52,25 @@ class OCCTGenerator:
     def __init__(
         self,
         robot_object: Any,
-        world_transform: NDArray = np.eye(4),
+        world_transform: Optional[NDArray] = None,
     ) -> None:
         """Initialize OCCT generator.
 
         Args:
             robot_object: The self.robot object from URDFProcessor
-            world_transform: Global starting pose matrix (4x4)
+            world_transform: Global starting pose matrix (4x4). Defaults to
+                identity.
 
         Raises:
-            ValueError: If world_transform is not 4x4
+            ValueError: If world_transform is not 4x4, or the URDF's joint
+                tree does not place every link.
         """
+        # Built here rather than in the signature: a default argument is one
+        # array shared by every caller, and a caller that transforms it in
+        # place moves every later part that took the default with it.
+        if world_transform is None:
+            world_transform = np.eye(4)
+
         if world_transform.shape != (4, 4):
             raise ValueError(
                 f'world_transform must be 4x4, got {world_transform.shape}'
@@ -69,6 +78,10 @@ class OCCTGenerator:
 
         self.robot = robot_object
         self.world_transform = world_transform
+        # A collision origin is stated relative to its LINK, not to the model
+        # root, so a multi-link part needs the joint tree walked before any of
+        # its geometry can be placed.
+        self.link_poses = link_poses(robot_object)
 
     def create_shape_for_all_links(self) -> TopoDS_Compound:
         """Combine all link geometries into single OCCT compound.
@@ -78,6 +91,12 @@ class OCCTGenerator:
 
         Returns:
             Combined TopoDS_Compound representing entire robot
+
+        Raises:
+            RuntimeError: If any link's geometry cannot be built. A compound
+                missing a link is not a smaller workpiece, it is the wrong
+                one: seam extraction would go on to weld the hole the missing
+                link left, so this cannot be downgraded to a skip.
         """
         compound = TopoDS_Compound()
         builder = BRep_Builder()
@@ -101,11 +120,14 @@ class OCCTGenerator:
 
             try:
                 link_shape = self.create_link_shape(link)
-                builder.Add(compound, link_shape)
-                processed_links += 1
             except Exception as e:
-                logger.warning(f'Failed to create shape for link "{link.name}": {e}')
-                continue
+                logger.error(f'Failed to create shape for link "{link.name}": {e}')
+                raise RuntimeError(
+                    f'Failed to create shape for link "{link.name}": {e}'
+                )
+
+            builder.Add(compound, link_shape)
+            processed_links += 1
 
         logger.info(f'Successfully created shapes for {processed_links}/{total_links} link(s)')
         return compound
@@ -178,10 +200,11 @@ class OCCTGenerator:
                     f'Unsupported geometry type: {type(geom).__name__}'
                 )
 
-            local_T = self._get_collision_transform(collision)
-            absolute_T = self.world_transform @ local_T
+            link_T = self.link_poses.get(link.name, np.eye(4))
+            local_T = origin_to_matrix(collision.origin)
+            absolute_T = self.world_transform @ link_T @ local_T
 
-            trsf = self._numpy_to_gp_trsf(absolute_T)
+            trsf = numpy_to_gp_trsf(absolute_T)
             transformed_shape = BRepBuilderAPI_Transform(shape, trsf).Shape()
             shapes.append(transformed_shape)
 
@@ -205,40 +228,3 @@ class OCCTGenerator:
                 raise ValueError(f'Failed to fuse shapes for link "{link.name}"')
 
         return result
-
-    def _get_collision_transform(self, collision) -> np.ndarray:
-        """Extract 4x4 homogeneous transform from URDF collision origin."""
-        origin = collision.origin if collision.origin else None
-
-        if origin is None:
-            return np.eye(4)
-
-        xyz = origin.xyz if origin.xyz else [0, 0, 0]
-        rpy = origin.rpy if origin.rpy else [0, 0, 0]
-
-        rot_matrix = Rotation.from_euler('xyz', rpy).as_matrix()
-
-        T = np.eye(4)
-        T[:3, :3] = rot_matrix
-        T[:3, 3] = xyz
-
-        return T
-
-    def _numpy_to_gp_trsf(self, matrix: np.ndarray) -> gp_Trsf:
-        """Convert numpy 4x4 homogeneous matrix to OCCT gp_Trsf transformation."""
-        rot = matrix[:3, :3]
-        det = np.linalg.det(rot)
-        if not np.isclose(det, 1.0, atol=1e-3):
-            logger.warning(
-                f'Transform has non-unit determinant {det:.6f}, may contain scaling/shear'
-            )
-
-        trsf = gp_Trsf()
-
-        trsf.SetValues(
-            matrix[0, 0], matrix[0, 1], matrix[0, 2], matrix[0, 3],
-            matrix[1, 0], matrix[1, 1], matrix[1, 2], matrix[1, 3],
-            matrix[2, 0], matrix[2, 1], matrix[2, 2], matrix[2, 3],
-        )
-
-        return trsf

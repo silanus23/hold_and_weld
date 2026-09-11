@@ -58,9 +58,6 @@ class ArcSegment:
 
         self.radius = float(radius)
 
-        self.start = self.points[0]
-        self.end = self.points[-1]
-
         # Normalize away vector if provided, discard if degenerate
         if away_from_wall_vector is not None:
             away_from_wall_vector = np.array(away_from_wall_vector, dtype=float)
@@ -73,6 +70,16 @@ class ArcSegment:
                 self.away_from_wall_vector = None
         else:
             self.away_from_wall_vector = None
+
+    @property
+    def start(self) -> NDArray:
+        """Return first point of arc, derived from `points` on every access."""
+        return self.points[0]
+
+    @property
+    def end(self) -> NDArray:
+        """Return last point of arc, derived from `points` on every access."""
+        return self.points[-1]
 
     @classmethod
     def from_geometry_dict(

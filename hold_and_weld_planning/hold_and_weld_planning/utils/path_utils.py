@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""File I/O utilities for loading YAML configs and exporting JSON poses."""
+"""File I/O utilities: path resolution, YAML config, JSON export."""
 
 from datetime import datetime
 import json
@@ -24,7 +24,63 @@ import yaml
 
 from ..core.seam import Seam
 
+try:
+    from ament_index_python.packages import get_package_share_directory
+except ImportError:
+    # Only package:// URIs need it, so a non-ROS environment can still use
+    # every other function here; the failure is raised at resolve time.
+    get_package_share_directory = None
+
 logger = logging.getLogger(__name__)
+
+
+def resolve_package_path(path_str: str | Path) -> Path:
+    """Resolve a package:// URI, or a plain path, to an absolute path.
+
+    Args:
+        path_str: Path to resolve, either a package://pkg_name/rel/path URI
+                  or an ordinary filesystem path
+
+    Returns:
+        Absolute path to an existing file
+
+    Raises:
+        ImportError: If a package:// URI is given without ament_index_python
+        ValueError: If the package:// URI is malformed
+        FileNotFoundError: If the package or the file does not exist
+    """
+    path_str = str(path_str)
+
+    if path_str.startswith('package://'):
+        if get_package_share_directory is None:
+            raise ImportError(
+                'ament_index_python not available for package:// resolution'
+            )
+
+        without_prefix = path_str[len('package://'):]
+        parts = without_prefix.split('/', 1)
+
+        if len(parts) != 2:
+            raise ValueError(
+                'Invalid package path format '
+                f'(expected package://pkg_name/path): {path_str}'
+            )
+
+        package_name, relative_path = parts
+
+        try:
+            package_dir = get_package_share_directory(package_name)
+        except Exception as e:
+            raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
+
+        resolved = Path(package_dir) / relative_path
+    else:
+        resolved = Path(path_str)
+
+    if not resolved.exists():
+        raise FileNotFoundError(f'File not found: {resolved}')
+
+    return resolved
 
 
 def load_urdf_config(

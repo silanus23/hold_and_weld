@@ -21,7 +21,7 @@
 | `parameters.travel_angle_deg` | double | — | Torch tilt angle along travel direction [deg]. Required. |
 | `parameters.gap_mm` | double | — | Distance from seam to torch tip [mm]. Required. |
 | `parameters.waypoint_spacing_mm` | double | 10.0 | Distance between generated waypoints along seam [mm] |
-| `parameters.num_smooth_points` | int | 100 | Number of points per smoothed seam segment |
+| `parameters.num_smooth_points` | int | 100 | Points sampled along each seam curve. **OCCT mode only** - nothing under `mesh/` reads it, where seam density comes from the tessellation and `refine_iterations` instead. Must be >= 2. |
 
 ## Mesh
 
@@ -48,6 +48,11 @@ The seam extractor proper. `epsilon` is the central tolerance here as well as
 in OCCT mode; the rest are mesh-derived multipliers or candidate counts, so
 they do not need changing when part size changes.
 
+Every default below is declared on `SeamExtractorMeshParams` in
+`mesh/params.py`, and the Path Creator defaults on `PathCreatorParams` beside
+it, so the tables here can be checked against the code mechanically rather
+than by eye.
+
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `parameters.epsilon` | double | 0.002 | Face is in contact when its centroid is within this of the other surface [m]. Also the fit-up gap the parts are allowed to stand off by. |
@@ -59,7 +64,8 @@ they do not need changing when part size changes.
 | `parameters.closest_face_candidates` | int | 12 | Faces considered per point when finding the nearest surface, taken by nearest centroid. |
 | `parameters.closest_vertex_candidates` | int | 4 | Vertices whose incident faces are added to that candidate set, so a face whose centroid is far but whose body is near is not missed. |
 | `parameters.eps_stability_factors` | list | [0.75, 1.5] | Multipliers on `epsilon` used to probe whether the contact boundary is stable against it. Must be positive and not 1.0. |
-| `parameters.interpenetration_volume_m3` | double | 1e-12 | Intersection volume above which the parts are treated as interpenetrating rather than touching, which is out of scope [m^3]. |
+| `parameters.eps_stability_tolerance` | double | 0.25 | Relative change in the number of contact-boundary vertices, at those probe factors, below which `epsilon` is reported stable. Movement in ONE direction only means `epsilon` sits near that end of its band, which is logged as headroom rather than a fault; movement BOTH ways means no stable band exists and is a warning. 0 flags any movement at all. |
+| `parameters.interpenetration_volume_m3` | double | 1e-12 | Shared volume above which the parts are reported as interpenetrating rather than touching [m^3]. Logged as a WARNING naming the measured overlap; the run continues. Interpenetration is out of scope — the contact boundary of a buried part is its buried rim — but the failure is graded: measured on a 25mm cylinder into a plate at `epsilon` 2mm, buried 1mm still yields one closed 96-point chain sitting 1mm inside the plate, while buried 5mm or more yields no chain at all. Only the shallow end is dangerous. The default is very tight: a 0.1mm interference measures 196mm³ against a 0.001mm³ threshold, so expect this to fire on modelling interference that is harmless. Costs one manifold3d boolean, ~0.46s on an 800k-face pair. |
 
 #### Sub-vertex refinement
 
@@ -91,7 +97,7 @@ happened to sit nearby.
 |---|---|---|---|
 | `parameters.edge_joint_floor_factor` | double | 0.001 | How close a chain point must sit to the LOSING mesh's own sharp edge to count as edge-to-edge there, as a fraction of that mesh's median edge length. |
 | `parameters.ownership_radius_factor` | double | 2.0 | Radius of the turning-density neighbourhood used to break a sharp-edge distance TIE, as a multiple of the coarser mesh's median edge length. |
-| `parameters.ownership_tie_tolerance` | double | 1e-9 | Relative tolerance at which the two meshes' sharp-edge distances count as tied, and the density comparison takes over. |
+| `parameters.ownership_tie_factor` | double | 0.001 | Gap, as a multiple of the coarser mesh's median edge, below which the two meshes' sharp-edge distances count as tied and the turning-density comparison takes over. Absolute rather than relative: both distances are refinement residuals near zero, and a relative tolerance ties only exact zeros. |
 
 `_owner` compares distance to each mesh's own nearest sharp edge, which is
 informative wherever one part terminates and the other does not. Where the two
@@ -135,7 +141,7 @@ contributes a small area and only its own real turning.
 nearer, and edge-to-edge is where that comparison is effectively a tie - both
 parts terminating on the same curve. `edge_joint_floor_factor` floors the
 LOSER's distance against its own mesh's tessellation scale rather than
-`epsilon`, because this residual is a corefinement/refine artifact, two to
+`epsilon`, because this residual is a refinement artifact, two to
 three orders of magnitude smaller than the fit-up gap `epsilon` is sized for.
 Measured on a real butt-joint part: loser distance min=0.000/median=0.001/
 p95=0.003/max=0.003mm over a 158-point chain whose mesh has a ~12.5mm median
@@ -189,11 +195,12 @@ length of a joint-character run before it is absorbed into its neighbour.
 
 ## Planned Parameters
 
-These parameters exist in the codebase but are not yet fully exposed or stabilized.
+Open work on parameters that do exist, rather than parameters that do not.
+`line_error_threshold`, `circle_error_threshold` and `angle_threshold_deg` were
+listed here as unimplemented; they are not read anywhere in the codebase and the
+fit tolerances that replaced them are under Path Creator, so they have been
+removed rather than left looking pending.
 
 | Parameter | Description |
 |---|---|
 | `parameters.epsilon` | One key serves two jobs in mesh mode: the contact test in `_boundary_edges` and the fit-up gap. Splitting them is open work. |
-| `parameters.line_error_threshold` | Line fit error threshold. Not yet implemented or exposed to YAML configuration. |
-| `parameters.circle_error_threshold` | Circle fit error threshold. Not yet implemented or exposed to YAML configuration. |
-| `parameters.angle_threshold_deg` | Angle threshold in degrees. Not yet implemented or exposed to YAML configuration. |

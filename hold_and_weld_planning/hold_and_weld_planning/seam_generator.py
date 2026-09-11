@@ -177,7 +177,9 @@ def main():
             'work_angle_deg': parameters['work_angle_deg'],
             'travel_angle_deg': parameters['travel_angle_deg'],
             'gap_mm': parameters['gap_mm'],
-            'pipeline': mode,
+            # The planner resolves 'auto' against the input extensions, so
+            # read the pipeline it actually ran rather than what was asked for.
+            'pipeline': planner.mode,
         }
 
         export_to_json(generated_seams, output_path, metadata)

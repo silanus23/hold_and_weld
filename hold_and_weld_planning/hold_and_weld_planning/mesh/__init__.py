@@ -14,9 +14,9 @@
 
 """Mesh-based weld seam extraction and shell generation utilities."""
 
-from .contact_boundary import ContactBoundaryExtractor
 from .mesh_loader import MeshLoader
 from .path_creator import PathCreator
+from .seam_extractor_mesh import SeamExtractorMesh
 from .seam_point import SeamPoint
 from .shell_generator import ShellGenerator
 
@@ -25,5 +25,5 @@ __all__ = [
     'ShellGenerator',
     'PathCreator',
     'SeamPoint',
-    'ContactBoundaryExtractor',
+    'SeamExtractorMesh',
 ]
