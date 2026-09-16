@@ -14,10 +14,9 @@
 
 """PathCreator - Classify ordered SeamPoints into geometric segments.
 
-A run is a LINE when a straight line holds the process path tolerance, an ARC
-when a circle holds the stricter arc tolerance over a minimum angle, and PTP
-otherwise. Line wins ties; forcing a near-circle into an arc leaves the seam,
-while demoting a true arc to PTP only densifies waypoints.
+A run is a LINE when a straight line holds the process path tolerance, an ARC when a circle holds
+the stricter arc tolerance over a minimum angle, and PTP otherwise. Line wins ties; forcing a
+near-circle into an arc leaves the seam, while demoting a true arc to PTP only densifies waypoints.
 """
 
 import logging
@@ -50,24 +49,12 @@ class PathCreator:
         Raises:
             ValueError: If a parameter is out of range.
         """
-        self._init_config: Dict[str, Any] = config or {}
-        self._apply_config(None)
+        self.cfg = PathCreatorParams.from_dict(config)
 
-    def _apply_config(self, config: Optional[Dict[str, Any]]) -> None:
-        """Rebuild params from per-call config > init config > defaults."""
-        self.cfg = PathCreatorParams.from_dict(
-            {**self._init_config, **(config or {})})
-
-    def process_path(
-        self,
-        seam_points: List[SeamPoint],
-        config: Optional[Dict[str, Any]] = None,
-        is_closed: bool = False,
-    ) -> List[Seam]:
+    def process_path(self, seam_points: List[SeamPoint], is_closed: bool = False) -> List[Seam]:
         """Process ordered SeamPoints into classified Seam objects.
 
         Args:
-            config: Optional per-call config, overriding construction config.
             is_closed: True when the points form a closed loop; the loop is
                 closed by wrapping the first point so a full circle can
                 classify as one arc.
@@ -75,26 +62,17 @@ class PathCreator:
         Returns:
             List of Seam objects. Empty if fewer than 2 valid points.
         """
-        if config is not None:
-            self._apply_config(config)
-
         if len(seam_points) < 2:
             logger.warning(f'Too few SeamPoints to process: {len(seam_points)}')
             return []
 
-        # The fits below are SVD-based: a single non-finite coordinate raises
-        # LinAlgError from inside LAPACK, naming neither the chain nor the point.
-        raw = [np.asarray(sp.position, dtype=float).ravel()
-               for sp in seam_points]
-        if any(p.shape != (3,) for p in raw):
+        if any(np.shape(sp.position) != (3,) for sp in seam_points):
             logger.warning('SeamPoint positions are not 3D; skipping chain')
             return []
-        bad = int(sum(not np.isfinite(p).all() for p in raw))
+        bad = sum(not np.isfinite(sp.position).all() for sp in seam_points)
         if bad:
             logger.warning(
-                f'{bad} of {len(raw)} SeamPoint position(s) non-finite; '
-                'skipping chain'
-            )
+                f'{bad} of {len(seam_points)} SeamPoint position(s) non-finite; skipping chain')
             return []
 
         working = list(seam_points)
@@ -108,24 +86,23 @@ class PathCreator:
             positions = np.array([sp.position for sp in sublist])
             for seg_points, seg_type, seg_start in self._classify(positions):
                 for split_pts, offset in self._split_by_length(seg_points, seg_type):
-                    seam = self._wrap_in_seam(
-                        split_pts, seg_type, sublist, seg_start + offset)
-                    if seam is not None:
-                        seams.append(seam)
+                    seams.append(self._wrap_in_seam(
+                        split_pts, seg_type, sublist, seg_start + offset))
 
         self._join_consecutive(seams, is_closed)
 
-        logger.info(f'PathCreator produced {len(seams)} Seam object(s)')
+        kinds = [seam.config['geometry_type'] for seam in seams]
+        line, arc, ptp = (kinds.count(kind) for kind in ('line', 'arc', 'ptp'))
+        logger.info(f'PathCreator produced {len(seams)} seams: {line} line, {arc} arc, {ptp} PtP')
         return seams
 
     def _join_consecutive(self, seams: List[Seam], is_closed: bool) -> None:
         """Extend each seam to where the next one begins, in place.
 
-        Splitting the chain into sublists loses the step across each
-        boundary - `_classify` already shares a junction point between
-        segments WITHIN a sublist; this extends the same rule across
-        sublist boundaries, after fitting rather than before so a foreign
-        sample never feeds a fit it doesn't belong to.
+        Splitting the chain into sublists loses the step across each boundary - `_classify` already
+        shares a junction point between segments WITHIN a sublist; this extends the same rule
+        across sublist boundaries, after fitting rather than before so a foreign sample never feeds
+        a fit it doesn't belong to.
         """
         if len(seams) < 2:
             return
@@ -135,39 +112,16 @@ class PathCreator:
             pairs.append((seams[-1], seams[0]))
 
         for seam, following in pairs:
-            points = seam.config.get('smoothed_points')
-            nxt = following.config.get('smoothed_points')
-            if points is None or nxt is None or not len(nxt):
+            points = seam.config['smoothed_points']
+            nxt = following.config['smoothed_points']
+            if np.array_equal(points[-1], nxt[0]):
                 continue
-            if np.allclose(points[-1], nxt[0]):
-                continue
-
-            # A far larger gap than one ordinary sample means a segment went
-            # missing (a `_wrap_in_seam` build failure) and the bridge crosses
-            # unwelded metal. Still the best available path, so it's joined
-            # and RECORDED rather than refused - the key rides to the JSON.
-            gap = float(np.linalg.norm(nxt[0] - points[-1]))
-            if len(points) > 1:
-                spacing = float(np.median(
-                    np.linalg.norm(np.diff(points, axis=0), axis=1)))
-                if spacing > 1e-12 and gap > self.cfg.max_bridge_factor * spacing:
-                    seam.config['bridged_gap_m'] = gap
-                    logger.warning(
-                        f'Bridging a {gap * 1000:.2f}mm gap to the next seam, '
-                        f'past {self.cfg.max_bridge_factor}x the seam sample '
-                        f'spacing of {spacing * 1000:.2f}mm; a segment is '
-                        'missing between them and the bridge crosses unwelded '
-                        'metal'
-                    )
 
             seam.config['smoothed_points'] = np.vstack([points, nxt[0]])
-            # The normals belong to the position, so take the NEXT seam's -
-            # they were evaluated there. WeldPlanner requires one per point.
+            # The normals belong to the position, so take the NEXT seam's - they were evaluated
+            # there. WeldPlanner requires one per point.
             for key in ('normals_main', 'normals_secondary'):
-                have, take = seam.config.get(key), following.config.get(key)
-                if have is None or take is None or not len(take):
-                    continue
-                seam.config[key] = np.vstack([have, take[0]])
+                seam.config[key] = np.vstack([seam.config[key], following.config[key][0]])
 
             if seam.line_segment is not None:
                 seam.line_segment.end = nxt[0]
@@ -176,20 +130,16 @@ class PathCreator:
             elif seam.ptp_segment is not None:
                 seam.ptp_segment.points = seam.config['smoothed_points']
 
-    def _split_on_contact_type(
-        self, seam_points: List[SeamPoint]
-    ) -> List[List[SeamPoint]]:
+    def _split_on_contact_type(self, seam_points: List[SeamPoint]) -> List[List[SeamPoint]]:
         """Group the chain into sublists of uniform joint character.
 
-        The character is (is_edge_joint, owner_side); a change in either
-        ends a sublist. Runs shorter than `min_contact_run` are flicker at
-        ambiguous zones and get absorbed into their longer same-mesh
-        neighbour - by LENGTH, not point count, since the two meshes sample
-        at very different densities. Never absorbed across a mesh handoff,
-        however short: that would relabel the other mesh's points into a fit
-        shaped by this mesh's geometry.
+        The character is (is_edge_joint, owner_side); a change in either ends a sublist. Runs
+        shorter than `min_contact_run` are flicker at ambiguous zones and get absorbed into their
+        longer same-mesh neighbour - by LENGTH, not point count, since the two meshes sample at
+        very different densities. Never absorbed across a mesh handoff, however short: that would
+        relabel the other mesh's points into a fit shaped by this mesh's geometry.
         """
-        runs: List[List[Any]] = []  # [type, count]
+        runs: List[List[Any]] = []
         for sp in seam_points:
             t = (sp.on_edge_1 and sp.on_edge_2, sp.owner_side)
             if runs and runs[-1][0] == t:
@@ -198,9 +148,8 @@ class PathCreator:
                 runs.append([t, 1])
 
         positions = np.asarray([sp.position for sp in seam_points], dtype=float)
-        cumulative = np.concatenate((
-            [0.0], np.cumsum(np.linalg.norm(np.diff(positions, axis=0), axis=1))
-        ))
+        step_dists = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+        cumulative = np.insert(np.cumsum(step_dists), 0, 0.0)
 
         while len(runs) > 1:
             # Arc length per run, recomputed because absorption mutates `runs`.
@@ -210,9 +159,6 @@ class PathCreator:
                 lengths.append(float(cumulative[end - 1] - cumulative[start]))
                 start = end
 
-            # Shortest first, but a run whose neighbours are all on the other
-            # mesh is skipped rather than merged, so the search has to carry on
-            # to the next-shortest instead of stopping at the minimum.
             absorbed = False
             for shortest in np.argsort(lengths):
                 shortest = int(shortest)
@@ -232,7 +178,6 @@ class PathCreator:
             if not absorbed:
                 break
 
-            # Re-merge neighbours that now share a type.
             i = 1
             while i < len(runs):
                 if runs[i][0] == runs[i - 1][0]:
@@ -245,31 +190,20 @@ class PathCreator:
         pending: List[SeamPoint] = []
         cursor = 0
         for _, count in runs:
-            # Sublists are disjoint, so the step across each boundary is lost
-            # here; _join_consecutive repairs it downstream after fitting.
             chunk = seam_points[cursor: cursor + count]
             cursor += count
             if len(chunk) >= 2:
                 sublists.append(pending + chunk)
                 pending = []
             elif sublists:
-                # One point cannot carry a segment of its own; it is a
-                # junction, so it goes to the sublist it follows rather than
-                # being dropped and opening a gap in the path.
                 sublists[-1].extend(chunk)
             else:
-                # No sublist exists yet to follow, since this run is the
-                # first in the chain; carried forward onto the first one
-                # that does get created, rather than dropped here.
                 pending.extend(chunk)
 
         if pending:
             if sublists:
                 sublists[0][:0] = pending
             else:
-                # The whole chain was single-point runs; too short for any
-                # segment, but returned rather than dropped so the caller
-                # sees it, not a silently empty chain.
                 sublists.append(pending)
         return sublists
 
@@ -277,11 +211,10 @@ class PathCreator:
         """Greedy tolerance-cascade consumer over the ordered positions.
 
         Returns:
-            (points, type, start) per segment, where `start` indexes the
-            segment's first point in `positions`. The index is carried rather
-            than recovered later: the points are the only thing a segment
-            keeps, and matching them back by position costs a scan per point
-            and cannot separate two coincident samples.
+            (points, type, start) per segment, where `start` indexes the segment's first point in
+            `positions`. The index is carried rather than recovered later: the points are the only
+            thing a segment keeps, and matching them back by position costs a scan per point and
+            cannot separate two coincident samples.
         """
         n = len(positions)
         segments: List[Tuple[NDArray, str, int]] = []
@@ -293,7 +226,6 @@ class PathCreator:
             if remaining < self.cfg.min_fit_points:
                 if ptp_start is None:
                     ptp_start = k
-                k = n
                 break
 
             m_line = self._grow_line(positions, k)
@@ -302,10 +234,12 @@ class PathCreator:
             take_type: Optional[str] = None
             take_end = k
 
-            line_ok = (m_line - k) >= self.cfg.min_fit_points
-            arc_ok = (m_arc - k) >= self.cfg.min_fit_points
+            len_line = m_line - k
+            len_arc = m_arc - k
+            line_ok = len_line >= self.cfg.min_fit_points
+            arc_ok = len_arc >= self.cfg.min_fit_points
 
-            if arc_ok and (not line_ok or m_arc - k >= self.cfg.arc_gain * (m_line - k)):
+            if arc_ok and (not line_ok or len_arc >= self.cfg.arc_gain * len_line):
                 take_type, take_end = 'arc', m_arc
             elif line_ok:
                 take_type, take_end = 'line', m_line
@@ -324,7 +258,7 @@ class PathCreator:
             # Segments share their junction point for path continuity.
             k = take_end - 1 if take_end < n else n
 
-        if ptp_start is not None and n - ptp_start >= 2:
+        if ptp_start is not None:
             segments.append((positions[ptp_start:n], 'ptp', ptp_start))
 
         return [(pts, t, start) for pts, t, start in segments if len(pts) >= 2]
@@ -369,9 +303,8 @@ class PathCreator:
     def _fit_circle(self, points: NDArray) -> Optional[Dict[str, Any]]:
         """Kasa circle fit in the PCA plane, with full 3D max deviation.
 
-        Each point's deviation combines the in-plane radial error and the
-        out-of-plane height, so helical or warped runs cannot pass as planar
-        arcs. None on degenerate geometry.
+        Each point's deviation combines the in-plane radial error and the out-of-plane height, so
+        helical or warped runs cannot pass as planar arcs. None on degenerate geometry.
         """
         if len(points) < 3:
             return None
@@ -383,7 +316,7 @@ class PathCreator:
 
         x = centered @ e1
         y = centered @ e2
-        h = centered @ e3  # out-of-plane height
+        h = centered @ e3
 
         A = np.column_stack([x, y, np.ones(len(points))])
         params, _, _, _ = np.linalg.lstsq(A, x ** 2 + y ** 2, rcond=None)
@@ -410,15 +343,8 @@ class PathCreator:
             'subtended': subtended,
         }
 
-    def _split_by_length(
-        self, points: NDArray, seg_type: str
-    ) -> List[Tuple[NDArray, int]]:
-        """Split a segment into equal parts when it exceeds the type's max length.
-
-        Returns:
-            (points, offset) per part, where `offset` indexes the part's first
-            point in `points`.
-        """
+    def _split_by_length(self, points: NDArray, seg_type: str) -> List[Tuple[NDArray, int]]:
+        """Split a segment into equal parts when it exceeds the type's max length."""
         max_len = {
             'line': self.cfg.max_line_length,
             'arc': self.cfg.max_arc_length,
@@ -442,15 +368,8 @@ class PathCreator:
                 start = i
                 accumulated = 0.0
 
-        tail = points[start:]
-        if len(tail) >= 2:
-            result.append((tail, start))
-        elif result:
-            # Absorbed into the part before it, which keeps that part's offset.
-            last_points, last_start = result[-1]
-            result[-1] = (np.vstack([last_points, tail]), last_start)
-
-        return [(pts, offset) for pts, offset in result if len(pts) >= 2]
+        result.append((points[start:], start))
+        return result
 
     def _wrap_in_seam(
         self,
@@ -458,29 +377,14 @@ class PathCreator:
         seg_type: str,
         seam_points_subset: List[SeamPoint],
         start: int,
-    ) -> Optional[Seam]:
+    ) -> Seam:
         """Wrap positions into a Seam with per-point normals and metadata.
 
         Args:
             seam_points_subset: The SeamPoints the run was cut from.
             start: Index of `points[0]` within `seam_points_subset`.
         """
-        if len(points) < 2:
-            return None
-
-        # base -> main, wall -> secondary: SeamPoint names normals for their
-        # surface, Seam config uses the main/secondary vocabulary shared with
-        # OCCT and WeldPlanner. Indexed directly rather than matched by
-        # position - a closed loop revisits positions at its wrap, so a
-        # nearest-position search would silently pick the wrong SeamPoint.
         owners = seam_points_subset[start: start + len(points)]
-        if len(owners) != len(points):
-            logger.warning(
-                f'Segment of {len(points)} point(s) at index {start} runs past '
-                f'its {len(seam_points_subset)}-point subset; skipping'
-            )
-            return None
-
         normals_main = [sp.normal_base for sp in owners]
         normals_secondary = [sp.normal_wall for sp in owners]
 
@@ -488,39 +392,15 @@ class PathCreator:
         on_edge_1 = sum(sp.on_edge_1 for sp in seam_points_subset) > half
         on_edge_2 = sum(sp.on_edge_2 for sp in seam_points_subset) > half
 
-        # A dropped segment is a HOLE, not a shorter weld: `_join_consecutive`
-        # bridges straight across the gap, so the exported path runs through
-        # unwelded metal. PtP has no fit to fail, so it's always the fallback
-        # - only a PtP failure itself leaves nothing to return.
-        try:
-            if seg_type == 'line':
-                seam = Seam(line_segment=LineSegment(start=points[0], end=points[-1]))
-            elif seg_type == 'arc':
-                fit = self._fit_circle(points)
-                if fit is None:
-                    seam = Seam(ptp_segment=PtPSegment(points=points))
-                    seg_type = 'ptp'
-                else:
-                    seam = Seam(arc_segment=ArcSegment(
-                        points=points, center=fit['center'], radius=fit['radius']
-                    ))
-            else:
-                seam = Seam(ptp_segment=PtPSegment(points=points))
-        except (ValueError, KeyError, np.linalg.LinAlgError) as e:
-            logger.warning(
-                f'{seg_type.upper()} construction failed over {len(points)} '
-                f'point(s) ({e}); falling back to PtP over the same run'
-            )
-            try:
-                seam = Seam(ptp_segment=PtPSegment(points=points))
-            except (ValueError, np.linalg.LinAlgError) as ptp_error:
-                logger.error(
-                    f'PtP fallback also failed ({ptp_error}); the run from '
-                    f'{points[0]} to {points[-1]} is DROPPED and the exported '
-                    'path will bridge straight across it'
-                )
-                return None
+        fit = self._fit_circle(points) if seg_type == 'arc' else None
+        if seg_type == 'line':
+            seam = Seam(line_segment=LineSegment(start=points[0], end=points[-1]))
+        elif fit is not None:
+            seam = Seam(arc_segment=ArcSegment(
+                points=points, center=fit['center'], radius=fit['radius']))
+        else:
             seg_type = 'ptp'
+            seam = Seam(ptp_segment=PtPSegment(points=points))
 
         seam.config['is_edge_joint'] = on_edge_1 and on_edge_2
         seam.config['on_edge_1'] = on_edge_1

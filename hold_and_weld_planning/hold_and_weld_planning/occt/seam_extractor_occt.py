@@ -61,6 +61,7 @@ from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.ptp_segment import PtPSegment
 from ..core.seam import Seam
+from ..mesh.params import ParamsBase
 
 logger = logging.getLogger(__name__)
 
@@ -90,22 +91,17 @@ class SeamExtractorOCCT:
         self.shape_2 = shape_2
         self.params = params
 
-        self.num_smooth_points = int(params.get('num_smooth_points', 100))
-        self.tolerance = float(params.get('epsilon', 1e-3))
-        # Samples per curve when testing two intersection edges for
-        # coincidence. Endpoints plus interior: enough to separate two curves
-        # that share their ends but not their middle.
-        self.coincidence_samples = int(params.get('coincidence_samples', 5))
+        self.num_smooth_points = ParamsBase._coerce(
+            'num_smooth_points', int, params.get('num_smooth_points', 100))
+        self.tolerance = ParamsBase._coerce('epsilon', float, params.get('epsilon', 1e-3))
+        self.coincidence_samples = ParamsBase._coerce(
+            'coincidence_samples', int, params.get('coincidence_samples', 5))
         self._validate_params()
 
         # Centroids for geometry-based main/secondary determination
         self.centroid_1 = self._compute_shape_centroid(shape_1)
         self.centroid_2 = self._compute_shape_centroid(shape_2)
 
-        # Edge -> incident faces, once per shape. `_get_wall_surface_at_edge`
-        # is called for every boundary edge of every intersection and used to
-        # rebuild this map each time, which is a full topological traversal of
-        # the whole shape per edge.
         self._edge_face_maps = {
             id(shape_1): self._build_edge_face_map(shape_1),
             id(shape_2): self._build_edge_face_map(shape_2),
@@ -127,13 +123,7 @@ class SeamExtractorOCCT:
         Raises:
             ValueError: If a parameter is out of range.
         """
-        # `_process_single_edge` samples the curve at
-        # `i / (num_smooth_points - 1)`, so 1 divides by zero. That used to be
-        # swallowed by the per-edge handler in `extract_seams` and came out as
-        # an EMPTY weld path rather than an error - measured: 0 and 1 both
-        # yield zero seams, silently. Two points is the minimum that describes
-        # a segment at all.
-        # `_edge_lies_on` divides by `coincidence_samples - 1` in the same way.
+        # Both sample counts divide by (count - 1), and a per-edge failure only yields no seam.
         if self.coincidence_samples < 2:
             raise ValueError(
                 'coincidence_samples must be >= 2 (a curve needs two ends), '
@@ -146,9 +136,6 @@ class SeamExtractorOCCT:
                 f'got {self.num_smooth_points}'
             )
 
-        # Drives BRepExtrema face-pair acceptance and the Common fuzzy value;
-        # at or below zero no face pair is ever admitted and the parts read as
-        # not touching.
         if not self.tolerance > 0.0:
             raise ValueError(f'epsilon must be > 0, got {self.tolerance}')
 
@@ -217,9 +204,6 @@ class SeamExtractorOCCT:
 
         points = np.array(points)
 
-        if len(points) < 2:
-            raise RuntimeError('Edge sampling produced fewer than 2 points')
-
         # PIPE LOGIC DISABLED - under development (see commented methods below)
         # Pipe joints would check for inner holes and extract normals from outer shaft surfaces
 
@@ -276,11 +260,7 @@ class SeamExtractorOCCT:
 
         contact_candidates = []
 
-        # Every face pair otherwise gets an exact minimum-distance solve, which
-        # is by far the most expensive call here and is wasted on the great
-        # majority of pairs that are nowhere near each other. A bounding box
-        # inflated by the tolerance cannot exclude a pair that is within it,
-        # so this only removes work.
+        # Skips the exact distance solve for pairs whose inflated boxes are apart.
         boxes_1 = [self._bounding_box(face) for face in faces_1]
         boxes_2 = [self._bounding_box(face) for face in faces_2]
 
@@ -311,11 +291,7 @@ class SeamExtractorOCCT:
         return contact_candidates
 
     def _bounding_box(self, shape: TopoDS_Shape) -> Bnd_Box:
-        """Axis-aligned bounds of a shape, inflated by the contact tolerance.
-
-        Inflated by half the tolerance on each of the pair, so two boxes
-        overlap whenever the shapes could be within `tolerance` of each other.
-        """
+        """Axis-aligned bounds of a shape, inflated by half the contact tolerance on each side."""
         box = Bnd_Box()
         brepbndlib.Add(shape, box)
         box.Enlarge(0.5 * self.tolerance)
@@ -358,31 +334,16 @@ class SeamExtractorOCCT:
         return self._drop_coincident_edges(intersection_data)
 
     def _drop_coincident_edges(self, intersection_data: List[Dict]) -> List[Dict]:
-        """Drop intersection curves another accepted pair already covers.
+        """Drop intersection curves another face pair already produced.
 
-        One weld curve is reached by more than one face pair: on a box
-        standing on a plate, the box's underside against the plate's top
-        yields the whole rim, and each of the box's four side faces against
-        that same top yields one rim line again. Both are real intersections
-        of real face pairs, so nothing upstream can tell them apart - but the
-        curve is one weld and must be laid down once.
-
-        The mesh pipeline settles this the same way, in
-        `seam_extractor_mesh.drop_coincident`.
-
-        Args:
-            intersection_data: Edge records, in the order the face pairs were
-                walked.
+        One weld curve can come from more than one face pair, and must be welded once.
 
         Returns:
-            The same records, less those coincident with an earlier one. The
-            EARLIER record wins, so which face pair supplies the normals
-            follows face-explorer order.
+            The same records, less those coincident with an earlier one.
         """
         kept: List[Dict] = []
         for record in intersection_data:
-            if any(self._edges_coincide(record['edge'], other['edge'])
-                   for other in kept):
+            if any(self._edges_coincide(record['edge'], other['edge']) for other in kept):
                 continue
             kept.append(record)
 
@@ -397,12 +358,9 @@ class SeamExtractorOCCT:
     def _edges_coincide(self, edge_1: TopoDS_Shape, edge_2: TopoDS_Shape) -> bool:
         """Test whether two edges trace the same curve over the same extent.
 
-        Sampled in BOTH directions: a one-way test passes for an edge that is
-        merely a sub-stretch of the other, and dropping that would lose the
-        part of the weld the longer edge does not cover.
+        Checked both ways, since a sub-stretch lies on the longer edge but does not cover it.
         """
-        return (self._edge_lies_on(edge_1, edge_2)
-                and self._edge_lies_on(edge_2, edge_1))
+        return self._edge_lies_on(edge_1, edge_2) and self._edge_lies_on(edge_2, edge_1)
 
     def _edge_lies_on(self, edge: TopoDS_Shape, other: TopoDS_Shape) -> bool:
         """Whether every sample along `edge` sits within tolerance of `other`."""
@@ -419,9 +377,7 @@ class SeamExtractorOCCT:
                     return False
             return True
         except Exception as e:
-            # Unlike `_edges_are_geometrically_aligned`, a failure here is safe
-            # to report as "not the same curve": the cost is a duplicate weld
-            # pass, not a 90-degree normal error.
+            # Safe to treat as distinct: the cost is a duplicate weld, not a wrong normal.
             logger.debug(f'Could not compare edges for coincidence: {e}')
             return False
 
@@ -430,14 +386,7 @@ class SeamExtractorOCCT:
                                     ) -> TopoDS_Shape:
         """Get boundary edge from face that geometrically matches seam edge, or None if synthetic.
 
-        Returns None if the edge is synthetic.
-
-        Where several of the face's edges pass the alignment test — the four
-        sides of a square face all lie on the same plane as the seam, and two
-        opposite ones can both align with a seam that runs between them — the
-        NEAREST is taken. Explorer order is a property of how the shape was
-        built, not of the geometry, so letting it decide picks the wall on the
-        far side of the face as often as the right one.
+        When several edges align, the nearest wins rather than the first in explorer order.
         """
         edge_exp = TopExp_Explorer(face, TopAbs_EDGE)
 
@@ -460,14 +409,9 @@ class SeamExtractorOCCT:
     def _edges_are_geometrically_aligned(self, edge_1: TopoDS_Shape, edge_2: TopoDS_Shape) -> bool:
         """Check if two edges lie on the same geometric curve within tolerance.
 
-        Raises rather than returning False when the comparison cannot be made.
-        False means "these are different curves", which routes the caller to
-        the KISSING FACE for its normal instead of the wall - and those are
-        perpendicular by construction, so reporting a failed comparison as
-        False emits a seam whose every normal is 90 degrees wrong, silently.
-        Measured at exactly 90.0 degrees mean error on a cube-on-plate joint.
-        A raised error costs the one edge, which `extract_seams` already
-        counts and reports.
+        Raises:
+            RuntimeError: If the comparison fails. False would take the kissing face's normal
+                instead of the wall's, which is 90 degrees off.
         """
         try:
             adaptor_1 = BRepAdaptor_Curve(edge_1)
@@ -501,12 +445,7 @@ class SeamExtractorOCCT:
                         dist_end <= self.tolerance):
                     return False
 
-                # `Distance` is to the INFINITE line, so the test above is
-                # satisfied by two collinear segments that do not touch: the
-                # near and far edges of a long face lie on one line as surely
-                # as two halves of the same edge do. Require the segments to
-                # actually share some of that line before calling them the
-                # same curve.
+                # `Distance` is to the infinite line, so collinear segments must also overlap.
                 origin = line_2.Location()
                 direction = line_2.Direction()
 
@@ -522,8 +461,7 @@ class SeamExtractorOCCT:
                     parameter(adaptor_2.Value(adaptor_2.LastParameter())),
                 ))
 
-                overlap = (min(span_1[1], span_2[1])
-                           - max(span_1[0], span_2[0]))
+                overlap = min(span_1[1], span_2[1]) - max(span_1[0], span_2[0])
                 return overlap >= -self.tolerance
 
             # Circle alignment: check centers, radii, and plane normals match
@@ -575,11 +513,7 @@ class SeamExtractorOCCT:
                 return True
 
         except Exception as e:
-            raise RuntimeError(
-                f'Could not compare edge alignment: {e}. Refusing to report '
-                'this as "not aligned" - that would silently substitute the '
-                'kissing-face normal for the wall normal, a 90 degree error.'
-            )
+            raise RuntimeError(f'Could not compare edge alignment: {e}') from e
 
     def _get_wall_surface_at_edge(self,
                                   boundary_edge: TopoDS_Shape,
@@ -587,9 +521,7 @@ class SeamExtractorOCCT:
                                   kissing_face: TopoDS_Shape
                                   ) -> TopoDS_Shape:
         """Get perpendicular wall surface at boundary edge (excludes kissing face)."""
-        edge_face_map = self._edge_face_maps.get(id(shape))
-        if edge_face_map is None:
-            edge_face_map = self._build_edge_face_map(shape)
+        edge_face_map = self._edge_face_maps[id(shape)]
 
         if not edge_face_map.Contains(boundary_edge):
             raise RuntimeError('Boundary edge not found in shape topology')
@@ -729,94 +661,27 @@ class SeamExtractorOCCT:
                                       ) -> np.ndarray:
         """Extract normals at each point on a surface.
 
-        Fails rather than guesses. The previous behaviour substituted the
-        preceding point's normal, or a hardcoded [0,0,1] for the first point,
-        and returned an array indistinguishable from a measured one - so a
-        total failure to evaluate any normal produced a full set of
-        straight-up normals and a seam that looked perfectly well formed.
-        Nothing downstream can catch that: WeldPlanner validates normals for
-        presence and length only, never direction.
-
-        The ONE fallback kept is the previous normal ON A PLANAR FACE, where
-        it is not a guess: a plane's normal is constant, so the preceding
-        value is exactly the right answer. On any curved surface consecutive
-        normals genuinely differ and reusing one is wrong, so that raises.
-
         Raises:
-            RuntimeError: If a normal cannot be evaluated and cannot be
-                          recovered exactly.
+            RuntimeError: If a normal cannot be evaluated; no fallback direction is guessed.
         """
-        planar = BRepAdaptor_Surface(surface).GetType() == GeomAbs_Plane
-        normals = []
-
-        for index, point in enumerate(points):
-            try:
-                normal = self._evaluate_normal_at_point(point, surface)
-                normals.append(normal)
-            except Exception as e:
-                if normals and planar:
-                    normals.append(normals[-1])
-                    logger.debug(
-                        f'Normal failed at point {index} on a planar face; '
-                        f'reusing the previous normal, exact here: {e}'
-                    )
-                else:
-                    raise RuntimeError(
-                        f'Could not evaluate the surface normal at point '
-                        f'{index} of {len(points)}'
-                        + ('' if normals else ' (the first point)')
-                        + f' on a {"planar" if planar else "curved"} face: {e}'
-                    )
-
-        normals = np.array(normals)
-        normals = self._make_normals_consistent(normals)
-
+        normals = np.array([self._evaluate_normal_at_point(point, surface) for point in points])
+        self._warn_on_opposing_normals(normals)
         return normals
 
-    def _make_normals_consistent(self, normals: np.ndarray) -> np.ndarray:
-        """Report inconsistent normal orientation along an edge; change nothing.
+    def _warn_on_opposing_normals(self, normals: np.ndarray) -> None:
+        """Warn when adjacent normals oppose; they are never flipped.
 
-        Returns its input untouched. `_evaluate_normal_at_point` already
-        respects face orientation (TopAbs_REVERSED), so the normals arrive
-        correctly oriented, and measurement agrees: across a cube on a plate,
-        cylinder sectors from 90 to 360 degrees, and the shipped workpiece
-        scene, ZERO raw normals were ever wrongly signed. This has never had
-        anything to correct.
-
-        It used to rewrite them anyway, and every version of that rule
-        damaged correct data as soon as its premise failed:
-
-        - Comparing each normal against the MEAN assumes the whole seam fits
-          inside one hemisphere. True of a flat wall, false of a curved one:
-          0 normals wrongly reversed at 180 degrees, 2 of 40 at 181, 14 at
-          270, 20 of 40 at 360 - half a round seam pointing into the part.
-        - Comparing each normal against its NEIGHBOUR assumes adjacent
-          samples never truly oppose. False once the sample step passes 90
-          degrees: 1 of 3 and 2 of 4 on a full circle. At exactly 180 degrees
-          a turned normal and a flipped one are the same vector, so no rule
-          reading only the normals can separate them.
-
-        Nothing downstream can catch a reversed normal either - WeldPlanner
-        validates normals for presence and array length, never direction - so
-        the safe move is to measure and say so rather than guess. If this
-        warning ever fires there is a real case to design against; until then
-        there is not.
+        Face orientation is already applied, and no rule reading only the normals can tell a
+        flipped normal from a curved surface sampled too coarsely.
         """
-        if len(normals) < 2:
-            return normals
-
         adjacent = np.einsum('ij,ij->i', normals[:-1], normals[1:])
         opposing = int(np.sum(adjacent < 0.0))
         if opposing:
             logger.warning(
-                f'{opposing} of {len(normals) - 1} adjacent normal pair(s) '
-                'oppose each other on this edge. Either OCCT reported '
-                'inconsistent orientation, or the edge is sampled too '
-                'coarsely for its curvature (check num_smooth_points). The '
-                'normals are passed through unchanged - verify them before '
-                'trusting the weld poses from this seam.'
+                f'{opposing} of {len(normals) - 1} adjacent normal pair(s) oppose each other on '
+                'this edge: inconsistent OCCT orientation, or num_smooth_points too low for its '
+                'curvature. Passed through unchanged.'
             )
-        return normals
 
     def _compute_shape_centroid(self, shape: TopoDS_Shape) -> np.ndarray:
         """Compute the volumetric centroid of an OCCT shape."""
@@ -834,28 +699,12 @@ class SeamExtractorOCCT:
                                           ) -> Tuple[np.ndarray, np.ndarray]:
         """Determine which normals are main (base) vs secondary (wall).
 
-        MAIN is the base surface the seam lies ON, SECONDARY the wall of the
-        part that terminates there. This is the convention the mesh extractor
-        uses (`SeamPoint.normal_base` -> main, `normal_wall` -> secondary) and
-        the one WeldPlanner assumes for both extractors.
-
-        Decided by which part has a real boundary edge on the seam, which
-        `_process_single_edge` has already established: a part with a matching
-        boundary edge TERMINATES on the curve, so it supplies the wall; the
-        part without one carries the seam across its face, so it is the base.
-        That is the same relation the mesh extractor calls ownership.
-
-        The centroid projection below is the fallback for the two cases the
-        boundary test cannot separate - both parts terminating (an edge-to-edge
-        joint) or neither (both curves synthetic). It used to decide EVERY
-        case, and it decided them backwards: on a cube-on-plate joint it
-        returned the cube's wall as main and the plate as secondary, the
-        opposite of both this docstring's own stated intent and the mesh
-        extractor's output for the identical scene.
+        The part with a boundary edge on the seam ends there and supplies the wall; the other
+        carries the seam across its face. The centroid projection only decides when both or
+        neither part has one.
         """
         if has_boundary_A != has_boundary_B:
             if has_boundary_A:
-                # A terminates here, so A is the wall and B carries the base.
                 return normals_B, normals_A
             return normals_A, normals_B
 
@@ -935,7 +784,7 @@ class SeamExtractorOCCT:
         raise RuntimeError(f'Normal not defined at point {point}')
 
     def _detect_geometry(self, edge: TopoDS_Shape, points: np.ndarray) -> Dict:
-        """Detect geometry type (line, arc, or polyline) and extract geometric parameters."""
+        """Detect geometry type (line, arc, or ptp) and extract geometric parameters."""
         edge_adapted = BRepAdaptor_Curve(edge)
         curve_type = edge_adapted.GetType()
 
@@ -962,14 +811,11 @@ class SeamExtractorOCCT:
             }
 
         else:
+            # A false line or arc misleads the planner; PtP keeps the sampled points.
             return {
-                'type': 'polyline',
+                'type': 'ptp',
                 'points': points,
                 'curve_type': str(curve_type),
-                'description': (
-                    'Complex curve — emitted as a PtP segment carrying its '
-                    'sampled points'
-                )
             }
 
     def _wrap_in_seams(self,
@@ -978,57 +824,20 @@ class SeamExtractorOCCT:
                        normals_main: np.ndarray,
                        normals_secondary: np.ndarray
                        ) -> List[Seam]:
-        """Wrap geometry and normals into a Seam object with metadata.
-
-        The segment type is the only thing that varies per branch; the five
-        shared config keys are written once below, followed by whatever that
-        type adds. An unrecognised type yields no seam rather than a guess.
-        """
+        """Wrap geometry and normals into a Seam object with metadata."""
         points = geometry['points']
         kind = geometry['type']
         extra: Dict = {}
 
         if kind == 'line':
-            seam = Seam(line_segment=LineSegment(
-                start=geometry['start'], end=geometry['end']))
-
+            seam = Seam(line_segment=LineSegment(start=geometry['start'], end=geometry['end']))
         elif kind == 'arc':
             seam = Seam(arc_segment=ArcSegment(
-                points=points,
-                center=geometry['center'],
-                radius=geometry['radius'],
-            ))
-            extra = {
-                'arc_normal': geometry['normal'],
-                'is_closed': geometry['is_closed'],
-            }
-
-        elif kind == 'polyline':
-            # A curve OCCT could not identify as a line or a circle - an
-            # ellipse, spline, parabola. This used to be wrapped in a
-            # LineSegment from first point to last, which claims the strongest
-            # possible geometry for the curve least understood: `to_dict` then
-            # exported only start/end, `length_m` became the CHORD, and on a
-            # closed curve (an ellipse, the generic tilted circular feature)
-            # start == end, so a 169mm weld exported as a zero-length line
-            # with its geometry absent entirely.
-            #
-            # PtPSegment is what this case has needed: its `length()` sums the
-            # polyline and `to_dict` exports the points themselves. It is also
-            # the demotion the mesh extractor already makes for an unfittable
-            # run - a false PTP is safe, a false line or arc is not.
-            kind = 'ptp'
-            seam = Seam(ptp_segment=PtPSegment(points=points))
-            # `is_complex_curve` retired: it existed to flag exactly this case
-            # from behind a LineSegment, and `segment_type` now says 'ptp'.
-            extra = {'curve_type': geometry.get('curve_type', 'unknown')}
-
+                points=points, center=geometry['center'], radius=geometry['radius']))
+            extra = {'arc_normal': geometry['normal'], 'is_closed': geometry['is_closed']}
         else:
-            logger.warning(
-                f"Unrecognised geometry type '{kind}'; emitting no seam for "
-                'this edge rather than guessing at its shape'
-            )
-            return []
+            seam = Seam(ptp_segment=PtPSegment(points=points))
+            extra = {'curve_type': geometry['curve_type']}
 
         seam.config.update({
             'is_edge_joint': is_edge_joint,

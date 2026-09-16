@@ -109,6 +109,13 @@ class MeshLoader:
         except Exception as e:
             raise ValueError(f'Failed to convert mesh to manifold: {e}')
 
+        # manifold3d does not raise on a malformed mesh - it silently returns
+        # an empty Manifold whose error status would otherwise only surface
+        # much later, inside whatever boolean op first touches it.
+        status = manifold_obj.status()
+        if status != manifold3d.Error.NoError:
+            raise ValueError(f'Mesh failed manifold conversion: {status}')
+
         # Subdivide to increase vertex density for smoother seam extraction
         if self.refine_iterations > 0:
             logger.debug(f'Refining mesh with {self.refine_iterations} iterations')

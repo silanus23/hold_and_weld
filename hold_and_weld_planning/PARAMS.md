@@ -203,4 +203,4 @@ removed rather than left looking pending.
 
 | Parameter | Description |
 |---|---|
-| `parameters.epsilon` | One key serves two jobs in mesh mode: the contact test in `_boundary_edges` and the fit-up gap. Splitting them is open work. |
+| `parameters.epsilon` | One key serves two jobs in mesh mode: the contact test in `MeshFields.contact_boundary` and the fit-up gap. Splitting them is open work. |

@@ -383,6 +383,21 @@ class TestStitch:
         assert len(closed_points) == len(positions)
         np.testing.assert_allclose(closed_points, positions)
 
+    def test_a_short_straight_chain_is_not_closed(self):
+        # Its ends are exactly stitch_gap_factor spacings apart, so spacing alone would close it.
+        positions = np.column_stack([np.arange(4) * 1e-3, np.zeros(4), np.zeros(4)])
+
+        _, is_closed = stitch([(positions, False)], self.CFG)[0]
+
+        assert not is_closed
+
+    def test_a_short_turned_chain_still_closes(self):
+        positions = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]) * 1e-3
+
+        _, is_closed = stitch([(positions, False)], self.CFG)[0]
+
+        assert is_closed
+
     def test_an_open_chain_is_left_open_and_whole(self):
         # Ends far apart: no closure, and nothing trimmed either.
         positions = np.column_stack(

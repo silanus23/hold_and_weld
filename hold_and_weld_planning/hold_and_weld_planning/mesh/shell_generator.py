@@ -157,6 +157,9 @@ class ShellGenerator:
                 if isinstance(geom, Box):
                     if len(geom.size) != 3:
                         raise ValueError(f'Box size must be [x, y, z], got {geom.size}')
+                    if any(s <= 0 for s in geom.size):
+                        raise ValueError(
+                            f'Box size must be positive: {geom.size}')
                     manifold_obj = manifold3d.Manifold.cube(geom.size, center=True)
                     logger.debug(f'Created box: size={geom.size}')
 
@@ -199,7 +202,7 @@ class ShellGenerator:
                     if self.refine_iterations > 0:
                         manifold_obj = manifold_obj.refine(self.refine_iterations)
 
-                    link_T = self.link_poses.get(link.name, np.eye(4))
+                    link_T = self.link_poses[link.name]
                     local_T = origin_to_matrix(collision.origin)
                     absolute_T = self.world_transform @ link_T @ local_T
 
@@ -208,6 +211,11 @@ class ShellGenerator:
 
                     link_combined += transformed_obj
 
+            except ValueError:
+                # Raised deliberately above for a malformed/unsupported
+                # geometry spec; propagated as-is rather than folded into
+                # the RuntimeError below, matching this method's own Raises.
+                raise
             except Exception as e:
                 logger.error(f"Failed to process collision {idx} in link '{link.name}': {e}")
                 raise RuntimeError(

@@ -47,8 +47,12 @@ class ParamsBase:
             An instance with declared defaults for everything not supplied.
 
         Raises:
-            ValueError: If a value cannot be coerced, or fails a constraint.
+            ValueError: If params is not a dict, a value cannot be coerced,
+                or a value fails a constraint.
         """
+        if params is not None and not isinstance(params, dict):
+            raise ValueError(
+                f'params must be a dict, got {type(params).__name__}')
         given = params or {}
         taken = {}
         for spec in fields(cls):
@@ -60,58 +64,46 @@ class ParamsBase:
 
     @staticmethod
     def _coerce(name: str, declared: Any, value: Any) -> Any:
-        """Coerce one config value to its declared field type."""
+        """Coerce one config value to a finite number of its declared type."""
         try:
-            if declared is int or declared == 'int':
-                return int(value)
-            return float(value)
+            number = float(value)
         except (TypeError, ValueError):
             raise ValueError(
                 f'{name} must be a number, got {value!r}')
+        # YAML's .nan and .inf coerce cleanly, and nan passes every `< 0`
+        # style check, so they would otherwise switch features off silently.
+        if not np.isfinite(number):
+            raise ValueError(f'{name} must be finite, got {value!r}')
+        if declared is int or declared == 'int':
+            if not number.is_integer():
+                raise ValueError(
+                    f'{name} must be a whole number, got {value!r}')
+            return int(number)
+        return number
 
 
 @dataclass
 class SeamExtractorMeshParams(ParamsBase):
     """Tuning for SeamExtractorMesh; every field is optional."""
 
-    # Contact region
-    epsilon: float = 0.002                  # m, between fit-up gap and half
-    #                                         the transverse face size
-    edge_angle_min_deg: float = 0.0057      # dihedral above which an edge is
-    #                                         a real part edge
-    near_contact_edge_fraction: float = 0.1  # slack on epsilon, as a fraction
-    #                                          of this mesh's median edge
+    epsilon: float = 0.002
+    edge_angle_min_deg: float = 0.0057
+    near_contact_edge_fraction: float = 0.1
+    eps_stability_factors: Tuple[float, ...] = (0.75, 1.5)
+    eps_stability_tolerance: float = 0.25
+    min_loop_points: int = 4
+    stitch_gap_factor: float = 3.0
+    kernel_radius_factor: float = 1.0
+    coverage_bisection_steps: int = 20
 
-    # Epsilon plateau check
-    eps_stability_factors: Tuple[float, ...] = (0.75, 1.5)   # probe factors
-    eps_stability_tolerance: float = 0.25   # relative boundary movement
-    #                                         tolerated before "unstable"
+    ownership_radius_factor: float = 2.0
+    ownership_tie_factor: float = 0.001
+    edge_joint_floor_factor: float = 0.001
 
-    # Chaining and stitching
-    min_loop_points: int = 4                # shortest chain kept
-    stitch_gap_factor: float = 3.0          # gap allowed when joining two
-    #                                         pieces, x local sampling density
-
-    # Refinement onto the contact boundary
-    kernel_radius_factor: float = 1.0       # coverage radius, x local edge
-    coverage_bisection_steps: int = 20      # steps solving the half level set
-
-    # Ownership
-    ownership_radius_factor: float = 2.0    # turning radius, x coarser median
-    ownership_tie_factor: float = 0.001     # x coarser median edge, the gap
-    #                                         below which two sharp-edge
-    #                                         distances count as tied
-    edge_joint_floor_factor: float = 0.001  # x median edge, below which the
-    #                                         losing mesh is also on the edge
-
-    # Nearest-feature search widths, in candidates probed per point
     closest_face_candidates: int = 12
     closest_vertex_candidates: int = 4
     sharp_edge_candidates: int = 32
 
-    # Overlap volume above which the parts are reported as interpenetrating
-    # rather than touching. A WARNING, not a refusal - see
-    # SeamExtractorMesh._report_interpenetration.
     interpenetration_volume_m3: float = 1e-12
 
     @property
@@ -123,9 +115,14 @@ class SeamExtractorMeshParams(ParamsBase):
     def _coerce(name: str, declared: Any, value: Any) -> Any:
         """Coerce, with the probe-factor sequence as the one special case."""
         if name == 'eps_stability_factors':
+            if isinstance(value, (str, bytes)):
+                raise ValueError(
+                    'eps_stability_factors must be a list of probe factors, '
+                    f'e.g. [0.75, 1.5]; got {value!r}'
+                )
             try:
-                return tuple(float(f) for f in value)
-            except (TypeError, ValueError):
+                return tuple(ParamsBase._coerce(name, float, f) for f in value)
+            except TypeError:
                 raise ValueError(
                     'eps_stability_factors must be a list of probe factors, '
                     f'e.g. [0.75, 1.5]; got {value!r}'
@@ -154,7 +151,7 @@ class SeamExtractorMeshParams(ParamsBase):
             'stitch_gap_factor', 'interpenetration_volume_m3',
             'eps_stability_tolerance',
         ):
-            if getattr(self, key) < 0.0:
+            if not getattr(self, key) >= 0.0:
                 raise ValueError(
                     f'{key} must be >= 0, got {getattr(self, key)}')
 
@@ -204,28 +201,16 @@ class PathCreatorParams(ParamsBase):
     and its unit never drift apart.
     """
 
-    # Tolerance cascade
-    path_tolerance_mm: float = 1.0     # deviation a LINE may hold
-    arc_strictness: float = 0.5        # x path_tolerance_mm for an ARC;
-    #                                    0 disables arcs
-    min_arc_angle_deg: float = 15.0    # angle an arc must subtend to be worth
-    #                                    calling an arc
-    arc_gain: float = 1.5              # how much longer an arc run must be
-    #                                    than the line run it displaces
-    min_fit_points: int = 4            # points a fit needs
+    path_tolerance_mm: float = 1.0
+    arc_strictness: float = 0.5
+    min_arc_angle_deg: float = 15.0
+    arc_gain: float = 1.5
+    min_fit_points: int = 4
 
-    # Segment length caps, in metres; hard splits, not geometric
     max_line_length: float = 0.5
     max_arc_length: float = 0.5
     max_ptp_length: float = 0.1
 
-    # Gap `_join_consecutive` may close silently, as a multiple of the seam's
-    # own sample spacing. Past it the join is recorded as a bridged hole.
-    max_bridge_factor: float = 4.0
-
-    # Shared with WeldPlanner: the process spacing, which doubles as the
-    # shortest contact run kept when splitting on joint character. Not its own
-    # key because a run too short to carry two weld poses is not a segment.
     waypoint_spacing_mm: float = 10.0
 
     @property
@@ -255,14 +240,13 @@ class PathCreatorParams(ParamsBase):
             ValueError: If a parameter is out of range.
         """
         for key in ('path_tolerance_mm', 'max_line_length', 'max_arc_length',
-                    'max_ptp_length', 'arc_gain', 'waypoint_spacing_mm',
-                    'max_bridge_factor'):
+                    'max_ptp_length', 'arc_gain', 'waypoint_spacing_mm'):
             if not getattr(self, key) > 0.0:
                 raise ValueError(f'{key} must be > 0, got {getattr(self, key)}')
 
         # Zero is a legitimate way to disable each of these, negative is not.
         for key in ('arc_strictness', 'min_arc_angle_deg'):
-            if getattr(self, key) < 0.0:
+            if not getattr(self, key) >= 0.0:
                 raise ValueError(
                     f'{key} must be >= 0, got {getattr(self, key)}')
 
