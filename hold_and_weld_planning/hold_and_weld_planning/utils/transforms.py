@@ -20,7 +20,7 @@ agree on the Euler convention rather than each restating it.
 """
 
 import logging
-from typing import Any, List, Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 def xyz_rpy_to_matrix(
-    xyz: List[float] | NDArray,
-    rpy: List[float] | NDArray,
+    xyz: list[float] | NDArray,
+    rpy: list[float] | NDArray,
 ) -> NDArray:
     """Build a 4x4 homogeneous transform from a position and fixed-axis RPY.
 
@@ -59,7 +59,7 @@ def xyz_rpy_to_matrix(
     return matrix
 
 
-def origin_to_matrix(origin: Optional[Any]) -> NDArray:
+def origin_to_matrix(origin: Any | None) -> NDArray:
     """Convert a URDF `<origin>` element to a 4x4 homogeneous transform.
 
     A missing origin, or a missing xyz or rpy on one, means the identity for

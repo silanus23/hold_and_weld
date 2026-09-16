@@ -23,7 +23,6 @@ or extractor required.
 """
 
 import logging
-from typing import Dict, List, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -37,9 +36,9 @@ logger = logging.getLogger(__name__)
 
 def loops(
     side: int,
-    boundary: List[Tuple[int, int]],
+    boundary: list[tuple[int, int]],
     cfg: SeamExtractorMeshParams,
-) -> List[Tuple[List[int], bool]]:
+) -> list[tuple[list[int], bool]]:
     """Walk boundary edges into ordered chains of vertex indices.
 
     A boundary vertex normally joins exactly two edges, so the walk has one way to continue. Graph
@@ -54,7 +53,7 @@ def loops(
         (vertex_indices, is_closed) per chain, shorter chains discarded. A closed chain does
         not repeat its first vertex at the end.
     """
-    adjacency: Dict[int, List[int]] = {}
+    adjacency: dict[int, list[int]] = {}
     for a, b in boundary:
         adjacency.setdefault(a, []).append(b)
         adjacency.setdefault(b, []).append(a)
@@ -66,7 +65,7 @@ def loops(
             f'mesh_{side} contact boundary crosses itself at {crossings} vertex(es); '
             'cutting into open chains there')
 
-    chains: List[Tuple[List[int], bool]] = []
+    chains: list[tuple[list[int], bool]] = []
     used: set = set()
 
     def walk(start: int, first: int) -> None:
@@ -96,10 +95,10 @@ def loops(
 
 def oriented(
     mesh: trimesh.Trimesh,
-    loop: List[int],
+    loop: list[int],
     contact: NDArray,
     wall_normal: NDArray,
-) -> List[int]:
+) -> list[int]:
     """Orient a loop so the contact region lies consistently to one side.
 
     Judged at the loop's first edge against the one contact face on it, not the centroid of the
@@ -125,8 +124,8 @@ def oriented(
 
 
 def drop_coincident(
-    pieces: List[Tuple[NDArray, bool]], cfg: SeamExtractorMeshParams
-) -> List[Tuple[NDArray, bool]]:
+    pieces: list[tuple[NDArray, bool]], cfg: SeamExtractorMeshParams
+) -> list[tuple[NDArray, bool]]:
     """Drop a piece that lies on top of a better-sampled one.
 
     On an edge-to-edge joint both parts terminate on the same curve and it would be welded twice.
@@ -138,7 +137,7 @@ def drop_coincident(
     """
     trees = [KDTree(positions) for positions, _ in pieces]
 
-    keep: List[Tuple[NDArray, bool]] = []
+    keep: list[tuple[NDArray, bool]] = []
     for index, (positions, is_closed) in enumerate(pieces):
         redundant = False
         n_pos = len(positions)
@@ -163,8 +162,8 @@ def drop_coincident(
 
 
 def stitch(
-    pieces: List[Tuple[NDArray, bool]], cfg: SeamExtractorMeshParams
-) -> List[Tuple[NDArray, bool]]:
+    pieces: list[tuple[NDArray, bool]], cfg: SeamExtractorMeshParams
+) -> list[tuple[NDArray, bool]]:
     """Join polylines from different meshes end to end into one chain.
 
     Each mesh contributes only the portion of the seam where it terminates, and the two share no
@@ -178,7 +177,7 @@ def stitch(
     open_pieces = [list(p) for p, closed in pieces if not closed]
     result = [(p, True) for p, closed in pieces if closed]
 
-    def span(piece: List[NDArray]) -> float:
+    def span(piece: list[NDArray]) -> float:
         """Measure the sample spacing local to the ENDS of one piece.
 
         At the ends, not pooled over the whole piece: a stitched chain crosses meshes sampled at

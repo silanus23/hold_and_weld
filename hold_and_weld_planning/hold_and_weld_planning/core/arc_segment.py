@@ -18,7 +18,7 @@ Provides a reusable geometric primitive for representing circular arcs in 3D spa
 Used for curved weld seams, particularly cylinder-to-surface joints.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,10 +38,10 @@ class ArcSegment:
 
     def __init__(
         self,
-        points: List[List[float]] | NDArray,
-        center: List[float] | NDArray,
+        points: list[list[float]] | NDArray,
+        center: list[float] | NDArray,
         radius: float,
-        away_from_wall_vector: List[float] | NDArray | None = None,
+        away_from_wall_vector: list[float] | NDArray | None = None,
     ) -> None:
         """Initialize arc segment with points, center, radius, and optional away vector."""
         self.points = np.array(points, dtype=float)
@@ -83,7 +83,7 @@ class ArcSegment:
 
     @classmethod
     def from_geometry_dict(
-        cls, geometry: Dict[str, Any], away_from_wall_vector: Optional[NDArray] = None
+        cls, geometry: dict[str, Any], away_from_wall_vector: NDArray | None = None
     ) -> 'ArcSegment':
         """Create ArcSegment from PathCreator geometry output.
 

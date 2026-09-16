@@ -19,7 +19,6 @@ Handles package:// URI resolution, mesh refinement, and manifold conversion.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import manifold3d
 import numpy as np
@@ -43,7 +42,7 @@ class MeshLoader:
     def __init__(
         self,
         mesh_path: str | Path,
-        world_transform: Optional[NDArray] = None,
+        world_transform: NDArray | None = None,
         refine_iterations: int = 32,
     ) -> None:
         """Initialize mesh loader and build manifold.

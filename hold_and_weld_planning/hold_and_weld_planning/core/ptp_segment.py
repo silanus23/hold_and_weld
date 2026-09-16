@@ -23,8 +23,6 @@ Used when sliding window classification finds a curve that fits neither
 a line nor an arc within acceptable error thresholds.
 """
 
-from typing import List
-
 import numpy as np
 from numpy.typing import NDArray
 
@@ -43,7 +41,7 @@ class PtPSegment:
 
     def __init__(
         self,
-        points: List[List[float]] | NDArray,
+        points: list[list[float]] | NDArray,
     ) -> None:
         """Initialize PtP segment with ordered point array.
 

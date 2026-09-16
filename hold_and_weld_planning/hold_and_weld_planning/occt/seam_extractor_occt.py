@@ -32,7 +32,6 @@ kissing surfaces, then extracts exact seam curves and surface normals.
 # - G1 continuity check samples only one point on edge
 
 import logging
-from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -73,7 +72,7 @@ class SeamExtractorOCCT:
     to extract exact intersection geometry.
     """
 
-    def __init__(self, shape_1: TopoDS_Shape, shape_2: TopoDS_Shape, params: Dict) -> None:
+    def __init__(self, shape_1: TopoDS_Shape, shape_2: TopoDS_Shape, params: dict) -> None:
         """Initialize OCCT seam extractor.
 
         Args:
@@ -139,7 +138,7 @@ class SeamExtractorOCCT:
         if not self.tolerance > 0.0:
             raise ValueError(f'epsilon must be > 0, got {self.tolerance}')
 
-    def extract_seams(self) -> List[Seam]:
+    def extract_seams(self) -> list[Seam]:
         """Extract all weld seams from the two shapes.
 
         Pipeline:
@@ -186,7 +185,7 @@ class SeamExtractorOCCT:
         logger.info(f'Successfully extracted {len(seams)} seam(s), {failed_count} edge(s) failed')
         return seams
 
-    def _process_single_edge(self, edge_data: Dict) -> List[Seam]:
+    def _process_single_edge(self, edge_data: dict) -> list[Seam]:
         """Process a single intersection edge into Seam objects."""
         edge = edge_data['edge']
         face_A = edge_data['face_A']
@@ -241,7 +240,7 @@ class SeamExtractorOCCT:
 
         return edge_seams
 
-    def _find_contact_face_pairs(self) -> List[Dict]:
+    def _find_contact_face_pairs(self) -> list[dict]:
         """Find all face pairs within tolerance using BRepExtrema_DistShapeShape proximity check.
 
         Uses BRepExtrema_DistShapeShape to find all face pairs within tolerance.
@@ -297,7 +296,7 @@ class SeamExtractorOCCT:
         box.Enlarge(0.5 * self.tolerance)
         return box
 
-    def _extract_intersection_edges(self, contact_candidates: List[Dict]) -> List[Dict]:
+    def _extract_intersection_edges(self, contact_candidates: list[dict]) -> list[dict]:
         """Extract intersection edges from contact face pairs using BRepAlgoAPI_Common."""
         intersection_data = []
 
@@ -333,7 +332,7 @@ class SeamExtractorOCCT:
 
         return self._drop_coincident_edges(intersection_data)
 
-    def _drop_coincident_edges(self, intersection_data: List[Dict]) -> List[Dict]:
+    def _drop_coincident_edges(self, intersection_data: list[dict]) -> list[dict]:
         """Drop intersection curves another face pair already produced.
 
         One weld curve can come from more than one face pair, and must be welded once.
@@ -341,7 +340,7 @@ class SeamExtractorOCCT:
         Returns:
             The same records, less those coincident with an earlier one.
         """
-        kept: List[Dict] = []
+        kept: list[dict] = []
         for record in intersection_data:
             if any(self._edges_coincide(record['edge'], other['edge']) for other in kept):
                 continue
@@ -553,7 +552,7 @@ class SeamExtractorOCCT:
     #     return num_wires > 1
 
     # def _get_pipe_surfaces(self, edge: TopoDS_Shape, face_1: TopoDS_Shape,
-    #                        face_2: TopoDS_Shape) -> Dict:
+    #                        face_2: TopoDS_Shape) -> dict:
     #     """Get outer shaft surfaces for pipe joint."""
     #     has_hole_1 = self._has_inner_holes(face_1)
     #     has_hole_2 = self._has_inner_holes(face_2)
@@ -600,7 +599,7 @@ class SeamExtractorOCCT:
     #         return False
 
     # def _get_neighbor_faces(
-    #         self, shape: TopoDS_Shape, target_face: TopoDS_Shape) -> List[TopoDS_Shape]:
+    #         self, shape: TopoDS_Shape, target_face: TopoDS_Shape) -> list[TopoDS_Shape]:
     #     """Get faces that share edges with target face."""
     #     edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
     #     topexp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
@@ -626,7 +625,7 @@ class SeamExtractorOCCT:
     #     return props.Mass()
 
     # def _get_pipe_normals(
-    #         self, points: np.ndarray, surfaces: Dict) -> Tuple[np.ndarray, np.ndarray]:
+    #         self, points: np.ndarray, surfaces: dict) -> tuple[np.ndarray, np.ndarray]:
     #     """Get normals for pipe joint from outer shafts."""
     #     shaft_1 = surfaces['shaft_1']
     #     shaft_2 = surfaces['shaft_2']
@@ -696,7 +695,7 @@ class SeamExtractorOCCT:
                                           seam_points: np.ndarray,
                                           has_boundary_A: bool,
                                           has_boundary_B: bool,
-                                          ) -> Tuple[np.ndarray, np.ndarray]:
+                                          ) -> tuple[np.ndarray, np.ndarray]:
         """Determine which normals are main (base) vs secondary (wall).
 
         The part with a boundary edge on the seam ends there and supplies the wall; the other
@@ -783,7 +782,7 @@ class SeamExtractorOCCT:
 
         raise RuntimeError(f'Normal not defined at point {point}')
 
-    def _detect_geometry(self, edge: TopoDS_Shape, points: np.ndarray) -> Dict:
+    def _detect_geometry(self, edge: TopoDS_Shape, points: np.ndarray) -> dict:
         """Detect geometry type (line, arc, or ptp) and extract geometric parameters."""
         edge_adapted = BRepAdaptor_Curve(edge)
         curve_type = edge_adapted.GetType()
@@ -819,15 +818,15 @@ class SeamExtractorOCCT:
             }
 
     def _wrap_in_seams(self,
-                       geometry: Dict,
+                       geometry: dict,
                        is_edge_joint: bool,
                        normals_main: np.ndarray,
                        normals_secondary: np.ndarray
-                       ) -> List[Seam]:
+                       ) -> list[Seam]:
         """Wrap geometry and normals into a Seam object with metadata."""
         points = geometry['points']
         kind = geometry['type']
-        extra: Dict = {}
+        extra: dict = {}
 
         if kind == 'line':
             seam = Seam(line_segment=LineSegment(start=geometry['start'], end=geometry['end']))

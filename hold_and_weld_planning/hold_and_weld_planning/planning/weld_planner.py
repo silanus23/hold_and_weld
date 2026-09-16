@@ -15,7 +15,7 @@
 """Generate weld torch poses along seam paths using dual surface normals."""
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class WeldPlanner:
     """Generate weld torch poses along seam paths using dual surface normals."""
 
-    def __init__(self, parameters: Dict[str, Any]) -> None:
+    def __init__(self, parameters: dict[str, Any]) -> None:
         """Initialize planner with weld parameters.
 
         Args:
@@ -133,7 +133,7 @@ class WeldPlanner:
                 f'points length {len(points)}'
             )
 
-    def _sample_by_distance(self, points: NDArray, spacing: float) -> List[int]:
+    def _sample_by_distance(self, points: NDArray, spacing: float) -> list[int]:
         """Return point indices sampled at specified spacing along path."""
         if len(points) == 0:
             return []
@@ -167,7 +167,7 @@ class WeldPlanner:
         normals_secondary: NDArray,
         is_edge_joint: bool,
         index: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compute torch pose at index with gap offset and work/travel angle rotations."""
         tangent = self._compute_tangent(points, index)
         main_normal = normals_main[index]
@@ -335,7 +335,7 @@ class WeldPlanner:
         binormal: NDArray,
         normal: NDArray,
         index: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build pose dictionary with position, quaternion, and 4x4 transform matrix."""
         rot_matrix = np.column_stack([tangent, binormal, normal])
 

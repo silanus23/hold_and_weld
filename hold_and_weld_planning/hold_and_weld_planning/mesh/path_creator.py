@@ -20,7 +20,7 @@ near-circle into an arc leaves the seam, while demoting a true arc to PTP only d
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 class PathCreator:
     """Classify ordered SeamPoints into segments wrapped in Seam objects."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
         """Initialize the segment classifier.
 
         Args:
@@ -51,7 +51,7 @@ class PathCreator:
         """
         self.cfg = PathCreatorParams.from_dict(config)
 
-    def process_path(self, seam_points: List[SeamPoint], is_closed: bool = False) -> List[Seam]:
+    def process_path(self, seam_points: list[SeamPoint], is_closed: bool = False) -> list[Seam]:
         """Process ordered SeamPoints into classified Seam objects.
 
         Args:
@@ -81,7 +81,7 @@ class PathCreator:
 
         sublists = self._split_on_contact_type(working)
 
-        seams: List[Seam] = []
+        seams: list[Seam] = []
         for sublist in sublists:
             positions = np.array([sp.position for sp in sublist])
             for seg_points, seg_type, seg_start in self._classify(positions):
@@ -96,7 +96,7 @@ class PathCreator:
         logger.info(f'PathCreator produced {len(seams)} seams: {line} line, {arc} arc, {ptp} PtP')
         return seams
 
-    def _join_consecutive(self, seams: List[Seam], is_closed: bool) -> None:
+    def _join_consecutive(self, seams: list[Seam], is_closed: bool) -> None:
         """Extend each seam to where the next one begins, in place.
 
         Splitting the chain into sublists loses the step across each boundary - `_classify` already
@@ -130,7 +130,7 @@ class PathCreator:
             elif seam.ptp_segment is not None:
                 seam.ptp_segment.points = seam.config['smoothed_points']
 
-    def _split_on_contact_type(self, seam_points: List[SeamPoint]) -> List[List[SeamPoint]]:
+    def _split_on_contact_type(self, seam_points: list[SeamPoint]) -> list[list[SeamPoint]]:
         """Group the chain into sublists of uniform joint character.
 
         The character is (is_edge_joint, owner_side); a change in either ends a sublist. Runs
@@ -139,7 +139,7 @@ class PathCreator:
         very different densities. Never absorbed across a mesh handoff, however short: that would
         relabel the other mesh's points into a fit shaped by this mesh's geometry.
         """
-        runs: List[List[Any]] = []
+        runs: list[list[Any]] = []
         for sp in seam_points:
             t = (sp.on_edge_1 and sp.on_edge_2, sp.owner_side)
             if runs and runs[-1][0] == t:
@@ -186,8 +186,8 @@ class PathCreator:
                 else:
                     i += 1
 
-        sublists: List[List[SeamPoint]] = []
-        pending: List[SeamPoint] = []
+        sublists: list[list[SeamPoint]] = []
+        pending: list[SeamPoint] = []
         cursor = 0
         for _, count in runs:
             chunk = seam_points[cursor: cursor + count]
@@ -207,7 +207,7 @@ class PathCreator:
                 sublists.append(pending)
         return sublists
 
-    def _classify(self, positions: NDArray) -> List[Tuple[NDArray, str, int]]:
+    def _classify(self, positions: NDArray) -> list[tuple[NDArray, str, int]]:
         """Greedy tolerance-cascade consumer over the ordered positions.
 
         Returns:
@@ -217,9 +217,9 @@ class PathCreator:
             cannot separate two coincident samples.
         """
         n = len(positions)
-        segments: List[Tuple[NDArray, str, int]] = []
+        segments: list[tuple[NDArray, str, int]] = []
         k = 0
-        ptp_start: Optional[int] = None
+        ptp_start: int | None = None
 
         while k < n:
             remaining = n - k
@@ -231,7 +231,7 @@ class PathCreator:
             m_line = self._grow_line(positions, k)
             m_arc = self._grow_arc(positions, k)
 
-            take_type: Optional[str] = None
+            take_type: str | None = None
             take_end = k
 
             len_line = m_line - k
@@ -300,7 +300,7 @@ class PathCreator:
         projected = np.outer(centered @ direction, direction)
         return float(np.max(np.linalg.norm(centered - projected, axis=1)))
 
-    def _fit_circle(self, points: NDArray) -> Optional[Dict[str, Any]]:
+    def _fit_circle(self, points: NDArray) -> dict[str, Any] | None:
         """Kasa circle fit in the PCA plane, with full 3D max deviation.
 
         Each point's deviation combines the in-plane radial error and the out-of-plane height, so
@@ -343,7 +343,7 @@ class PathCreator:
             'subtended': subtended,
         }
 
-    def _split_by_length(self, points: NDArray, seg_type: str) -> List[Tuple[NDArray, int]]:
+    def _split_by_length(self, points: NDArray, seg_type: str) -> list[tuple[NDArray, int]]:
         """Split a segment into equal parts when it exceeds the type's max length."""
         max_len = {
             'line': self.cfg.max_line_length,
@@ -358,7 +358,7 @@ class PathCreator:
         n_splits = int(np.ceil(total / max_len))
         target = total / n_splits
 
-        result: List[Tuple[NDArray, int]] = []
+        result: list[tuple[NDArray, int]] = []
         start = 0
         accumulated = 0.0
         for i in range(1, len(points)):
@@ -375,7 +375,7 @@ class PathCreator:
         self,
         points: NDArray,
         seg_type: str,
-        seam_points_subset: List[SeamPoint],
+        seam_points_subset: list[SeamPoint],
         start: int,
     ) -> Seam:
         """Wrap positions into a Seam with per-point normals and metadata.

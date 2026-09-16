@@ -148,7 +148,7 @@ class TestPtP:
 
 
 def flipping_chain(positions):
-    """SeamPoints for `positions` whose owner_side changes half way along.
+    """Build SeamPoints for `positions` whose owner_side changes half way along.
 
     `_split_on_contact_type` cuts the chain at the flip, so the two halves are
     fitted separately and `_join_consecutive` has a real gap to close.

@@ -16,7 +16,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -49,9 +49,9 @@ class JobPlanner:
         self,
         main_path: str,
         secondary_path: str,
-        main_world_pose: Optional[Dict[str, list]] = None,
-        secondary_world_pose: Optional[Dict[str, list]] = None,
-        parameters: Optional[Dict[str, Any]] = None,
+        main_world_pose: dict[str, list] | None = None,
+        secondary_world_pose: dict[str, list] | None = None,
+        parameters: dict[str, Any] | None = None,
         mode: str = 'auto',
     ) -> None:
         """Initialize job planner.
@@ -310,7 +310,7 @@ class JobPlanner:
             occt_gen = OCCTGenerator(urdf.robot, world_transform)
             return occt_gen.create_shape_for_all_links()
 
-    def _pose_to_matrix(self, pose: Optional[Dict[str, list]]) -> np.ndarray:
+    def _pose_to_matrix(self, pose: dict[str, list] | None) -> np.ndarray:
         """Convert xyz/rpy dict to 4x4 homogeneous transformation matrix."""
         if pose is None:
             return np.eye(4)

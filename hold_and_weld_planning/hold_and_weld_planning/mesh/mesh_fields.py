@@ -19,7 +19,6 @@ out of SeamExtractorMesh so it can request geometry rather than caching it itsel
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -34,20 +33,20 @@ logger = logging.getLogger(__name__)
 class MeshFields:
     """Cached geometric queries over the two meshes being joined."""
 
-    def __init__(self, mesh: Dict[int, trimesh.Trimesh], cfg: SeamExtractorMeshParams) -> None:
+    def __init__(self, mesh: dict[int, trimesh.Trimesh], cfg: SeamExtractorMeshParams) -> None:
         """Initialize the field cache from the two meshes and tuning params."""
         self.mesh = mesh
         self.cfg = cfg
 
-        self._distance_cache: Dict[int, NDArray] = {}
-        self._dihedral_cache: Dict[int, Dict[Tuple[int, int], float]] = {}
-        self._sharp_edge_cache: Dict[int, Optional[Tuple[NDArray, NDArray]]] = {}
-        self._sharp_tree_cache: Dict[int, Optional[KDTree]] = {}
-        self._centroid_tree_cache: Dict[int, KDTree] = {}
-        self._vertex_tree_cache: Dict[int, KDTree] = {}
-        self._edge_scale_cache: Dict[int, NDArray] = {}
-        self._median_edge_cache: Dict[int, float] = {}
-        self._turning_cache: Dict[int, Tuple[KDTree, NDArray]] = {}
+        self._distance_cache: dict[int, NDArray] = {}
+        self._dihedral_cache: dict[int, dict[tuple[int, int], float]] = {}
+        self._sharp_edge_cache: dict[int, tuple[NDArray, NDArray] | None] = {}
+        self._sharp_tree_cache: dict[int, KDTree | None] = {}
+        self._centroid_tree_cache: dict[int, KDTree] = {}
+        self._vertex_tree_cache: dict[int, KDTree] = {}
+        self._edge_scale_cache: dict[int, NDArray] = {}
+        self._median_edge_cache: dict[int, float] = {}
+        self._turning_cache: dict[int, tuple[KDTree, NDArray]] = {}
 
     def centroid_tree(self, side: int) -> KDTree:
         """KD-tree over one mesh's triangle centroids, built once per side."""
@@ -91,7 +90,7 @@ class MeshFields:
         ).reshape(n_pts, vcount * mesh.vertex_faces.shape[1])
         return np.hstack([by_centroid, incident])
 
-    def _nearest(self, side: int, points: NDArray) -> Tuple[NDArray, NDArray]:
+    def _nearest(self, side: int, points: NDArray) -> tuple[NDArray, NDArray]:
         """Distance to side's surface and the face carrying it, per point."""
         mesh = self.mesh[side]
         candidates = self._face_candidates(side, points)
@@ -174,7 +173,7 @@ class MeshFields:
         self._distance_cache[side] = distance
         return distance
 
-    def contact_boundary(self, side: int, epsilon: float) -> Tuple[NDArray, List[Tuple[int, int]]]:
+    def contact_boundary(self, side: int, epsilon: float) -> tuple[NDArray, list[tuple[int, int]]]:
         """Contact mask at `epsilon` and the edges with exactly one contact face.
 
         Edges come back in order of first appearance across the contact faces, which `loops` walks
@@ -216,7 +215,7 @@ class MeshFields:
                 return normal / norm
         return np.zeros(3)
 
-    def edge_dihedrals(self, side: int) -> Dict[Tuple[int, int], float]:
+    def edge_dihedrals(self, side: int) -> dict[tuple[int, int], float]:
         """Map each interior mesh edge to the angle between its two triangle faces.
 
             theta_e = arccos(normal_a . normal_b)
@@ -244,7 +243,7 @@ class MeshFields:
         self._dihedral_cache[side] = table
         return table
 
-    def _sharp_edges(self, side: int) -> Optional[Tuple[NDArray, NDArray]]:
+    def _sharp_edges(self, side: int) -> tuple[NDArray, NDArray] | None:
         """Endpoints of every sharp edge of one mesh, or None if it has none."""
         if side in self._sharp_edge_cache:
             return self._sharp_edge_cache[side]
@@ -258,7 +257,7 @@ class MeshFields:
         self._sharp_edge_cache[side] = pair
         return pair
 
-    def _sharp_midpoint_tree(self, side: int) -> Optional[KDTree]:
+    def _sharp_midpoint_tree(self, side: int) -> KDTree | None:
         """KD-tree over the midpoints of one mesh's sharp edges."""
         if side in self._sharp_tree_cache:
             return self._sharp_tree_cache[side]
@@ -302,7 +301,7 @@ class MeshFields:
             distance = np.minimum(distance, np.linalg.norm(closest - points, axis=1))
         return distance
 
-    def _turning_field(self, side: int) -> Tuple[KDTree, NDArray]:
+    def _turning_field(self, side: int) -> tuple[KDTree, NDArray]:
         """Midpoint tree and turning weight over ALL adjacency edges.
 
         The weight is `dihedral * shared_edge_length`, whose sum over a region is the discrete
@@ -398,7 +397,7 @@ class MeshFields:
         side: int,
         rho: float,
         mating: NDArray,
-    ) -> Optional[NDArray]:
+    ) -> NDArray | None:
         """Slide a point along `direction` onto the half level set of coverage.
 
         Searches BOTH ways, since the run end isn't guaranteed to start inside, it can sit just
@@ -468,8 +467,8 @@ def reject_holes(
         The same mask, with hole blocks restored to True.
     """
     count = len(inside)
-    blocks: List[Tuple[int, int]] = []
-    start: Optional[int] = None
+    blocks: list[tuple[int, int]] = []
+    start: int | None = None
     for i, ok in enumerate(inside):
         if not ok and start is None:
             start = i

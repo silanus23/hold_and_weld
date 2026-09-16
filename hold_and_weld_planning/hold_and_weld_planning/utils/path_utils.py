@@ -18,7 +18,7 @@ from datetime import datetime
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import yaml
 
@@ -85,7 +85,7 @@ def resolve_package_path(path_str: str | Path) -> Path:
 
 def load_urdf_config(
     yaml_path: str | Path,
-) -> Tuple[List[Seam], Dict[str, Any], Dict[str, Any]]:
+) -> tuple[list[Seam], dict[str, Any], dict[str, Any]]:
     """Load URDF-based weld configuration from YAML.
 
     Args:
@@ -147,9 +147,9 @@ def load_urdf_config(
 
 
 def export_to_json(
-    seams: List[Seam],
+    seams: list[Seam],
     output_path: str | Path,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Export generated seam poses to JSON file.
 

@@ -20,7 +20,6 @@ OCCT TopoDS_Shape objects for exact geometric seam extraction.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,7 +45,7 @@ class OCCTLoader:
     def __init__(
         self,
         cad_path: str | Path,
-        world_transform: Optional[NDArray] = None,
+        world_transform: NDArray | None = None,
     ) -> None:
         """Initialize OCCT loader and build shape.
 

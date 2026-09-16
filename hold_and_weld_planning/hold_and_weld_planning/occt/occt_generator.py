@@ -20,7 +20,7 @@ precise seam extraction without mesh approximation.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -52,7 +52,7 @@ class OCCTGenerator:
     def __init__(
         self,
         robot_object: Any,
-        world_transform: Optional[NDArray] = None,
+        world_transform: NDArray | None = None,
     ) -> None:
         """Initialize OCCT generator.
 

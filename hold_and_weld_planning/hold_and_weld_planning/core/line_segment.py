@@ -18,8 +18,6 @@ Provides a reusable geometric primitive for representing line segments in 3D spa
 Useful for mesh edges, rays, seam paths, and other linear geometric entities.
 """
 
-from typing import List
-
 import numpy as np
 from numpy.typing import NDArray
 
@@ -34,8 +32,8 @@ class LineSegment:
 
     def __init__(
         self,
-        start: List[float] | NDArray,
-        end: List[float] | NDArray,
+        start: list[float] | NDArray,
+        end: list[float] | NDArray,
     ) -> None:
         """Initialize line segment with start and end points."""
         self.start = np.array(start, dtype=float)

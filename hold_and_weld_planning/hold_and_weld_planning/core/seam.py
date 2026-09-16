@@ -19,7 +19,7 @@ PtPSegment for welding applications, managing both geometric data and
 generated trajectory poses.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .arc_segment import ArcSegment
 from .line_segment import LineSegment
@@ -40,11 +40,11 @@ class Seam:
 
     def __init__(
         self,
-        seam_dict: Optional[Dict[str, List[float]]] = None,
-        line_segment: Optional[LineSegment] = None,
-        arc_segment: Optional[ArcSegment] = None,
-        ptp_segment: Optional[PtPSegment] = None,
-        config: Optional[Dict[str, Any]] = None,
+        seam_dict: dict[str, list[float]] | None = None,
+        line_segment: LineSegment | None = None,
+        arc_segment: ArcSegment | None = None,
+        ptp_segment: PtPSegment | None = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize seam from a seam dict, LineSegment, ArcSegment, or PtPSegment."""
         sources_provided = sum(
@@ -82,21 +82,21 @@ class Seam:
         self.config = config or {}
 
     @property
-    def line_segment(self) -> Optional[LineSegment]:
+    def line_segment(self) -> LineSegment | None:
         """Return segment as LineSegment if applicable, else None."""
         if isinstance(self.segment, LineSegment):
             return self.segment
         return None
 
     @property
-    def arc_segment(self) -> Optional[ArcSegment]:
+    def arc_segment(self) -> ArcSegment | None:
         """Return segment as ArcSegment if applicable, else None."""
         if isinstance(self.segment, ArcSegment):
             return self.segment
         return None
 
     @property
-    def ptp_segment(self) -> Optional[PtPSegment]:
+    def ptp_segment(self) -> PtPSegment | None:
         """Return segment as PtPSegment if applicable, else None."""
         if isinstance(self.segment, PtPSegment):
             return self.segment
@@ -117,7 +117,7 @@ class Seam:
         """Return seam length in meters."""
         return self.segment.length()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON export.
 
         Returns:

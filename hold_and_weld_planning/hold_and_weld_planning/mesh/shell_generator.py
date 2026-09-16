@@ -20,7 +20,7 @@ extraction.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import manifold3d
 import numpy as np
@@ -42,7 +42,7 @@ class ShellGenerator:
     def __init__(
         self,
         robot_object: Any,
-        world_transform: Optional[NDArray] = None,
+        world_transform: NDArray | None = None,
         refine_iterations: int = 32,
     ) -> None:
         """Initialize shell generator.

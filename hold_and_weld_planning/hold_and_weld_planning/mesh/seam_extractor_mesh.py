@@ -21,7 +21,6 @@ there. Ownership is per point because it alternates wherever a part overhangs.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
 
 import manifold3d
 import numpy as np
@@ -39,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 MAX_PART_SIZE_M = 50.0
 
+
 class SeamExtractorMesh:
     """Extract weld seams from the contact region with per-point ownership."""
 
@@ -46,7 +46,7 @@ class SeamExtractorMesh:
         self,
         mesh_1: trimesh.Trimesh,
         mesh_2: trimesh.Trimesh,
-        params: Optional[Dict] = None,
+        params: dict | None = None,
     ) -> None:
         """Initialize the contact boundary extractor.
 
@@ -89,18 +89,18 @@ class SeamExtractorMesh:
         self.mesh = {1: mesh_1, 2: mesh_2}
         self.fields = MeshFields(self.mesh, self.cfg)
 
-    def extract_seams(self) -> List[Seam]:
+    def extract_seams(self) -> list[Seam]:
         """Extract chains and classify each into line/arc/PTP Seam objects.
 
         Returns:
             List of Seam objects. Empty when the parts yield no chain.
         """
-        seams: List[Seam] = []
+        seams: list[Seam] = []
         for points, is_closed in self.extract_chains():
             seams.extend(self.path_creator.process_path(points, is_closed=is_closed))
         return seams
 
-    def extract_chains(self) -> List[Tuple[List[SeamPoint], bool]]:
+    def extract_chains(self) -> list[tuple[list[SeamPoint], bool]]:
         """Build ordered SeamPoint chains with per-point edge ownership.
 
         Follows the pipeline in the module docstring, then refines the points off the vertex
@@ -111,7 +111,7 @@ class SeamExtractorMesh:
         """
         self._check_interpenetration()
 
-        marked: Dict[int, Tuple[NDArray, List[Tuple[int, int]]]] = {}
+        marked: dict[int, tuple[NDArray, list[tuple[int, int]]]] = {}
         touching = False
         for side in (1, 2):
             contact, boundary = self.fields.contact_boundary(side, self.cfg.epsilon)
@@ -120,18 +120,18 @@ class SeamExtractorMesh:
             marked[side] = (contact, self._sharp_boundary(side, boundary))
             if boundary and not marked[side][1]:
                 logger.info(
-                    "mesh_%d bounds contact region without a part edge; supports joint.",
+                    'mesh_%d bounds contact region without a part edge; supports joint.',
                     side,
                 )
 
         if not touching:
             logger.info(
-                "No contact within epsilon=%.2fmm; parts do not touch.",
+                'No contact within epsilon=%.2fmm; parts do not touch.',
                 self.cfg.epsilon * 1000,
             )
             return []
 
-        pieces: List[Tuple[NDArray, bool]] = []
+        pieces: list[tuple[NDArray, bool]] = []
         for side in (1, 2):
             contact, sharp = marked[side]
             if not sharp:
@@ -140,18 +140,18 @@ class SeamExtractorMesh:
                 if is_closed:
                     wall = self.fields.fan_normal(side, loop[0], ~contact)
                     self._warn_zero_normals(
-                        side, wall[None], "wall",
-                        "the loop keeps the direction it was found in")
+                        side, wall[None], 'wall',
+                        'the loop keeps the direction it was found in')
                     loop = oriented(self.mesh[side], loop, contact, wall)
                 pieces.append((self.mesh[side].vertices[loop], is_closed))
 
         if not pieces:
-            logger.info("Contact found but neither part has a sharp edge on it.")
+            logger.info('Contact found but neither part has a sharp edge on it.')
             return []
 
         pieces = drop_coincident(pieces, self.cfg)
 
-        chains: List[Tuple[List[SeamPoint], bool]] = []
+        chains: list[tuple[list[SeamPoint], bool]] = []
         for positions, is_closed in stitch(pieces, self.cfg):
             positions = self._refine_positions(positions, marked, is_closed)
             if len(positions) < 2:
@@ -167,7 +167,7 @@ class SeamExtractorMesh:
                 for a, b in zip(pts, pts[1:])
             )
             logger.info(
-                "%d seam chain(s), %d point(s); ownership mesh_1=%d mesh_2=%d, %d switches",
+                '%d seam chain(s), %d point(s); ownership mesh_1=%d mesh_2=%d, %d switches',
                 len(chains), total_points, m1_count, total_points - m1_count, switches
             )
 
@@ -198,7 +198,7 @@ class SeamExtractorMesh:
                 'closed chain at the wrong depth.'
             )
 
-    def _sharp_boundary(self, side: int, boundary: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    def _sharp_boundary(self, side: int, boundary: list[tuple[int, int]]) -> list[tuple[int, int]]:
         """Contact-boundary edges that follow a real part edge of this mesh.
 
         Neither mesh is "the" seam mesh: where a part terminates its boundary runs along its own
@@ -234,7 +234,7 @@ class SeamExtractorMesh:
         if keep.any() and logger.isEnabledFor(logging.DEBUG):
             admitted = distance[keep]
             logger.debug(
-                "mesh_%d: admitted %d/%d edge(s) at bound %.2fmm; max dist=%.3fmm",
+                'mesh_%d: admitted %d/%d edge(s) at bound %.2fmm; max dist=%.3fmm',
                 side, int(keep.sum()), len(sharp), bound * 1000, admitted.max() * 1000
             )
         return [edge for edge, ok in zip(sharp, keep) if ok]
@@ -243,7 +243,7 @@ class SeamExtractorMesh:
         self,
         side: int,
         epsilon: float,
-        reference: List[Tuple[int, int]],
+        reference: list[tuple[int, int]],
     ) -> None:
         """Report how far the contact boundary moves when epsilon is nudged.
 
@@ -300,7 +300,7 @@ class SeamExtractorMesh:
     def _refine_positions(
         self,
         positions: NDArray,
-        marked: Dict[int, Tuple[NDArray, List[Tuple[int, int]]]],
+        marked: dict[int, tuple[NDArray, list[tuple[int, int]]]],
         is_closed: bool = False,
     ) -> NDArray:
         """Move seam points off the vertex lattice onto the true contact boundary.
@@ -356,7 +356,7 @@ class SeamExtractorMesh:
         keep = np.nonzero(inside)[0]
         refined = positions[keep].copy()
 
-        runs: List[Tuple[int, int]] = []
+        runs: list[tuple[int, int]] = []
         start = 0
         for j in range(1, len(keep) + 1):
             if j == len(keep) or keep[j] != keep[j - 1] + 1:
@@ -395,55 +395,55 @@ class SeamExtractorMesh:
         return refined
 
     def _seam_points(
-            self,
-            positions: NDArray,
-            marked: Dict[int, Tuple[NDArray, List[Tuple[int, int]]]],
-        ) -> List[SeamPoint]:
-            """Attach per-point ownership and normals to an ordered polyline."""
-            owner, _ = self._owner(positions)
-            on_edge = self._on_edge_mask(owner, positions)
+        self,
+        positions: NDArray,
+        marked: dict[int, tuple[NDArray, list[tuple[int, int]]]],
+    ) -> list[SeamPoint]:
+        """Attach per-point ownership and normals to an ordered polyline."""
+        owner, _ = self._owner(positions)
+        on_edge = self._on_edge_mask(owner, positions)
 
-            normal_base = np.zeros((len(positions), 3))
-            normal_wall = np.zeros((len(positions), 3))
-            for side in (1, 2):
-                rows = np.nonzero(owner == side)[0]
-                if not len(rows):
-                    continue
-                other_mesh = self.mesh[3 - side]
-                base = self.fields.closest_faces(3 - side, positions[rows])
-                normal_base[rows] = other_mesh.face_normals[base]
+        normal_base = np.zeros((len(positions), 3))
+        normal_wall = np.zeros((len(positions), 3))
+        for side in (1, 2):
+            rows = np.nonzero(owner == side)[0]
+            if not len(rows):
+                continue
+            other_mesh = self.mesh[3 - side]
+            base = self.fields.closest_faces(3 - side, positions[rows])
+            normal_base[rows] = other_mesh.face_normals[base]
 
-                contact = marked[side][0]
-                _, nearest = self.fields.vertex_tree(side).query(positions[rows])
-                for idx, v in zip(rows, nearest):
-                    normal_wall[idx] = self.fields.fan_normal(side, int(v), ~contact)
-                self._warn_zero_normals(
-                    side, normal_wall[rows], "wall",
-                    "the weld pose there will be unusable"
-                )
+            contact = marked[side][0]
+            _, nearest = self.fields.vertex_tree(side).query(positions[rows])
+            for idx, v in zip(rows, nearest):
+                normal_wall[idx] = self.fields.fan_normal(side, int(v), ~contact)
+            self._warn_zero_normals(
+                side, normal_wall[rows], 'wall',
+                'the weld pose there will be unusable'
+            )
 
-            return [
-                SeamPoint(
-                    position=positions[i],
-                    normal_base=normal_base[i],
-                    normal_wall=normal_wall[i],
-                    on_edge_1=bool(on_edge[1][i]),
-                    on_edge_2=bool(on_edge[2][i]),
-                    owner_side=int(owner[i]),
-                )
-                for i in range(len(positions))
-            ]
+        return [
+            SeamPoint(
+                position=positions[i],
+                normal_base=normal_base[i],
+                normal_wall=normal_wall[i],
+                on_edge_1=bool(on_edge[1][i]),
+                on_edge_2=bool(on_edge[2][i]),
+                owner_side=int(owner[i]),
+            )
+            for i in range(len(positions))
+        ]
 
     def _warn_zero_normals(self, side: int, normals: NDArray, kind: str, consequence: str) -> None:
         """Warn once per batch for points fan_normal left with no normal."""
         zero = int((~normals.any(axis=1)).sum())
         if zero:
             logger.warning(
-                "mesh_%d: %d of %d point(s) have no usable %s normal; %s",
+                'mesh_%d: %d of %d point(s) have no usable %s normal; %s',
                 side, zero, len(normals), kind, consequence
             )
 
-    def _owner(self, points: NDArray) -> Tuple[NDArray, NDArray]:
+    def _owner(self, points: NDArray) -> tuple[NDArray, NDArray]:
         """Determine which mesh carries the geometric edge at each point."""
         points = np.atleast_2d(points)
         distance = {side: self.fields.sharp_edge_distance(side, points) for side in (1, 2)}
@@ -472,19 +472,21 @@ class SeamExtractorMesh:
         flat = (density[1] <= 0.0) & (density[2] <= 0.0)
         if flat.any():
             logger.warning(
-                "ownership: %d of %d tied point(s) read zero turning on BOTH meshes at radius %.6fm",
+                'ownership: %d of %d tied point(s) read zero turning on BOTH '
+                'meshes at radius %.6fm',
                 int(flat.sum()), len(points), radius
             )
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "ownership: broke %d tie(s) on turning density at radius %.6fm (m1 median=%.4f/m, m2 median=%.4f/m)",
+                'ownership: broke %d tie(s) on turning density at radius %.6fm '
+                '(m1 median=%.4f/m, m2 median=%.4f/m)',
                 len(points), radius, np.median(density[1]), np.median(density[2])
             )
 
         return np.where(density[1] >= density[2], 1, 2)
 
-    def _on_edge_mask(self, owner: NDArray, points: NDArray) -> Dict[int, NDArray]:
+    def _on_edge_mask(self, owner: NDArray, points: NDArray) -> dict[int, NDArray]:
         """Compute per-mesh, per-point edge-joint presence flags."""
         distance = {side: self.fields.sharp_edge_distance(side, points) for side in (1, 2)}
 
@@ -492,13 +494,15 @@ class SeamExtractorMesh:
             loser = np.where(owner == 1, distance[2], distance[1])
             if len(loser):
                 logger.debug(
-                    "is_edge_joint: loser distance over %d point(s), min=%.3fmm max=%.3fmm",
+                    'is_edge_joint: loser distance over %d point(s), min=%.3fmm max=%.3fmm',
                     len(loser), loser.min() * 1000, loser.max() * 1000
                 )
 
         return {
-            side: (distance[side] <= self.cfg.edge_joint_floor_factor
-                    * self.fields.median_edge(side)) | (owner == side)
+            side: (
+                distance[side]
+                <= self.cfg.edge_joint_floor_factor * self.fields.median_edge(side)
+            ) | (owner == side)
             for side in (1, 2)
         }
 
@@ -512,7 +516,7 @@ class SeamExtractorMesh:
 
         status = manifold.status()
         if status != manifold3d.Error.NoError:
-            raise ValueError(f"mesh_{side} failed manifold conversion: {status}")
+            raise ValueError(f'mesh_{side} failed manifold conversion: {status}')
         return manifold
 
     def _ownership_radius(self) -> float:

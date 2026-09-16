@@ -23,7 +23,7 @@ anything both of them share has to sit upstream of the pair.
 """
 
 from dataclasses import dataclass, fields
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -32,7 +32,7 @@ class ParamsBase:
     """Build a params dataclass from a loosely typed config dict."""
 
     @classmethod
-    def from_dict(cls, params: Optional[Dict[str, Any]]):
+    def from_dict(cls, params: dict[str, Any] | None):
         """Build from a config dict, coercing types and ignoring foreign keys.
 
         Foreign keys are ignored rather than rejected because the pipeline
@@ -89,7 +89,7 @@ class SeamExtractorMeshParams(ParamsBase):
     epsilon: float = 0.002
     edge_angle_min_deg: float = 0.0057
     near_contact_edge_fraction: float = 0.1
-    eps_stability_factors: Tuple[float, ...] = (0.75, 1.5)
+    eps_stability_factors: tuple[float, ...] = (0.75, 1.5)
     eps_stability_tolerance: float = 0.25
     min_loop_points: int = 4
     stitch_gap_factor: float = 3.0

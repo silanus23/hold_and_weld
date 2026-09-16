@@ -334,7 +334,7 @@ class TestStitch:
     CFG = SeamExtractorMeshParams.from_dict({'min_loop_points': 4})
 
     def square(self, side=1.0, per_side=9):
-        """An OPEN square outline sampled at a uniform spacing.
+        """Build an OPEN square outline sampled at a uniform spacing.
 
         The last point stops one spacing short of the first, so the chain
         closes on itself with a gap exactly equal to every other step - and
