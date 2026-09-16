@@ -70,8 +70,8 @@ class ParamsBase:
         except (TypeError, ValueError):
             raise ValueError(
                 f'{name} must be a number, got {value!r}')
-        # YAML's .nan and .inf coerce cleanly, and nan passes every `< 0`
-        # style check, so they would otherwise switch features off silently.
+        # YAML's .nan and .inf coerce cleanly, and nan passes every `< 0` style check, so they
+        # would otherwise switch features off silently.
         if not np.isfinite(number):
             raise ValueError(f'{name} must be finite, got {value!r}')
         if declared is int or declared == 'int':
@@ -144,8 +144,8 @@ class SeamExtractorMeshParams(ParamsBase):
                 raise ValueError(f'{key} must be > 0, got {getattr(self, key)}')
 
         # Zero is a legitimate way to disable each of these, negative is not.
-        # eps_stability_tolerance at 0 warns on any movement at all, which is
-        # the behaviour this replaced.
+        # eps_stability_tolerance at 0 warns on any movement at all, which is the behaviour this
+        # replaced.
         for key in (
             'edge_angle_min_deg', 'near_contact_edge_fraction',
             'stitch_gap_factor', 'interpenetration_volume_m3',
@@ -155,8 +155,8 @@ class SeamExtractorMeshParams(ParamsBase):
                 raise ValueError(
                     f'{key} must be >= 0, got {getattr(self, key)}')
 
-        # One step halves the bracket; below a handful the level set is no
-        # better located than the vertices it exists to escape.
+        # One step halves the bracket; below a handful the level set is no better located than the
+        # vertices it exists to escape.
         if self.coverage_bisection_steps < 4:
             raise ValueError(
                 'coverage_bisection_steps must be >= 4, got '
@@ -167,8 +167,8 @@ class SeamExtractorMeshParams(ParamsBase):
             raise ValueError(
                 f'min_loop_points must be >= 3, got {self.min_loop_points}')
 
-        # The nearest sharp edge is found among the nearest edge MIDPOINTS, so
-        # one candidate would trust the midpoint ordering completely.
+        # The nearest sharp edge is found among the nearest edge MIDPOINTS, so one candidate would
+        # trust the midpoint ordering completely.
         if self.sharp_edge_candidates < 2:
             raise ValueError(
                 'sharp_edge_candidates must be >= 2, got '

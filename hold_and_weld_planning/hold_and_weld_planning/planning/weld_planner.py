@@ -248,9 +248,9 @@ class WeldPlanner:
                 perpendicular = np.cross(np.array([1, 0, 0]), tangent)
                 norm = np.linalg.norm(perpendicular)
                 if norm < 1e-10:
-                    # All cross-product fallbacks failed — tangent is degenerate.
-                    # Compute a guaranteed-perpendicular vector via cross with [0,1,0],
-                    # then cross that with tangent to ensure perpendicularity.
+                    # All cross-product fallbacks failed — tangent is degenerate. Compute a
+                    # guaranteed-perpendicular vector via cross with [0,1,0], then cross that with
+                    # tangent to ensure perpendicularity.
                     logger.warning(
                         'Degenerate tangent in _compute_away_vector,'
                         ' using [0, 1, 0] cross tangent'

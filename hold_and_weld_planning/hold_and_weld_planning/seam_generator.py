@@ -177,8 +177,8 @@ def main():
             'work_angle_deg': parameters['work_angle_deg'],
             'travel_angle_deg': parameters['travel_angle_deg'],
             'gap_mm': parameters['gap_mm'],
-            # The planner resolves 'auto' against the input extensions, so
-            # read the pipeline it actually ran rather than what was asked for.
+            # The planner resolves 'auto' against the input extensions, so read the pipeline it
+            # actually ran rather than what was asked for.
             'pipeline': planner.mode,
         }
 

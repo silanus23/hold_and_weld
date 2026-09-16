@@ -91,8 +91,7 @@ class JobPlanner:
         if self.mode == 'occt':
             self.parameters.setdefault('epsilon', 1e-3)
         else:
-            # Epsilon must sit between the fit-up gap and about half the
-            # transverse face size.
+            # Epsilon must sit between the fit-up gap and about half the transverse face size.
             self.parameters.setdefault('epsilon', 0.002)
 
         self.parameters.setdefault('num_smooth_points', 100)
@@ -100,11 +99,10 @@ class JobPlanner:
         self.parameters.setdefault('refine_iterations', 16)
         if explicit_refine and self.parameters['refine_iterations'] == 0:
             logger.warning(
-                'refine_iterations=0: seam points are mesh vertices, so a part '
-                'whose edges are long compared with the joint cannot represent '
-                'where the seam starts and ends on them, and that portion is '
-                'silently dropped. Use 16-32 unless the mesh is already fine '
-                'at the joint.'
+                'refine_iterations=0: seam points are mesh vertices, so a part whose edges '
+                'are long compared with the joint cannot represent where the seam starts and '
+                'ends on them, and that portion is silently dropped. Use 16-32 unless the '
+                'mesh is already fine at the joint.'
             )
 
         required = ['work_angle_deg', 'travel_angle_deg', 'gap_mm']
@@ -246,10 +244,7 @@ class JobPlanner:
         if not mesh_secondary.is_watertight:
             raise RuntimeError('Secondary mesh is not watertight')
 
-        logger.info(
-            f'Main mesh: {len(mesh_main.vertices)} vertices, '
-            f'{len(mesh_main.faces)} faces'
-        )
+        logger.info(f'Main mesh: {len(mesh_main.vertices)} vertices, {len(mesh_main.faces)} faces')
         logger.info(
             f'Secondary mesh: {len(mesh_secondary.vertices)} vertices, '
             f'{len(mesh_secondary.faces)} faces'

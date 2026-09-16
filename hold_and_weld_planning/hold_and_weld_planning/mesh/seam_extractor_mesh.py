@@ -472,15 +472,15 @@ class SeamExtractorMesh:
         flat = (density[1] <= 0.0) & (density[2] <= 0.0)
         if flat.any():
             logger.warning(
-                'ownership: %d of %d tied point(s) read zero turning on BOTH '
-                'meshes at radius %.6fm',
+                'ownership: %d of %d tied point(s) read zero turning on BOTH meshes at '
+                'radius %.6fm',
                 int(flat.sum()), len(points), radius
             )
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                'ownership: broke %d tie(s) on turning density at radius %.6fm '
-                '(m1 median=%.4f/m, m2 median=%.4f/m)',
+                'ownership: broke %d tie(s) on turning density at radius %.6fm (m1 '
+                'median=%.4f/m, m2 median=%.4f/m)',
                 len(points), radius, np.median(density[1]), np.median(density[2])
             )
 

@@ -57,9 +57,9 @@ class MeshLoader:
             ValueError: If mesh loading or conversion fails
             FileNotFoundError: If file doesn't exist
         """
-        # Built here rather than in the signature: a default argument is one
-        # array shared by every caller, and a caller that transforms it in
-        # place moves every later part that took the default with it.
+        # Built here rather than in the signature: a default argument is one array shared by every
+        # caller, and a caller that transforms it in place moves every later part that took the
+        # default with it.
         if world_transform is None:
             world_transform = np.eye(4)
 
@@ -108,9 +108,9 @@ class MeshLoader:
         except Exception as e:
             raise ValueError(f'Failed to convert mesh to manifold: {e}')
 
-        # manifold3d does not raise on a malformed mesh - it silently returns
-        # an empty Manifold whose error status would otherwise only surface
-        # much later, inside whatever boolean op first touches it.
+        # manifold3d does not raise on a malformed mesh - it silently returns an empty Manifold
+        # whose error status would otherwise only surface much later, inside whatever boolean op
+        # first touches it.
         status = manifold_obj.status()
         if status != manifold3d.Error.NoError:
             raise ValueError(f'Mesh failed manifold conversion: {status}')

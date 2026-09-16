@@ -27,8 +27,8 @@ from ..core.seam import Seam
 try:
     from ament_index_python.packages import get_package_share_directory
 except ImportError:
-    # Only package:// URIs need it, so a non-ROS environment can still use
-    # every other function here; the failure is raised at resolve time.
+    # Only package:// URIs need it, so a non-ROS environment can still use every other function
+    # here; the failure is raised at resolve time.
     get_package_share_directory = None
 
 logger = logging.getLogger(__name__)
@@ -201,8 +201,8 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
     job_name = input_path.stem
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    # Navigate to workspace root and then to the source directory
-    # This works whether running from build/ or install/ directories
+    # Navigate to workspace root and then to the source directory. This works whether running from
+    # build/ or install/ directories.
     current_path = Path(__file__).resolve()
 
     workspace_root = None
@@ -216,9 +216,7 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
     if workspace_root is None:
         # Fallback: try relative path from current location
         workspace_root = current_path.parent.parent.parent.parent.parent
-        logger.warning(
-            f'Could not detect workspace root, using fallback: {workspace_root}'
-        )
+        logger.warning(f'Could not detect workspace root, using fallback: {workspace_root}')
 
     output_dir = (
         workspace_root

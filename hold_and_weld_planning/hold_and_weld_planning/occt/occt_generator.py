@@ -65,9 +65,9 @@ class OCCTGenerator:
             ValueError: If world_transform is not 4x4, or the URDF's joint
                 tree does not place every link.
         """
-        # Built here rather than in the signature: a default argument is one
-        # array shared by every caller, and a caller that transforms it in
-        # place moves every later part that took the default with it.
+        # Built here rather than in the signature: a default argument is one array shared by every
+        # caller, and a caller that transforms it in place moves every later part that took the
+        # default with it.
         if world_transform is None:
             world_transform = np.eye(4)
 
@@ -78,9 +78,8 @@ class OCCTGenerator:
 
         self.robot = robot_object
         self.world_transform = world_transform
-        # A collision origin is stated relative to its LINK, not to the model
-        # root, so a multi-link part needs the joint tree walked before any of
-        # its geometry can be placed.
+        # A collision origin is stated relative to its LINK, not to the model root, so a multi-link
+        # part needs the joint tree walked before any of its geometry can be placed.
         self.link_poses = link_poses(robot_object)
 
     def create_shape_for_all_links(self) -> TopoDS_Compound:

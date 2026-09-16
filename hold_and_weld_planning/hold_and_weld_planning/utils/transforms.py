@@ -107,8 +107,7 @@ def numpy_to_gp_trsf(matrix: NDArray) -> Any:
     determinant = np.linalg.det(matrix[:3, :3])
     if not np.isclose(determinant, 1.0, atol=1e-3):
         logger.warning(
-            f'Transform has non-unit determinant {determinant:.6f}, '
-            'may contain scaling/shear'
+            f'Transform has non-unit determinant {determinant:.6f}, may contain scaling/shear'
         )
 
     trsf = gp_Trsf()
@@ -151,10 +150,9 @@ def link_poses(robot: Any) -> dict:
 
     poses = {name: np.eye(4) for name in link_names}
 
-    # Caught here rather than left to surface downstream: a joint naming an
-    # undeclared link would otherwise inject a spurious entry into `poses`
-    # during the walk below, since that dict is keyed by whatever a joint
-    # says rather than only by declared links.
+    # Caught here rather than left to surface downstream: a joint naming an undeclared link would
+    # otherwise inject a spurious entry into `poses` during the walk below, since that dict is
+    # keyed by whatever a joint says rather than only by declared links.
     unknown = {
         (joint.parent if joint.parent not in poses else joint.child): joint
         for joint in robot.joints
@@ -191,8 +189,8 @@ def link_poses(robot: Any) -> dict:
 
     unreached = set(poses) - visited
     if unreached:
-        # Not fatal on its own: a single-link part has no joints at all and a
-        # root is still reached. Only a link no root reaches lands here.
+        # Not fatal on its own: a single-link part has no joints at all and a root is still
+        # reached. Only a link no root reaches lands here.
         raise ValueError(
             'URDF links are not connected to the model root and have no '
             f'defined pose: {sorted(unreached)}'

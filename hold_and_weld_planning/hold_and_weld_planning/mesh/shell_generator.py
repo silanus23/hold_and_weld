@@ -57,9 +57,9 @@ class ShellGenerator:
             ValueError: If world_transform is not 4x4, or the URDF's joint
                 tree does not place every link.
         """
-        # Built here rather than in the signature: a default argument is one
-        # array shared by every caller, and a caller that transforms it in
-        # place moves every later part that took the default with it.
+        # Built here rather than in the signature: a default argument is one array shared by every
+        # caller, and a caller that transforms it in place moves every later part that took the
+        # default with it.
         if world_transform is None:
             world_transform = np.eye(4)
 
@@ -75,9 +75,8 @@ class ShellGenerator:
         self.world_transform = world_transform
         self.refine_iterations = refine_iterations
         self.total_manifold = manifold3d.Manifold()
-        # A collision origin is stated relative to its LINK, not to the model
-        # root, so a multi-link part needs the joint tree walked before any of
-        # its geometry can be placed.
+        # A collision origin is stated relative to its LINK, not to the model root, so a multi-link
+        # part needs the joint tree walked before any of its geometry can be placed.
         self.link_poses = link_poses(robot_object)
 
         logger.debug(f'ShellGenerator initialized with {refine_iterations} refine iterations')
@@ -212,9 +211,9 @@ class ShellGenerator:
                     link_combined += transformed_obj
 
             except ValueError:
-                # Raised deliberately above for a malformed/unsupported
-                # geometry spec; propagated as-is rather than folded into
-                # the RuntimeError below, matching this method's own Raises.
+                # Raised deliberately above for a malformed/unsupported geometry spec; propagated
+                # as-is rather than folded into the RuntimeError below, matching this method's own
+                # Raises.
                 raise
             except Exception as e:
                 logger.error(f"Failed to process collision {idx} in link '{link.name}': {e}")

@@ -210,8 +210,8 @@ class SeamExtractorOCCT:
         boundary_A = self._get_matching_boundary_edge(edge, face_A)
         boundary_B = self._get_matching_boundary_edge(edge, face_B)
 
-        # Extract normals from appropriate surfaces (walls if boundaries
-        # exist, kissing faces otherwise)
+        # Extract normals from appropriate surfaces (walls if boundaries exist, kissing faces
+        # otherwise)
         if boundary_A is not None:
             # Shape_1 has real boundary - use wall surface
             wall_A = self._get_wall_surface_at_edge(boundary_A, self.shape_1, face_A)
@@ -306,8 +306,8 @@ class SeamExtractorOCCT:
 
             try:
                 common = BRepAlgoAPI_Common(face_A, face_B)
-                # Fuzzy value allows geometric tolerance in the boolean — faces touching
-                # within tolerance are treated as coincident.
+                # Fuzzy value allows geometric tolerance in the boolean — faces touching within
+                # tolerance are treated as coincident.
                 common.SetFuzzyValue(self.tolerance)
                 common.Build()
 
@@ -485,9 +485,9 @@ class SeamExtractorOCCT:
                 dot = abs(normal_1.Dot(normal_2))
                 return dot > 0.9999
 
-            # General curves: sample points along edge_1 and check distance to edge_2.
-            # 5 samples balances cost vs coverage for typical short intersection edges;
-            # increase if false positives occur on long spline edges.
+            # General curves: sample points along edge_1 and check distance to edge_2. 5 samples
+            # balances cost vs coverage for typical short intersection edges; increase if false
+            # positives occur on long spline edges.
             else:
                 num_samples = 5
                 for i in range(num_samples):
@@ -735,8 +735,8 @@ class SeamExtractorOCCT:
         vec_A = vec_A / norm_vA
         vec_B = vec_B / norm_vB
 
-        # The part whose average normal aligns MORE with its centroid-to-seam vector
-        # has the seam on its outward face -> that is the base plate (main)
+        # The part whose average normal aligns MORE with its centroid-to-seam vector has the seam
+        # on its outward face -> that is the base plate (main)
         dot_A = np.dot(avg_normal_A, vec_A)
         dot_B = np.dot(avg_normal_B, vec_B)
 
