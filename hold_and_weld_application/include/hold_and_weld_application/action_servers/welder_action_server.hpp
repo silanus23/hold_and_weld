@@ -312,6 +312,12 @@ private:
 
   WelderConfig config_;
   rclcpp::Logger logger_;
+
+  bool auto_trigger_ = false;
+  double auto_trigger_delay_sec_ = 3.0;
+
+  rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
+  rclcpp_action::Client<TriggerWelder>::SharedPtr self_trigger_client_;
 };
 
 }  // namespace application

@@ -25,8 +25,8 @@ a MoveIt safety move at runtime.
 """
 
 import os
+import sys
 
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -34,28 +34,16 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-import yaml
 
-
-def load_yaml(package_name, file_path):
-    """Load a YAML file from a package."""
-    package_share = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_share, file_path)
-    try:
-        with open(absolute_file_path, 'r') as file:
-            return yaml.safe_load(file)
-    except EnvironmentError:
-        return None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from launch_utils import load_yaml  # noqa: E402, I100
 
 
 def generate_launch_description():
     """Launch welder-only system with parallel node startup."""
     # [-J name value ...] spawn arguments for Gazebo.
     welding_yaml = load_yaml('hold_and_weld_bringup', 'config/tasks/welding.yaml')
-    safety_joints = (
-        welding_yaml.get('safety_pose', {}).get('joint_positions', {})
-        if welding_yaml else {}
-    )
+    safety_joints = welding_yaml.get('safety_pose', {}).get('joint_positions', {})
     spawn_joint_args = [arg for jn, jv in safety_joints.items() for arg in ['-J', jn, str(jv)]]
 
     joint_index_map = {
@@ -88,11 +76,29 @@ def generate_launch_description():
             default_value='true',
             description='Use simulation time',
         ),
+        DeclareLaunchArgument(
+            'auto_trigger',
+            default_value='true',
+            description='Auto-trigger welder job after startup',
+        ),
+        DeclareLaunchArgument(
+            'auto_trigger_delay_sec',
+            default_value='5.0',
+            description='Delay before auto-trigger (seconds)',
+        ),
+        DeclareLaunchArgument(
+            'move_group_log_level',
+            default_value='WARN',
+            description='move_group log level (e.g. DEBUG for OMPL/collision detail)',
+        ),
     ]
 
     use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
     use_rviz = LaunchConfiguration('use_rviz')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    auto_trigger = LaunchConfiguration('auto_trigger')
+    auto_trigger_delay_sec = LaunchConfiguration('auto_trigger_delay_sec')
+    move_group_log_level = LaunchConfiguration('move_group_log_level')
 
     bringup_launch_dir = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_bringup'), 'launch']
@@ -129,6 +135,7 @@ def generate_launch_description():
         launch_arguments={
             'spawn_in_gazebo': 'true',
             'add_to_planning_scene': 'true',
+            'spawn_at_end_pose': auto_trigger,
             'use_sim_time': use_sim_time,
         }.items(),
     )
@@ -146,6 +153,7 @@ def generate_launch_description():
         launch_arguments={
             'robot_description_file': 'robot2_welder.srdf',
             'use_sim_time': use_sim_time,
+            'log_level': move_group_log_level,
         }.items(),
     )
 
@@ -163,6 +171,7 @@ def generate_launch_description():
         launch_arguments={
             'spawn_in_gazebo': 'false',
             'add_to_planning_scene': 'true',
+            'spawn_at_end_pose': auto_trigger,
             'use_sim_time': use_sim_time,
         }.items(),
     )
@@ -170,6 +179,8 @@ def generate_launch_description():
     welder_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_welder_server.launch.py']),
         launch_arguments={
+            'auto_trigger': auto_trigger,
+            'auto_trigger_delay_sec': auto_trigger_delay_sec,
             'use_sim_time': use_sim_time,
         }.items(),
     )

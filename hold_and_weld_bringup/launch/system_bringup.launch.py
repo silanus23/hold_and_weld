@@ -20,26 +20,17 @@ Uses industry-standard parallel launch approach where nodes handle their own dep
 """
 
 import os
+import sys
 
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
-import yaml
 
-
-def load_yaml(package_name, file_path):
-    """Load a YAML file from a package."""
-    package_share = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_share, file_path)
-    try:
-        with open(absolute_file_path, 'r') as file:
-            return yaml.safe_load(file)
-    except EnvironmentError:
-        return None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from launch_utils import load_yaml  # noqa: E402, I100
 
 
 def generate_launch_description():
@@ -47,10 +38,7 @@ def generate_launch_description():
     # Read robot2 safety joint positions from welding.yaml and flatten into
     # [-J name value ...] spawn arguments for Gazebo.
     welding_yaml = load_yaml('hold_and_weld_bringup', 'config/tasks/welding.yaml')
-    safety_joints = (
-        welding_yaml.get('safety_pose', {}).get('joint_positions', {})
-        if welding_yaml else {}
-    )
+    safety_joints = welding_yaml.get('safety_pose', {}).get('joint_positions', {})
     joint_index_map = {
         'robot2_joint_1': 'robot2_initial_pos_j1',
         'robot2_joint_2': 'robot2_initial_pos_j2',
@@ -86,12 +74,18 @@ def generate_launch_description():
             default_value='true',
             description='Use simulation time',
         ),
+        DeclareLaunchArgument(
+            'move_group_log_level',
+            default_value='WARN',
+            description='move_group log level (e.g. DEBUG for OMPL/collision detail)',
+        ),
     ]
 
     use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
     use_rviz = LaunchConfiguration('use_rviz')
     auto_start = LaunchConfiguration('auto_start')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    move_group_log_level = LaunchConfiguration('move_group_log_level')
 
     bringup_launch_dir = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_bringup'), 'launch']
@@ -131,6 +125,7 @@ def generate_launch_description():
         launch_arguments={
             'robot_description_file': 'dual_robot.srdf',
             'use_sim_time': use_sim_time,
+            'log_level': move_group_log_level,
         }.items(),
     )
 
@@ -155,6 +150,7 @@ def generate_launch_description():
     welder_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_welder_server.launch.py']),
         launch_arguments={
+            'auto_trigger': 'false',
             'use_sim_time': use_sim_time,
         }.items(),
     )

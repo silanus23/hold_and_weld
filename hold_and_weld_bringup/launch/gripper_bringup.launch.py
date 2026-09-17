@@ -16,19 +16,19 @@
 Gripper-only system bringup.
 
 Launches complete gripper system: Gazebo, MoveIt, RViz, and gripper application
-using event-based sequencing.
+in parallel, matching system_bringup.launch.py. The action server and controller
+spawners wait for their dependencies; add_collision_objects.py does not.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
-from launch.event_handlers import OnProcessExit
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch gripper-only system with event-based sequencing."""
+    """Launch gripper-only system with parallel node startup."""
     declared_arguments = [
         DeclareLaunchArgument(
             'use_gazebo_gui',
@@ -41,6 +41,11 @@ def generate_launch_description():
             description='Launch RViz visualization',
         ),
         DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='true',
+            description='Use simulation time',
+        ),
+        DeclareLaunchArgument(
             'auto_trigger',
             default_value='true',
             description='Auto-trigger gripper job after startup',
@@ -50,12 +55,19 @@ def generate_launch_description():
             default_value='5.0',
             description='Delay before auto-trigger (seconds)',
         ),
+        DeclareLaunchArgument(
+            'move_group_log_level',
+            default_value='WARN',
+            description='move_group log level (e.g. DEBUG for OMPL/collision detail)',
+        ),
     ]
 
     use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
     use_rviz = LaunchConfiguration('use_rviz')
+    use_sim_time = LaunchConfiguration('use_sim_time')
     auto_trigger = LaunchConfiguration('auto_trigger')
     auto_trigger_delay_sec = LaunchConfiguration('auto_trigger_delay_sec')
+    move_group_log_level = LaunchConfiguration('move_group_log_level')
 
     bringup_launch_dir = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_bringup'), 'launch']
@@ -68,6 +80,7 @@ def generate_launch_description():
             'robot_name': 'gripper_system',
             'urdf_file': 'robot1_gripper.xacro',
             'controller_config': 'robot1_controllers.yaml',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
@@ -76,79 +89,51 @@ def generate_launch_description():
         launch_arguments={
             'spawn_in_gazebo': 'true',
             'add_to_planning_scene': 'true',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
-    controllers_launch = IncludeLaunchDescription(
+    controllers = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/controllers_spawn.launch.py']),
         launch_arguments={
             'robot_type': 'gripper',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
-    controllers = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=gazebo,
-            on_exit=[controllers_launch],
-        )
-    )
-
-    move_group_launch = IncludeLaunchDescription(
+    move_group = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_move_group.launch.py']),
         launch_arguments={
             'robot_description_file': 'robot1_gripper.srdf',
+            'use_sim_time': use_sim_time,
+            'log_level': move_group_log_level,
         }.items(),
     )
 
-    move_group = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=controllers_launch,
-            on_exit=[move_group_launch],
-        )
-    )
-
-    rviz_launch = IncludeLaunchDescription(
+    rviz = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_rviz.launch.py']),
         launch_arguments={
             'use_rviz': use_rviz,
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
-    rviz = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=move_group_launch,
-            on_exit=[rviz_launch],
-        )
-    )
-
-    add_collision_objects_launch = IncludeLaunchDescription(
+    add_collision_objects = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/sim_spawn_objects.launch.py']),
         launch_arguments={
             'spawn_in_gazebo': 'false',
             'add_to_planning_scene': 'true',
+            'use_sim_time': use_sim_time,
         }.items(),
     )
 
-    add_collision_objects = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=rviz_launch,
-            on_exit=[add_collision_objects_launch],
-        )
-    )
-
-    gripper_server_launch = IncludeLaunchDescription(
+    gripper_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_gripper_server.launch.py']),
         launch_arguments={
             'auto_trigger': auto_trigger,
             'auto_trigger_delay_sec': auto_trigger_delay_sec,
+            'use_sim_time': use_sim_time,
         }.items(),
-    )
-
-    gripper_server = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=add_collision_objects_launch,
-            on_exit=[gripper_server_launch],
-        )
     )
 
     nodes = [

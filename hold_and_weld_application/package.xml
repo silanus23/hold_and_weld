@@ -30,6 +30,7 @@
   <depend>ament_index_cpp</depend>
   <depend>yaml-cpp</depend>
   <depend>nlohmann_json</depend>
+  <depend>libceres-dev</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
 

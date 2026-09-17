@@ -20,6 +20,7 @@ state management.
 """
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -31,19 +32,9 @@ from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
-import yaml
 
-
-def load_yaml(package_name, file_path):
-    """Load a YAML file from a package."""
-    package_share = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_share, file_path)
-
-    try:
-        with open(absolute_file_path, 'r') as file:
-            return yaml.safe_load(file)
-    except EnvironmentError:
-        return None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from launch_utils import load_yaml  # noqa: E402, I100
 
 
 def generate_launch_description():
@@ -62,6 +53,16 @@ def generate_launch_description():
             description='Automatically load latest trajectory JSON file',
         ),
         DeclareLaunchArgument(
+            'auto_trigger',
+            default_value='false',
+            description='Automatically trigger welder job on startup',
+        ),
+        DeclareLaunchArgument(
+            'auto_trigger_delay_sec',
+            default_value='5.0',
+            description='Delay before auto-triggering welder job (seconds)',
+        ),
+        DeclareLaunchArgument(
             'use_sim_time',
             default_value='true',
             description='Use simulation time',
@@ -70,6 +71,8 @@ def generate_launch_description():
 
     welder_group_name = LaunchConfiguration('welder_group_name')
     auto_load_latest = LaunchConfiguration('auto_load_latest')
+    auto_trigger = LaunchConfiguration('auto_trigger')
+    auto_trigger_delay_sec = LaunchConfiguration('auto_trigger_delay_sec')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
     srdf_file = os.path.join(desc_pkg, 'config', 'dual_robot.srdf')
@@ -100,6 +103,8 @@ def generate_launch_description():
             {
                 'welder_group_name': welder_group_name,
                 'auto_load_latest': auto_load_latest,
+                'auto_trigger': auto_trigger,
+                'auto_trigger_delay_sec': auto_trigger_delay_sec,
                 'use_sim_time': use_sim_time,
             }
         ],

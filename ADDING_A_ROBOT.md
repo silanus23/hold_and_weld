@@ -222,9 +222,11 @@ parameterised or overridden:
 | `robot1_left_finger_joint`, `robot1_right_finger_joint` | param `gripper_joint_names` |
 | `robot1_tool0`, `robot1_link_6_t`, `robot1_gripper_base` … | param `touch_links` |
 | `robot1_link_6_t` (attach link) | param `attach_link` |
-| `/gripper_controller/follow_joint_trajectory` | param `gripper_controller_topic` |
+| `/robot1_gripper_controller/follow_joint_trajectory` | param `gripper_controller_topic` |
 
-`gripper_controller_topic` is already a parameter in `app_gripper_server.launch.py`.
+`gripper_controller_topic` is a launch argument of `app_gripper_server.launch.py` and
+`app_coordinator.launch.py` (default `/robot1_gripper_controller/follow_joint_trajectory`).
+Override the launch argument; no C++ change needed.
 The finger joint names and touch links are currently compiled in. You would need to
 either:
 
@@ -292,7 +294,7 @@ In `app_robot3_gripper_server.launch.py`:
 ```python
 parameters=[{
     'arm_group_name':          'robot3_arm',
-    'gripper_controller_topic': '/robot3_gripper_controller/joint_trajectory',
+    'gripper_controller_topic': '/robot3_gripper_controller/follow_joint_trajectory',
     'gripper_joint_names':     ['robot3_left_finger_joint', 'robot3_right_finger_joint'],
     'touch_links':             ['robot3_tool0', 'robot3_link_6_t', 'robot3_flange',
                                 'robot3_gripper_base', 'robot3_left_finger', 'robot3_right_finger'],

@@ -37,6 +37,10 @@ WelderActionServer::WelderActionServer(const rclcpp::NodeOptions & options)
 : LifecycleNode("welder_action_server", options),
   logger_(rclcpp::get_logger("application"))
 {
+  // Declared here, not in on_configure, so configure -> cleanup -> configure
+  // does not throw ParameterAlreadyDeclaredException.
+  declare_parameter("auto_trigger", false);
+  declare_parameter("auto_trigger_delay_sec", 3.0);
 }
 
 WelderActionServer::~WelderActionServer()
@@ -110,6 +114,14 @@ void WelderActionServer::manual_shutdown()
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 {
+  auto_trigger_ = get_parameter("auto_trigger").as_bool();
+  auto_trigger_delay_sec_ = get_parameter("auto_trigger_delay_sec").as_double();
+  if (auto_trigger_delay_sec_ < 0.0) {
+    RCLCPP_ERROR(logger_, "auto_trigger_delay_sec must be >= 0, got %.3f",
+      auto_trigger_delay_sec_);
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
+
   // Temporary node used only for service availability checks during configuration.
   // A separate node is required because this lifecycle node's executor is not
   // spinning freely during on_configure, so service calls on 'this' would deadlock.
@@ -281,6 +293,13 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     }
   );
 
+  self_trigger_client_ = rclcpp_action::create_client<TriggerWelder>(
+    this->get_node_base_interface(),
+    this->get_node_graph_interface(),
+    this->get_node_logging_interface(),
+    this->get_node_waitables_interface(),
+    "trigger_welder");
+
   // Start the persistent worker thread that will process queued goals.
   // Currently supports a single queued goal at a time, multi-goal queuing is deferred.
   // Worker is started last so it cannot receive goals before the action server is live.
@@ -293,8 +312,62 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(logger_, "Activating welder action server");
-  // No activation work required, the welder has no lifecycle publishers
-  // and no auto-trigger mechanism. Worker thread is already running from on_configure.
+  // No lifecycle publishers to activate. Worker thread is already running from
+  // on_configure. If auto_trigger_ is set, start a timer that sends a goal to our
+  // own trigger_welder action once it fires.
+  if (auto_trigger_) {
+    double delay = auto_trigger_delay_sec_;
+    RCLCPP_INFO(logger_, "Auto-trigger enabled, will start in %.1f seconds", delay);
+
+    auto_trigger_timer_ = create_wall_timer(
+      std::chrono::milliseconds(static_cast<int>(delay * 1000)),
+      [this]() {
+        auto_trigger_timer_->cancel();
+        RCLCPP_INFO(logger_, "Auto-triggering welder job via trigger_welder action");
+
+        if (!hold_and_weld::wait_for_action_server(
+            self_trigger_client_, "trigger_welder", logger_, 10))
+        {
+          RCLCPP_ERROR(logger_, "Auto-trigger skipped: trigger_welder action server not found");
+          return;
+        }
+
+        auto goal_msg = TriggerWelder::Goal();
+        auto send_goal_options = rclcpp_action::Client<TriggerWelder>::SendGoalOptions();
+
+        send_goal_options.goal_response_callback =
+        [this](const rclcpp_action::ClientGoalHandle<TriggerWelder>::SharedPtr & goal_handle)
+        {
+          if (!goal_handle) {
+            RCLCPP_ERROR(logger_, "Auto-triggered welder goal was rejected");
+          }
+        };
+
+        send_goal_options.feedback_callback =
+        [this](
+          rclcpp_action::ClientGoalHandle<TriggerWelder>::SharedPtr,
+          const std::shared_ptr<const TriggerWelder::Feedback> feedback)
+        {
+          RCLCPP_INFO(logger_, "  [Auto-trigger] %s (%.1f%%)",
+                        feedback->current_step.c_str(), feedback->completion_percentage);
+        };
+
+        send_goal_options.result_callback =
+        [this](const rclcpp_action::ClientGoalHandle<TriggerWelder>::WrappedResult & result)
+        {
+          const char * message = result.result ? result.result->message.c_str() : "";
+          if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+            RCLCPP_INFO(logger_, "Auto-triggered welder job succeeded: %s", message);
+          } else {
+            RCLCPP_ERROR(logger_, "Auto-triggered welder job failed: %s", message);
+          }
+        };
+
+        self_trigger_client_->async_send_goal(goal_msg, send_goal_options);
+      }
+    );
+  }
+
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
@@ -302,6 +375,11 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 WelderActionServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(logger_, "Deactivating welder action server");
+  if (auto_trigger_timer_) {
+    auto_trigger_timer_->cancel();
+    auto_trigger_timer_.reset();
+  }
+
   try {
     if (move_group_) {
       move_group_->stop();
@@ -358,6 +436,7 @@ WelderActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   shutdown_worker();
 
   action_server_.reset();
+  self_trigger_client_.reset();
 
   {
     std::lock_guard<std::mutex> lock(move_group_mutex_);
@@ -414,6 +493,7 @@ WelderActionServer::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
   shutdown_worker();
 
   action_server_.reset();
+  self_trigger_client_.reset();
 
   {
     std::lock_guard<std::mutex> lock(move_group_mutex_);

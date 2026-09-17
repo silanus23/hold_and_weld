@@ -20,30 +20,21 @@ state management.
 """
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.event_handlers import OnProcessStart
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
-import yaml
 
-
-def load_yaml(package_name, file_path):
-    """Load a YAML file from a package."""
-    package_share = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_share, file_path)
-
-    try:
-        with open(absolute_file_path, 'r') as file:
-            return yaml.safe_load(file)
-    except EnvironmentError:
-        return None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from launch_utils import load_yaml  # noqa: E402, I100
 
 
 def generate_launch_description():
@@ -77,12 +68,19 @@ def generate_launch_description():
             default_value='true',
             description='Use simulation time',
         ),
+        DeclareLaunchArgument(
+            'gripper_controller_topic',
+            default_value='/robot1_gripper_controller/follow_joint_trajectory',
+            description='FollowJointTrajectory action topic for the gripper controller',
+        ),
     ]
 
     arm_group_name = LaunchConfiguration('arm_group_name')
     auto_trigger = LaunchConfiguration('auto_trigger')
     auto_trigger_delay_sec = LaunchConfiguration('auto_trigger_delay_sec')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    positions_yaml = LaunchConfiguration('positions_yaml')
+    gripper_controller_topic = LaunchConfiguration('gripper_controller_topic')
 
     srdf_file = os.path.join(desc_pkg, 'config', 'dual_robot.srdf')
     with open(srdf_file, 'r') as file:
@@ -100,8 +98,8 @@ def generate_launch_description():
         )
     }
 
-    positions_yaml_path = os.path.join(
-        bringup_pkg, 'config', 'tasks', 'pick_place_targets.yaml'
+    positions_yaml_path = PathJoinSubstitution(
+        [bringup_pkg, 'config', 'tasks', positions_yaml]
     )
 
     gripper_server = LifecycleNode(
@@ -116,7 +114,7 @@ def generate_launch_description():
             {
                 'arm_group_name': arm_group_name,
                 'positions_yaml': positions_yaml_path,
-                'gripper_controller_topic': '/gripper_controller/joint_trajectory',
+                'gripper_controller_topic': gripper_controller_topic,
                 'auto_trigger': auto_trigger,
                 'auto_trigger_delay_sec': auto_trigger_delay_sec,
                 'use_sim_time': use_sim_time,

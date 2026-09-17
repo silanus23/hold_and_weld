@@ -85,9 +85,9 @@ def generate_launch_description():
     gripper_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        name='spawner_gripper_controller',
+        name='spawner_robot1_gripper_controller',
         arguments=[
-            'gripper_controller',
+            'robot1_gripper_controller',
             '--controller-manager', '/controller_manager',
             '--controller-manager-timeout', controller_manager_timeout,
         ],

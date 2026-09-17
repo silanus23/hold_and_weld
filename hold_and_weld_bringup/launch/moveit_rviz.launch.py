@@ -19,6 +19,7 @@ Launches RViz2 with MoveIt configuration for visualizing robot motion planning.
 """
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -27,19 +28,9 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-import yaml
 
-
-def load_yaml(package_name, file_path):
-    """Load a YAML file from a package."""
-    package_share = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_share, file_path)
-
-    try:
-        with open(absolute_file_path, 'r') as file:
-            return yaml.safe_load(file)
-    except EnvironmentError:
-        return None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from launch_utils import load_yaml  # noqa: E402, I100
 
 
 def generate_launch_description():

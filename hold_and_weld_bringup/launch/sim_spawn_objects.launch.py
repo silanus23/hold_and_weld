@@ -24,8 +24,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -77,11 +77,17 @@ def generate_launch_description():
             default_value='true',
             description='Use simulation time',
         ),
+        DeclareLaunchArgument(
+            'spawn_at_end_pose',
+            default_value='false',
+            description='Spawn child_link at end_pose (already placed) instead of pick pose',
+        ),
     ]
 
     spawn_in_gazebo = LaunchConfiguration('spawn_in_gazebo')
     add_to_planning_scene = LaunchConfiguration('add_to_planning_scene')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    spawn_at_end_pose = LaunchConfiguration('spawn_at_end_pose')
 
     objects_yaml_path = os.path.join(
         bringup_pkg, 'config', 'objects', 'objects.yaml'
@@ -97,6 +103,9 @@ def generate_launch_description():
     child_link_urdf_path = child_link_config.get('urdf_path', '')
     child_link_spawn_name = child_link_config.get('spawn_name', 'child_link')
     child_link_pose = child_link_config.get('pose', {})
+    # Without end_pose, fall back to the pick pose so Gazebo matches the planning
+    # scene (add_collision_objects.py uses the same fallback).
+    child_link_end_pose = child_link_config.get('end_pose')
 
     base_link_urdf_path = base_link_config.get('urdf_path', '')
     base_link_spawn_name = base_link_config.get('spawn_name', 'base_link')
@@ -135,6 +144,19 @@ def generate_launch_description():
         child_link_pose.get('qw', 1.0)
     )
 
+    if child_link_end_pose:
+        child_link_end_position = child_link_end_pose.get('position', {})
+        child_link_end_orientation = child_link_end_pose.get('orientation', {})
+        child_end_roll, child_end_pitch, child_end_yaw = quaternion_to_euler(
+            child_link_end_orientation.get('x', 0.0),
+            child_link_end_orientation.get('y', 0.0),
+            child_link_end_orientation.get('z', 0.0),
+            child_link_end_orientation.get('w', 1.0)
+        )
+    else:
+        child_link_end_position = child_link_pose
+        child_end_roll, child_end_pitch, child_end_yaw = child_roll, child_pitch, child_yaw
+
     base_roll, base_pitch, base_yaw = quaternion_to_euler(
         base_link_pose.get('qx', 0.0),
         base_link_pose.get('qy', 0.0),
@@ -142,10 +164,10 @@ def generate_launch_description():
         base_link_pose.get('qw', 1.0)
     )
 
-    spawn_child_link = Node(
+    spawn_child_link_pick = Node(
         package='ros_gz_sim',
         executable='create',
-        name='spawn_child_link',
+        name='spawn_child_link_pick',
         arguments=[
             '-string', child_link_description_content.value,
             '-name', child_link_spawn_name,
@@ -157,7 +179,25 @@ def generate_launch_description():
             '-Y', str(child_yaw),
         ],
         output='screen',
-        condition=IfCondition(spawn_in_gazebo),
+        condition=UnlessCondition(spawn_at_end_pose),
+    )
+
+    spawn_child_link_end = Node(
+        package='ros_gz_sim',
+        executable='create',
+        name='spawn_child_link_end',
+        arguments=[
+            '-string', child_link_description_content.value,
+            '-name', child_link_spawn_name,
+            '-x', str(child_link_end_position.get('x', 1.2)),
+            '-y', str(child_link_end_position.get('y', 0.3)),
+            '-z', str(child_link_end_position.get('z', 0.125)),
+            '-R', str(child_end_roll),
+            '-P', str(child_end_pitch),
+            '-Y', str(child_end_yaw),
+        ],
+        output='screen',
+        condition=IfCondition(spawn_at_end_pose),
     )
 
     spawn_base_link = Node(
@@ -213,12 +253,18 @@ def generate_launch_description():
         name='add_collision_objects',
         output='screen',
         arguments=['--ros-args', '--log-level', 'WARN'],
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'spawn_at_end_pose': spawn_at_end_pose,
+        }],
         condition=IfCondition(add_to_planning_scene),
     )
 
     nodes = [
-        spawn_child_link,
+        GroupAction(
+            actions=[spawn_child_link_pick, spawn_child_link_end],
+            condition=IfCondition(spawn_in_gazebo),
+        ),
         spawn_base_link,
         child_link_tf_bridge,
         base_link_tf_bridge,

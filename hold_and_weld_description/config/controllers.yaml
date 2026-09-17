@@ -11,7 +11,7 @@ controller_manager:
     robot2_arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-    gripper_controller:
+    robot1_gripper_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
     joint_state_broadcaster:
@@ -55,7 +55,7 @@ robot2_arm_controller:
     allow_partial_joints_goal: false
 
 # Gripper: Finger joints only
-gripper_controller:
+robot1_gripper_controller:
   ros__parameters:
     joints:
       - robot1_left_finger_joint

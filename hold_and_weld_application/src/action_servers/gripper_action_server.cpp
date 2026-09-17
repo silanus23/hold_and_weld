@@ -32,6 +32,20 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
 : LifecycleNode("gripper_action_server", options),
   logger_(rclcpp::get_logger("application"))
 {
+  // Declared here, not in on_configure, so configure -> cleanup -> configure
+  // does not throw ParameterAlreadyDeclaredException.
+  std::string default_yaml =
+    ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
+    "/config/tasks/pick_place_targets.yaml";
+
+  declare_parameter("arm_group_name", "robot1_gp25_arm");
+  declare_parameter("positions_yaml", default_yaml);
+  declare_parameter("gripper_joint_names", std::vector<std::string>{
+        "robot1_left_finger_joint", "robot1_right_finger_joint"});
+  declare_parameter("auto_trigger", false);
+  declare_parameter("auto_trigger_delay_sec", 3.0);
+  declare_parameter(
+    "gripper_controller_topic", "/robot1_gripper_controller/follow_joint_trajectory");
 }
 
 GripperActionServer::~GripperActionServer()
@@ -77,22 +91,17 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
   }
   RCLCPP_INFO(logger_, "Controllers are ready");
 
-  std::string default_yaml =
-    ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
-    "/config/tasks/pick_place_targets.yaml";
-
-  declare_parameter("arm_group_name", "robot1_gp25_arm");
-  declare_parameter("positions_yaml", default_yaml);
-  declare_parameter("gripper_joint_names", std::vector<std::string>{
-        "robot1_left_finger_joint", "robot1_right_finger_joint"});
-  declare_parameter("auto_trigger", false);
-  declare_parameter("auto_trigger_delay_sec", 3.0);
-
   arm_group_name_ = get_parameter("arm_group_name").as_string();
   gripper_joint_names_ = get_parameter("gripper_joint_names").as_string_array();
   yaml_path_ = get_parameter("positions_yaml").as_string();
   auto_trigger_ = get_parameter("auto_trigger").as_bool();
   auto_trigger_delay_sec_ = get_parameter("auto_trigger_delay_sec").as_double();
+  std::string gripper_controller_topic = get_parameter("gripper_controller_topic").as_string();
+  if (auto_trigger_delay_sec_ < 0.0) {
+    RCLCPP_ERROR(logger_, "auto_trigger_delay_sec must be >= 0, got %.3f",
+      auto_trigger_delay_sec_);
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
 
   RCLCPP_INFO(logger_, "Arm group: %s", arm_group_name_.c_str());
 
@@ -101,7 +110,7 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     this->get_node_graph_interface(),
     this->get_node_logging_interface(),
     this->get_node_waitables_interface(),
-    "/gripper_controller/follow_joint_trajectory");
+    gripper_controller_topic);
 
   attached_collision_pub_ = this->create_publisher<moveit_msgs::msg::AttachedCollisionObject>(
     "/attached_collision_object", 10);

@@ -7,7 +7,7 @@ controller_manager:
     robot1_arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-    gripper_controller:
+    robot1_gripper_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
     joint_state_broadcaster:
@@ -31,7 +31,7 @@ robot1_arm_controller:
       - velocity
 
 # Gripper controller (2 joints)
-gripper_controller:
+robot1_gripper_controller:
   ros__parameters:
     joints:
       - robot1_left_finger_joint

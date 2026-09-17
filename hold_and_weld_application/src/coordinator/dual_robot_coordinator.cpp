@@ -26,6 +26,8 @@ DualRobotCoordinator::DualRobotCoordinator(const rclcpp::NodeOptions & options)
   logger_(rclcpp::get_logger("application"))
 {
   this->declare_parameter("auto_start", true);
+  this->declare_parameter(
+    "gripper_controller_topic", "/robot1_gripper_controller/follow_joint_trajectory");
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
@@ -48,12 +50,15 @@ DualRobotCoordinator::on_configure(const rclcpp_lifecycle::State & /*state*/)
     this->get_node_waitables_interface(),
     "/robot2_arm_controller/follow_joint_trajectory");
 
+  std::string gripper_controller_topic =
+    this->get_parameter("gripper_controller_topic").as_string();
+
   gripper_controller_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
     this->get_node_base_interface(),
     this->get_node_graph_interface(),
     this->get_node_logging_interface(),
     this->get_node_waitables_interface(),
-    "/gripper_controller/follow_joint_trajectory");
+    gripper_controller_topic);
 
   gripper_client_ = rclcpp_action::create_client<TriggerGripper>(
     this->get_node_base_interface(),
@@ -221,7 +226,7 @@ bool DualRobotCoordinator::check_controllers_ready()
     RCLCPP_DEBUG(logger_, "Waiting for robot2_arm_controller");
   }
   if (!gripper_ready) {
-    RCLCPP_DEBUG(logger_, "Waiting for gripper_controller");
+    RCLCPP_DEBUG(logger_, "Waiting for robot1_gripper_controller");
   }
 
   return robot1_ready && robot2_ready && gripper_ready;

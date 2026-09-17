@@ -37,6 +37,9 @@ class AddCollisionObjects(Node):
         """Initialize the collision objects node."""
         super().__init__('add_objects_to_scene')
 
+        self.declare_parameter('spawn_at_end_pose', False)
+        spawn_at_end_pose = self.get_parameter('spawn_at_end_pose').value
+
         app_pkg = get_package_share_directory('hold_and_weld_application')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
         objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
@@ -65,7 +68,8 @@ class AddCollisionObjects(Node):
             child_link_config.get('id', 'child_link'),
             child_link_config,
             frame_id,
-            desc_pkg
+            desc_pkg,
+            use_end_pose=spawn_at_end_pose
         )
 
         base_link_config = objects_config.get('base_link', {})
@@ -87,10 +91,20 @@ class AddCollisionObjects(Node):
             ColorRGBA(r=0.6, g=0.6, b=0.6, a=1.0)
         )
 
-    def add_object_from_urdf(self, urdf_path, object_id, object_config, frame_id, desc_pkg):
+    def add_object_from_urdf(
+        self, urdf_path, object_id, object_config, frame_id, desc_pkg, use_end_pose=False
+    ):
         """Add collision object by parsing URDF file."""
-        pose_config = object_config.get('pose', {})
-        orientation_config = object_config.get('orientation', {})
+        if use_end_pose and object_config.get('end_pose'):
+            end_pose_config = object_config['end_pose']
+            pose_config = end_pose_config.get('position', {})
+            orientation_config = end_pose_config.get('orientation', {})
+        else:
+            if use_end_pose:
+                self.get_logger().warn(
+                    f"'{object_id}' has no end_pose, using its pick pose instead")
+            pose_config = object_config.get('pose', {})
+            orientation_config = object_config.get('orientation', {})
         full_urdf_path = os.path.join(desc_pkg, urdf_path)
 
         try:
