@@ -170,6 +170,25 @@ public:
     double tolerance) const;
 
   /**
+   * @brief Check if a cylinder overlaps any obstacle geometry
+   *
+   * Obstacles are secondary shapes and the exclusion volumes. The primary
+   * shape is excluded because the jaw-clearance volume this serves always
+   * contains the part being grasped; the ground is excluded because a round
+   * volume over-approximates the jaws badly against an infinite halfspace.
+   *
+   * @param cylinder_pose Transform placing the cylinder centre in the world frame,
+   * with the cylinder axis along the transform's local Z
+   * @param radius Cylinder radius
+   * @param length Cylinder length along the axis
+   * @return true if the cylinder overlaps any obstacle
+   */
+  bool cylinder_collides_with_obstacles(
+    const gp_Trsf & cylinder_pose,
+    double radius,
+    double length) const;
+
+  /**
    * @brief Get minimum distance from gripper to primary shape
    *
    * @param gripper_transform Transform placing gripper in world frame

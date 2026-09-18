@@ -59,9 +59,8 @@ public:
   /**
    * @brief Refine a shape by removing enclaves and splitting large surfaces.
    *
-   * Large unsplit surfaces (>30% of total area) will trigger a WARN log.
-   * This may indicate gentle BSplines, lofted surfaces, or offset surfaces
-   * that cannot be automatically split.
+   * Large unsplit surfaces (>30% of total area) will trigger a WARN log.This may indicate gentle
+   * BSplines, lofted surfaces, or offset surfacesthat cannot be automatically split.
    *
    * @param raw_shape Input shape (typically from STEP import)
    * @return Refined shape

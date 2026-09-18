@@ -176,6 +176,34 @@ TEST_F(FCLTest, GroundPlane_CollidesBelow_ClearAbove)
   EXPECT_FALSE(checker.collides_with_ground(translation(0.0, 0.0, 0.5), 0.02, 0.001));
 }
 
+// The cylinder query covers obstacles only — a secondary in reach collides, one
+// out of reach does not, and the primary is never consulted.
+TEST_F(FCLTest, CylinderQuery_HitsObstaclesOnly)
+{
+  FCLCollisionChecker checker(gripper_, primary_);
+  const gp_Trsf at_origin = translation(0.0, 0.0, 0.0);
+
+  // Primary alone, sitting at the origin with the cylinder: no obstacle registered.
+  EXPECT_FALSE(checker.cylinder_collides_with_obstacles(at_origin, 0.05, 0.10));
+
+  checker.add_secondary_shapes(
+    {BRepPrimAPI_MakeBox(gp_Pnt(0.03, -0.01, -0.01), 0.02, 0.02, 0.02).Shape()});
+  EXPECT_TRUE(checker.cylinder_collides_with_obstacles(at_origin, 0.05, 0.10));
+  EXPECT_FALSE(checker.cylinder_collides_with_obstacles(at_origin, 0.01, 0.10));
+}
+
+// Degenerate dimensions must not be treated as a collision.
+TEST_F(FCLTest, CylinderQuery_NonPositiveDimensionsAreNoOp)
+{
+  FCLCollisionChecker checker(gripper_, primary_);
+  checker.add_secondary_shapes(
+    {BRepPrimAPI_MakeBox(gp_Pnt(-0.01, -0.01, -0.01), 0.02, 0.02, 0.02).Shape()});
+  const gp_Trsf at_origin = translation(0.0, 0.0, 0.0);
+
+  EXPECT_FALSE(checker.cylinder_collides_with_obstacles(at_origin, 0.0, 0.10));
+  EXPECT_FALSE(checker.cylinder_collides_with_obstacles(at_origin, 0.05, 0.0));
+}
+
 class EmbreeTest : public ::testing::Test
 {
 protected:

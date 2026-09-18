@@ -27,6 +27,21 @@
         size_y: 4.0
         z_position: 0.0
 
+    exclusion_zones:
+      lines:
+        - id: 'weld_seam_1'
+          start:
+            x: 1.2
+            y: -0.3
+            z: 0.25
+          end:
+            x: 1.2
+            y: 0.3
+            z: 0.25
+          exclusion_radius: 0.01
+          projection_depth: 0.03
+          clearance: 0.005
+
     sampling:
       min_angle_deg: 160.0
       max_angle_deg: 180.0
@@ -56,6 +71,14 @@
       debug_sweep_step_deg: 10.0
 
       randomize_seeds: true
+
+    jaw_clearance:
+      # Cylinder on the jaw axis ending at the TCP, covering the open mouth:
+      # radius = grip_distance / 2 + clearance_margin, length = orientation.finger_length.
+      # Rejects candidates with a secondary or an exclusion volume in or beside the
+      # mouth. The gripped part and the ground are not tested.
+      enabled: true
+      clearance_margin: 0.005
 
     kissing:
       contact_threshold: 0.8

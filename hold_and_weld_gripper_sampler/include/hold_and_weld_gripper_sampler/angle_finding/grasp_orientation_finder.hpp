@@ -38,6 +38,11 @@
 namespace hold_and_weld_gripper_sampler
 {
 
+namespace geometry
+{
+class JawClearanceCheck;
+}
+
 namespace constraints
 {
 class ExclusionZoneConstraint;
@@ -195,6 +200,8 @@ public:
     const OrientationConfig & config = OrientationConfig{}
   );
 
+  void set_jaw_clearance_check(
+    std::shared_ptr<const geometry::JawClearanceCheck> jaw_clearance_check);
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
   void set_embree_checker(std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker);
 
@@ -232,6 +239,7 @@ private:
   ParsedGripper gripper_;
   std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint_;
+  std::shared_ptr<const geometry::JawClearanceCheck> jaw_clearance_check_;
   OrientationConfig config_;
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
   std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker_;

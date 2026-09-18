@@ -209,6 +209,7 @@ int main(int argc, char ** argv)
               0.1,
               sec_config.translation.x(),
               sec_config.translation.y());
+
           // Override the FCL ground plane Z with the explicit YAML z_position
           config.finder_config.ground_bottom_z = sec_config.z_position;
           config.finder_config.ground_center_x = sec_config.translation.x();
@@ -243,6 +244,7 @@ int main(int argc, char ** argv)
         } else {
           secondary_shapes.push_back(shape);
         }
+
         RCLCPP_DEBUG(logger, "Secondary loaded: %s (%s)",
         sec_config.id.c_str(), sec_config.type.c_str());
       } catch (const std::exception & e) {
@@ -368,6 +370,12 @@ int main(int argc, char ** argv)
     metadata.num_surfaces_total = topology.num_surfaces();
     metadata.total_time_seconds = elapsed_seconds;
     metadata.finger_length = config.finder_config.orientation.finger_length;
+
+    metadata.jaw_clearance_enabled = config.finder_config.jaw_clearance.enabled;
+    metadata.jaw_clearance_margin = config.finder_config.jaw_clearance.clearance_margin;
+    metadata.exclusion_circles = config.exclusion_circles;
+    metadata.exclusion_lines = config.exclusion_lines;
+    metadata.exclusion_polygons = config.exclusion_polygons;
 
     io::WriterOptions writer_options;
     writer_options.pretty_print = true;

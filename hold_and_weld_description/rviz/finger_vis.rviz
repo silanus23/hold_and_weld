@@ -41,18 +41,42 @@ Visualization Manager:
       Enabled: true
       Name: GraspMarkers
       Namespaces:
-        grasp_contact_1: true
-        grasp_contact_2: true
         grasp_finger_1: true
         grasp_finger_2: true
-        grasp_label: true
-        grasp_opening: true
+        grasp_tip_1: true
+        grasp_tip_2: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /grasp_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: JawClearanceMarkers
+      Namespaces:
+        jaw_clearance: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /jaw_clearance_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: ConstraintMarkers
+      Namespaces:
+        exclusion_circles: true
+        exclusion_lines: true
+        exclusion_polygons: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /constraint_markers
       Value: true
     - Class: rviz_default_plugins/InteractiveMarkers
       Enable Transparency: true

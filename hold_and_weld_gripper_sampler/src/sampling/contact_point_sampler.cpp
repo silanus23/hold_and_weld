@@ -77,12 +77,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
 {
   std::vector<ContactPair> contact_pairs;
 
-  size_t total_samples = 0;
-  size_t rejected_no_opposing = 0;
-  size_t rejected_exclusion = 0;
-  size_t rejected_not_in_allowed_area = 0;
-  size_t rejected_diagonal = 0;
-  size_t rejected_grip_distance = 0;
+  last_stats_ = RejectionStats();  // reset from any previous call
 
   RCLCPP_INFO(logger_, "Starting contact point sampling on %zu surfaces, %zu exclusion areas",
     valid_surface_ids.size(), exclusion_areas.size());
@@ -109,26 +104,31 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       pair.surface_id_1, pair.surface_id_2, contacts_1.size());
 
     for (const auto & contact_1 : contacts_1) {
-      total_samples++;
+      last_stats_.total_samples++;
       gp_Pnt contact_2;
 
       if (!find_opposing_contact(contact_1, pair.face_1, pair.face_2, contact_2)) {
-        rejected_no_opposing++;
+        last_stats_.no_opposing++;
         continue;
       }
 
       if (is_point_in_exclusion(contact_2, pair.face_2, pair.surface_id_2, exclusion_areas)) {
-        rejected_exclusion++;
+        last_stats_.exclusion++;
         continue;
       }
 
       if (!is_point_in_allowed_area(contact_2, pair.face_2, pair.surface_id_2, exclusion_areas)) {
-        rejected_not_in_allowed_area++;
+        last_stats_.not_in_allowed_area++;
         continue;
       }
 
-      if (!is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2)) {
-        rejected_diagonal++;
+      PairingVerdict verdict = is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2);
+      if (verdict == PairingVerdict::InternalGrip) {
+        last_stats_.internal_grip++;
+        continue;
+      }
+      if (verdict != PairingVerdict::Valid) {
+        last_stats_.diagonal++;
         continue;
       }
 
@@ -137,7 +137,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       if (grip_distance < config_.min_gripper_opening ||
         grip_distance > config_.max_gripper_opening)
       {
-        rejected_grip_distance++;
+        last_stats_.grip_distance++;
         continue;
       }
 
@@ -145,7 +145,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
 
       if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
-        rejected_no_opposing++;
+        last_stats_.no_opposing++;
         continue;
       }
 
@@ -169,26 +169,31 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       pair.surface_id_1, pair.surface_id_2, contacts_2.size());
 
     for (const auto & contact_2 : contacts_2) {
-      total_samples++;
+      last_stats_.total_samples++;
       gp_Pnt contact_1;
 
       if (!find_opposing_contact(contact_2, pair.face_2, pair.face_1, contact_1)) {
-        rejected_no_opposing++;
+        last_stats_.no_opposing++;
         continue;
       }
 
       if (is_point_in_exclusion(contact_1, pair.face_1, pair.surface_id_1, exclusion_areas)) {
-        rejected_exclusion++;
+        last_stats_.exclusion++;
         continue;
       }
 
       if (!is_point_in_allowed_area(contact_1, pair.face_1, pair.surface_id_1, exclusion_areas)) {
-        rejected_not_in_allowed_area++;
+        last_stats_.not_in_allowed_area++;
         continue;
       }
 
-      if (!is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2)) {
-        rejected_diagonal++;
+      PairingVerdict verdict = is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2);
+      if (verdict == PairingVerdict::InternalGrip) {
+        last_stats_.internal_grip++;
+        continue;
+      }
+      if (verdict != PairingVerdict::Valid) {
+        last_stats_.diagonal++;
         continue;
       }
 
@@ -197,7 +202,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       if (grip_distance < config_.min_gripper_opening ||
         grip_distance > config_.max_gripper_opening)
       {
-        rejected_grip_distance++;
+        last_stats_.grip_distance++;
         continue;
       }
 
@@ -205,7 +210,7 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
       auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
 
       if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
-        rejected_no_opposing++;
+        last_stats_.no_opposing++;
         continue;
       }
 
@@ -227,17 +232,18 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
   // Deduplicate contact pairs using grid-based bucketing
   size_t pairs_before_dedup = contact_pairs.size();
   contact_pairs = deduplicate_contact_pairs(contact_pairs, config_.sample_density / 2.0);
-  size_t rejected_duplicate = pairs_before_dedup - contact_pairs.size();
+  last_stats_.duplicate = pairs_before_dedup - contact_pairs.size();
 
   RCLCPP_INFO(logger_,
     "Contact point sampling complete: %zu samples tested, %zu valid pairs (after dedup)",
-    total_samples, contact_pairs.size());
+    last_stats_.total_samples, contact_pairs.size());
 
-  if (total_samples > 0) {
+  if (last_stats_.total_samples > 0) {
     RCLCPP_DEBUG(logger_, "Rejection breakdown: no_opposing=%zu, exclusion=%zu, "
-      "not_allowed=%zu, diagonal=%zu, grip_distance=%zu, duplicates=%zu",
-      rejected_no_opposing, rejected_exclusion, rejected_not_in_allowed_area,
-      rejected_diagonal, rejected_grip_distance, rejected_duplicate);
+      "not_allowed=%zu, diagonal=%zu, internal_grip=%zu, grip_distance=%zu, duplicates=%zu",
+      last_stats_.no_opposing, last_stats_.exclusion, last_stats_.not_in_allowed_area,
+      last_stats_.diagonal, last_stats_.internal_grip, last_stats_.grip_distance,
+          last_stats_.duplicate);
   }
 
   if (contact_pairs.empty()) {
@@ -641,7 +647,7 @@ bool ContactPointSampler::find_opposing_contact(
   return false;
 }
 
-bool ContactPointSampler::is_valid_pairing(
+ContactPointSampler::PairingVerdict ContactPointSampler::is_valid_pairing(
   const gp_Pnt & contact_1,
   const gp_Pnt & contact_2,
   const TopoDS_Face & face_1,
@@ -651,14 +657,14 @@ bool ContactPointSampler::is_valid_pairing(
   double projection_length = projection_vec.Magnitude();
 
   if (projection_length < 1e-6) {
-    return false;
+    return PairingVerdict::Diagonal;
   }
 
   auto normal_1_opt = geometry::surface_normal_at_point(contact_1, face_1);
   auto normal_2_opt = geometry::surface_normal_at_point(contact_2, face_2);
 
   if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
-    return false;
+    return PairingVerdict::Diagonal;
   }
 
   gp_Vec normal_1 = normal_1_opt.value();
@@ -668,15 +674,31 @@ bool ContactPointSampler::is_valid_pairing(
   normal_1.Normalize();
   normal_2.Normalize();
 
-  double alignment_1 = std::abs(projection_vec.Dot(normal_1));
-  double alignment_2 = std::abs(projection_vec.Dot(normal_2));
+  // Signed for the sidedness test below; the perpendicularity and lateral-deviation
+  // checks are orientation-agnostic and use the magnitudes.
+  double signed_alignment_1 = projection_vec.Dot(normal_1);
+  double signed_alignment_2 = projection_vec.Dot(normal_2);
+  double alignment_1 = std::abs(signed_alignment_1);
+  double alignment_2 = std::abs(signed_alignment_2);
 
   if (alignment_1 < config_.alignment_threshold) {
-    return false;
+    return PairingVerdict::Diagonal;
   }
 
   if (alignment_2 < config_.alignment_threshold) {
-    return false;
+    return PairingVerdict::Diagonal;
+  }
+
+  // Sidedness. projection_vec runs contact_1 -> contact_2, so an external grip
+  // approaches each face against its outward normal: proj.n1 < 0 and proj.n2 > 0.
+  // Contacts on the inner faces of a pocket or an open channel reverse both signs
+  // while remaining antiparallel, so every other check here accepts them, but a
+  // closing parallel jaw moves away from those faces and holds nothing.
+  if (signed_alignment_1 >= 0.0 || signed_alignment_2 <= 0.0) {
+    RCLCPP_DEBUG(logger_,
+      "Rejecting internal grip: proj.n1=%.3f, proj.n2=%.3f (external requires <0, >0)",
+      signed_alignment_1, signed_alignment_2);
+    return PairingVerdict::InternalGrip;
   }
 
   double min_alignment = std::min(alignment_1, alignment_2);
@@ -684,10 +706,10 @@ bool ContactPointSampler::is_valid_pairing(
   double alignment_squared = std::min(1.0, min_alignment * min_alignment);
   double lateral_component = projection_length * std::sqrt(1.0 - alignment_squared);
   if (lateral_component > config_.max_lateral_deviation) {
-    return false;
+    return PairingVerdict::Diagonal;
   }
 
-  return true;
+  return PairingVerdict::Valid;
 }
 
 bool ContactPointSampler::has_antiparallel_local_normals(

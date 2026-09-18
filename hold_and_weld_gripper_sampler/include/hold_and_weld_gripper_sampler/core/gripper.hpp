@@ -29,9 +29,7 @@ namespace hold_and_weld_gripper_sampler
  * @brief Parsed gripper kinematic information
  *
  * Contains all geometric and kinematic data needed for grasp planning
- * and collision checking. Lives in the root namespace because it is a
- * runtime kinematics struct used across the entire pipeline — it is not
- * a transient IO artifact.
+ * and collision checking.
  */
 struct ParsedGripper
 {
@@ -59,8 +57,6 @@ struct ParsedGripper
    *
    * Translates each finger along its opening axis by the amount needed to
    * achieve the requested grip distance. Clamps to [0, max_opening].
-   * Both fingers move symmetrically from their closed (reference) positions,
-   * which are defined by the joint origin transforms baked into finger_1/finger_2.
    *
    * @param grip_distance Target distance between finger contact points (meters)
    * @return Compound shape: finger_1 + finger_2 + base at configured state

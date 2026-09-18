@@ -15,6 +15,7 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__SAMPLING__CONTACT_POINT_SAMPLER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__SAMPLING__CONTACT_POINT_SAMPLER_HPP_
 
+#include <cstddef>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -80,6 +81,23 @@ struct ContactPair
 };
 
 /**
+ * @brief Per-run counts of discarded contact point candidates, by reason.
+ *
+ * Populated by every call to generate_contact_pairs; reflects the most recent call.
+ */
+struct RejectionStats
+{
+  size_t total_samples = 0;
+  size_t no_opposing = 0;
+  size_t exclusion = 0;
+  size_t not_in_allowed_area = 0;
+  size_t diagonal = 0;
+  size_t internal_grip = 0;
+  size_t grip_distance = 0;
+  size_t duplicate = 0;
+};
+
+/**
  * @brief Samples antipodal contact point pairs on opposing surfaces.
  *
  * For each valid surface pair, samples points on one surface and projects
@@ -106,7 +124,24 @@ public:
     const std::vector<int> & valid_surface_ids,
     const std::vector<core::SampleArea> & exclusion_areas) const;
 
+  /**
+   * @brief Rejection counters from the most recent generate_contact_pairs call.
+   *
+   * All counters are zero before the first call.
+   */
+  const RejectionStats & last_rejection_stats() const {return last_stats_;}
+
 private:
+  /**
+   * @brief Outcome of validating a candidate contact pair.
+   */
+  enum class PairingVerdict
+  {
+    Valid,
+    Diagonal,
+    InternalGrip
+  };
+
   /**
    * @brief Find opposing surface pairs within gripper opening range.
    *
@@ -229,17 +264,19 @@ private:
     gp_Pnt & opposing_contact) const;
 
   /**
-   * @brief Validate that a contact pair is a direct (non-diagonal) grasp.
+   * @brief Validate that a contact pair is a direct, external (non-diagonal) grasp.
    *
-   * Checks grip axis alignment with surface normals and lateral deviation.
+   * Checks grip axis alignment with surface normals, lateral deviation, and the
+   * sidedness of the grip: contacts inside a pocket or channel are antiparallel
+   * just like an external grip, but a closing parallel jaw moves away from them.
    *
    * @param contact_1 First contact point
    * @param contact_2 Second contact point
    * @param face_1 First face
    * @param face_2 Second face
-   * @return true if the pair is a valid direct grasp
+   * @return Valid if the pair is a direct external grasp, otherwise the rejection reason
    */
-  bool is_valid_pairing(
+  PairingVerdict is_valid_pairing(
     const gp_Pnt & contact_1,
     const gp_Pnt & contact_2,
     const TopoDS_Face & face_1,
@@ -302,6 +339,7 @@ private:
     double tolerance) const;
 
   SamplingConfig config_;
+  mutable RejectionStats last_stats_;
 };
 
 }  // namespace sampling

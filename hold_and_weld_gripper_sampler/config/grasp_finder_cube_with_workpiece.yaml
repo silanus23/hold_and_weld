@@ -41,6 +41,17 @@
             z: 0.0
             w: 1.0
 
+    exclusion_zones:
+      polygons:
+        - id: 'label_area'
+          corners:
+            - { x: 1.175, y: 0.275, z: 0.25 }
+            - { x: 1.225, y: 0.275, z: 0.25 }
+            - { x: 1.225, y: 0.325, z: 0.25 }
+            - { x: 1.175, y: 0.325, z: 0.25 }
+          projection_depth: 0.02
+          clearance: 0.005
+
     sampling:
       min_angle_deg: 160.0
       max_angle_deg: 180.0
@@ -66,6 +77,14 @@
 
       stop_on_first_valid: false
       collision_tolerance: 0.001
+
+    jaw_clearance:
+      # Cylinder on the jaw axis ending at the TCP, covering the open mouth:
+      # radius = grip_distance / 2 + clearance_margin, length = orientation.finger_length.
+      # Rejects candidates with a secondary or an exclusion volume in or beside the
+      # mouth. The gripped part and the ground are not tested.
+      enabled: true
+      clearance_margin: 0.005
 
     kissing:
       contact_threshold: 0.8

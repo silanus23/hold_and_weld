@@ -18,6 +18,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeWedge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -66,6 +67,33 @@ std::vector<int> get_surfaces_by_normal(
     double dot = std::abs(norm.Dot(surf_norm));
 
     if (dot >= tolerance) {
+      result.push_back(static_cast<int>(i));
+    }
+  }
+
+  return result;
+}
+
+// Surfaces whose (orientation-corrected) normal matches target_normal in direction and
+// whose center sits at the given coordinate along axis 0=X, 1=Y, 2=Z.
+std::vector<int> get_surfaces_by_normal_and_position(
+  const Topology & topology,
+  const gp_Vec & target_normal,
+  int axis,
+  double coordinate,
+  double position_tolerance = 1e-6)
+{
+  std::vector<int> result;
+  gp_Vec norm = target_normal.Normalized();
+
+  const auto & all_surfaces = topology.get_all_surfaces();
+  for (size_t i = 0; i < all_surfaces.size(); i++) {
+    if (norm.Dot(all_surfaces[i].normal.Normalized()) < 0.99) {
+      continue;
+    }
+    const gp_Pnt & c = all_surfaces[i].center;
+    double value = (axis == 0) ? c.X() : (axis == 1) ? c.Y() : c.Z();
+    if (std::abs(value - coordinate) <= position_tolerance) {
       result.push_back(static_cast<int>(i));
     }
   }
@@ -485,6 +513,76 @@ TEST_F(ContactPointSamplerTest, AllSurfacesExcluded)
   auto pairs = sampler.generate_contact_pairs(topology, all_ids, exclusions);
 
   EXPECT_EQ(pairs.size(), 0);
+}
+
+// An external grip on the two opposing outer faces of a box must be accepted.
+// Guards the sidedness test in is_valid_pairing against a sign inversion, which would
+// silently reject every legitimate grasp.
+TEST_F(ContactPointSamplerTest, ExternalGripOnOpposingFacesRetained)
+{
+  TopoDS_Shape box = BRepPrimAPI_MakeBox(0.10, 0.10, 0.06).Shape();
+  Topology topology = mapper_->load_from_shape(box, "external_box");
+
+  // The two outer X faces: outward normals -X at x=0 and +X at x=0.10, 60 mm apart.
+  std::vector<int> low = get_surfaces_by_normal_and_position(
+    topology, gp_Vec(-1, 0, 0), 0, 0.0);
+  std::vector<int> high = get_surfaces_by_normal_and_position(
+    topology, gp_Vec(1, 0, 0), 0, 0.10);
+
+  ASSERT_EQ(low.size(), 1u) << "Box must have exactly one outward -X face at x=0";
+  ASSERT_EQ(high.size(), 1u) << "Box must have exactly one outward +X face at x=0.10";
+
+  SamplingConfig config;
+  config.min_gripper_opening = 0.09;
+  config.max_gripper_opening = 0.11;
+  config.sample_density = 0.02;
+
+  ContactPointSampler sampler(config);
+
+  std::vector<int> outer_faces = {low[0], high[0]};
+  std::vector<SampleArea> no_exclusions;
+  auto pairs = sampler.generate_contact_pairs(topology, outer_faces, no_exclusions);
+
+  EXPECT_GT(pairs.size(), 0u) << "External grip on opposing outer faces must be accepted";
+  EXPECT_EQ(sampler.last_rejection_stats().internal_grip, 0u)
+    << "No contact on outer faces may be classified as an internal grip";
+}
+
+
+TEST_F(ContactPointSamplerTest, InternalGripInsideChannelRejected)
+{
+  // C-channel: 100x100x60 mm block with a 60 mm wide slot cut through in Y, open at +Z.
+  // Inner walls sit at x=0.02 and x=0.08 with outward normals pointing into the slot.
+  TopoDS_Shape stock = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 0.10, 0.10, 0.06).Shape();
+  TopoDS_Shape slot =
+    BRepPrimAPI_MakeBox(gp_Pnt(0.02, -0.01, 0.02), 0.06, 0.12, 0.05).Shape();
+  TopoDS_Shape channel = BRepAlgoAPI_Cut(stock, slot).Shape();
+
+  Topology topology = mapper_->load_from_shape(channel, "c_channel");
+
+  // Inner wall at x=0.02 faces +X (into the slot); inner wall at x=0.08 faces -X.
+  std::vector<int> wall_low = get_surfaces_by_normal_and_position(
+    topology, gp_Vec(1, 0, 0), 0, 0.02);
+  std::vector<int> wall_high = get_surfaces_by_normal_and_position(
+    topology, gp_Vec(-1, 0, 0), 0, 0.08);
+
+  ASSERT_EQ(wall_low.size(), 1u) << "Channel must have one inward-facing wall at x=0.02";
+  ASSERT_EQ(wall_high.size(), 1u) << "Channel must have one inward-facing wall at x=0.08";
+
+  SamplingConfig config;
+  config.min_gripper_opening = 0.05;
+  config.max_gripper_opening = 0.07;
+  config.sample_density = 0.01;
+
+  ContactPointSampler sampler(config);
+
+  std::vector<int> inner_walls = {wall_low[0], wall_high[0]};
+  std::vector<SampleArea> no_exclusions;
+  auto pairs = sampler.generate_contact_pairs(topology, inner_walls, no_exclusions);
+
+  EXPECT_EQ(pairs.size(), 0u) << "Grips inside the channel hold nothing and must be rejected";
+  EXPECT_GT(sampler.last_rejection_stats().internal_grip, 0u)
+    << "Rejections must be attributed to the internal-grip counter";
 }
 
 int main(int argc, char ** argv)

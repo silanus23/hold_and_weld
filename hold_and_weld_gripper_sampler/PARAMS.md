@@ -155,6 +155,19 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 | `shape_refiner.enclave_area_ratio` | double | 0.005 | Maximum enclave area as fraction of total shape area before suppression |
 | `shape_refiner.enclave_angle_threshold` | double | 45.0 | Maximum wall angle for enclave suppression [deg]. Walls steeper than this are kept as real features. |
 
+## Jaw Clearance
+
+Cylinder on the jaw axis ending at the TCP, covering the open mouth between the fingers —
+the one region the gripper solid does not occupy, so the collision checks cannot see it.
+Checked against secondaries and exclusion volumes; the gripped workpiece and the ground
+are not tested. Its length is `orientation.finger_length`. It is a pose-time collision
+test rather than a sampling constraint: `JawClearanceCheck`, in `collision/`.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `jaw_clearance.enabled` | bool | false | Enable the jaw-clearance check. Runs before the exact mesh check. |
+| `jaw_clearance.clearance_margin` | double | 0.005 | Added to `grip_distance / 2` to give the test radius [m]. How much empty space is demanded around the jaws beyond the opening itself. |
+
 ## Kissing
 
 | Parameter | Type | Default | Description |
@@ -186,6 +199,24 @@ Controls OCCT triangulation quality for exclusion zone geometry.
 | `output.json_path` | string | grasps.json | Output JSON file path |
 | `output.max_grasps` | size_t | 0 | Maximum grasps to output. 0 = all |
 | `output.min_quality` | double | 0.0 | Minimum quality score threshold for output |
+
+### Visualization fields
+
+Not YAML parameters — pipeline geometry written into the output JSON so it can be
+drawn in RViz2 without recomputing anything.
+
+`constraint_geometry` (top-level, once per run): `exclusion_circles`, `exclusion_lines`,
+`exclusion_polygons` — the raw config primitives (center/normal/radius,
+start/end/radius, corners), before clearance is added. Secondaries (fixtures/ground/
+obstacles) are deliberately not included: `step`/`urdf` secondaries can be arbitrary
+CAD geometry, and there is no primitive representation of that worth writing here —
+a box/bbox stand-in would misrepresent the actual shape the sampler collided against.
+
+Per grasp, when `jaw_clearance.enabled` is true: `jaw_clearance_cylinder` —
+`center`, `quaternion`, `radius`, `length` of the cylinder that grasp was tested
+against (see "Jaw Clearance" above). Recomputed from `tcp_pose` and
+`gripper_opening` rather than carried through the pipeline, since those two
+already determine it.
 
 ## Planned Parameters
 

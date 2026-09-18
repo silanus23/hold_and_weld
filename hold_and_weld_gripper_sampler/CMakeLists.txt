@@ -44,6 +44,7 @@ add_library(${PROJECT_NAME}_core SHARED
   src/filters/surface_dimension_filter.cpp
   src/filters/surface_geometry_filter.cpp
 
+  src/collision/jaw_clearance_check.cpp
   src/constraints/exclusion_zone_constraint.cpp
   src/constraints/kissing_surface_constraint.cpp
   src/sampling/contact_point_sampler.cpp
@@ -170,6 +171,7 @@ if(BUILD_TESTING)
   add_sampler_test(topology_extraction_test test/topology_extraction_test.cpp)
   add_sampler_test(shape_refiner_test test/shape_refiner_test.cpp)
   add_sampler_test(exclusion_zone_constraint_test test/exclusion_zone_constraint_test.cpp)
+  add_sampler_test(jaw_clearance_check_test test/jaw_clearance_check_test.cpp)
   add_sampler_test(gripper_parser_test test/gripper_parser_test.cpp)
   add_sampler_test(kissing_surface_constraint_test test/kissing_surface_constraint_test.cpp)
   add_sampler_test(contact_point_sampler_test test/contact_point_sampler_test.cpp)

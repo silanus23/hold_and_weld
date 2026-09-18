@@ -49,6 +49,14 @@ struct ResultMetadata
   double orientation_time_seconds = 0.0;
 
   double finger_length = 0.0;
+
+
+  bool jaw_clearance_enabled = false;
+  double jaw_clearance_margin = 0.0;
+
+  std::vector<constraints::exclusion_circle> exclusion_circles;
+  std::vector<constraints::exclusion_line> exclusion_lines;
+  std::vector<constraints::exclusion_polygon> exclusion_polygons;
 };
 
 /**

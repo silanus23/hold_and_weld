@@ -258,6 +258,46 @@ bool FCLCollisionChecker::collides_with_secondaries(
   return false;
 }
 
+bool FCLCollisionChecker::cylinder_collides_with_obstacles(
+  const gp_Trsf & cylinder_pose,
+  double radius,
+  double length) const
+{
+  if (!valid_) {return false;}
+  if (radius <= 0.0 || length <= 0.0) {
+    RCLCPP_WARN(logger_,
+      "cylinder_collides_with_obstacles: non-positive radius (%.4f) or length (%.4f) — "
+      "no obstacle check performed", radius, length);
+    return false;
+  }
+
+  auto cylinder = std::make_shared<fcl::Cylinder<FCLScalar>>(radius, length);
+  CollisionObject cylinder_obj(cylinder, to_fcl_transform(cylinder_pose));
+
+  fcl::CollisionRequest<FCLScalar> request;
+  fcl::CollisionResult<FCLScalar> result;
+
+  auto hits = [&cylinder_obj, &request, &result](const CollisionObject & target) {
+      result.clear();
+      fcl::collide(&cylinder_obj, &target, request, result);
+      return result.isCollision();
+    };
+
+  for (const auto & bvh : secondary_bvhs_) {
+    if (!bvh) {continue;}
+    CollisionObject target(bvh, Transform3::Identity());
+    if (hits(target)) {return true;}
+  }
+
+  for (const auto & bvh : exclusion_bvhs_) {
+    if (!bvh) {continue;}
+    CollisionObject target(bvh, Transform3::Identity());
+    if (hits(target)) {return true;}
+  }
+
+  return false;
+}
+
 double FCLCollisionChecker::distance_to_primary(
   const gp_Trsf & gripper_transform,
   double grip_distance) const

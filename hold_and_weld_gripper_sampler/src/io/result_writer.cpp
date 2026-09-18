@@ -178,6 +178,85 @@ std::string ResultWriter::to_json_string(
       json << indent << indent << "\"num_grasps_output\":" << sep << filtered_grasps.size() <<
         newline;
       json << indent << "}," << newline;
+
+      json << indent << "\"constraint_geometry\":" << sep << "{" << newline;
+
+      json << indent << indent << "\"jaw_clearance_enabled\":" << sep <<
+        (metadata.jaw_clearance_enabled ? "true" : "false") << "," << newline;
+      json << indent << indent << "\"jaw_clearance_margin\":" << sep <<
+        metadata.jaw_clearance_margin << "," << newline;
+
+      json << indent << indent << "\"exclusion_circles\":" << sep << "[" << newline;
+      for (size_t i = 0; i < metadata.exclusion_circles.size(); ++i) {
+        const auto & c = metadata.exclusion_circles[i];
+        json << indent << indent << indent << "{" << newline;
+        json << indent << indent << indent << indent << "\"id\":" << sep << "\"" <<
+          escape_json_string(c.id) << "\"," << newline;
+        json << indent << indent << indent << indent << "\"center\":" << sep << "[" <<
+          c.center.x() << "," << sep << c.center.y() << "," << sep << c.center.z() <<
+          "]," << newline;
+        json << indent << indent << indent << indent << "\"normal\":" << sep << "[" <<
+          c.normal.x() << "," << sep << c.normal.y() << "," << sep << c.normal.z() <<
+          "]," << newline;
+        json << indent << indent << indent << indent << "\"radius\":" << sep <<
+          c.radius << "," << newline;
+        json << indent << indent << indent << indent << "\"projection_depth\":" << sep <<
+          c.projection_depth << "," << newline;
+        json << indent << indent << indent << indent << "\"clearance\":" << sep <<
+          c.clearance << newline;
+        json << indent << indent << indent << "}";
+        if (i < metadata.exclusion_circles.size() - 1) {json << ",";}
+        json << newline;
+      }
+      json << indent << indent << "]," << newline;
+
+      json << indent << indent << "\"exclusion_lines\":" << sep << "[" << newline;
+      for (size_t i = 0; i < metadata.exclusion_lines.size(); ++i) {
+        const auto & l = metadata.exclusion_lines[i];
+        json << indent << indent << indent << "{" << newline;
+        json << indent << indent << indent << indent << "\"id\":" << sep << "\"" <<
+          escape_json_string(l.id) << "\"," << newline;
+        json << indent << indent << indent << indent << "\"start\":" << sep << "[" <<
+          l.start.x() << "," << sep << l.start.y() << "," << sep << l.start.z() <<
+          "]," << newline;
+        json << indent << indent << indent << indent << "\"end\":" << sep << "[" <<
+          l.end.x() << "," << sep << l.end.y() << "," << sep << l.end.z() <<
+          "]," << newline;
+        json << indent << indent << indent << indent << "\"exclusion_radius\":" << sep <<
+          l.exclusion_radius << "," << newline;
+        json << indent << indent << indent << indent << "\"clearance\":" << sep <<
+          l.clearance << newline;
+        json << indent << indent << indent << "}";
+        if (i < metadata.exclusion_lines.size() - 1) {json << ",";}
+        json << newline;
+      }
+      json << indent << indent << "]," << newline;
+
+      json << indent << indent << "\"exclusion_polygons\":" << sep << "[" << newline;
+      for (size_t i = 0; i < metadata.exclusion_polygons.size(); ++i) {
+        const auto & poly = metadata.exclusion_polygons[i];
+        json << indent << indent << indent << "{" << newline;
+        json << indent << indent << indent << indent << "\"id\":" << sep << "\"" <<
+          escape_json_string(poly.id) << "\"," << newline;
+        json << indent << indent << indent << indent << "\"corners\":" << sep << "[";
+        for (size_t j = 0; j < poly.exclusion_corners.size(); ++j) {
+          const auto & corner = poly.exclusion_corners[j];
+          json << "[" << corner.x() << "," << sep << corner.y() << "," << sep <<
+            corner.z() << "]";
+          if (j < poly.exclusion_corners.size() - 1) {json << "," << sep;}
+        }
+        json << "]," << newline;
+        json << indent << indent << indent << indent << "\"projection_depth\":" << sep <<
+          poly.projection_depth << "," << newline;
+        json << indent << indent << indent << indent << "\"clearance\":" << sep <<
+          poly.clearance << newline;
+        json << indent << indent << indent << "}";
+        if (i < metadata.exclusion_polygons.size() - 1) {json << ",";}
+        json << newline;
+      }
+      json << indent << indent << "]" << newline;
+
+      json << indent << "}," << newline;
     }
 
     json << indent << "\"grasps\":" << sep << "[" << newline;
@@ -223,7 +302,35 @@ std::string ResultWriter::to_json_string(
       json << indent << indent << indent << "}," << newline;
 
       json << indent << indent << indent << "\"gripper_opening\":" << sep <<
-        grasp.gripper_opening << newline;
+        grasp.gripper_opening << (metadata.jaw_clearance_enabled ? "," : "") << newline;
+
+      if (metadata.jaw_clearance_enabled) {
+        // Same geometry as JawClearanceCheck::intrudes: centred one half finger
+        // length behind the TCP along local -Z, radius grows with this grasp's
+        // own opening. Recomputed here rather than carried through the pipeline,
+        // since tcp_position/tcp_orientation already determine it uniquely.
+        const Eigen::Matrix3d rot = grasp.tcp_orientation.toRotationMatrix();
+        const Eigen::Vector3d axis = rot.col(2);
+        const double half_length = metadata.finger_length / 2.0;
+        const Eigen::Vector3d center = grasp.tcp_position - axis * half_length;
+        const double radius = grasp.gripper_opening / 2.0 + metadata.jaw_clearance_margin;
+
+        json << indent << indent << indent << "\"jaw_clearance_cylinder\":" << sep << "{" <<
+          newline;
+        json << indent << indent << indent << indent << "\"center\":" << sep << "[" <<
+          center.x() << "," << sep << center.y() << "," << sep << center.z() << "]," <<
+          newline;
+        json << indent << indent << indent << indent << "\"quaternion\":" << sep << "[" <<
+          grasp.tcp_orientation.x() << "," << sep <<
+          grasp.tcp_orientation.y() << "," << sep <<
+          grasp.tcp_orientation.z() << "," << sep <<
+          grasp.tcp_orientation.w() << "]," << newline;
+        json << indent << indent << indent << indent << "\"radius\":" << sep <<
+          radius << "," << newline;
+        json << indent << indent << indent << indent << "\"length\":" << sep <<
+          metadata.finger_length << newline;
+        json << indent << indent << indent << "}" << newline;
+      }
 
       json << indent << indent << "}";
 

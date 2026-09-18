@@ -27,6 +27,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
+#include "hold_and_weld_gripper_sampler/collision/jaw_clearance_check.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
@@ -97,6 +98,7 @@ struct GraspFinderConfig
   sampling::SamplingConfig sampling;
   angle_finding::OrientationConfig orientation;
   ShapeRefinerConfig shape_refiner;
+  geometry::JawClearanceConfig jaw_clearance;
 
   double kissing_contact_threshold = 0.8;
   double kissing_contact_distance_threshold = 0.005;
@@ -222,6 +224,7 @@ private:
   mutable std::optional<GraspFinderResult> cached_result_;
   std::shared_ptr<constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<constraints::KissingSurfaceConstraint> kissing_constraint_;
+  std::shared_ptr<geometry::JawClearanceCheck> jaw_clearance_check_;
   std::shared_ptr<geometry::FCLCollisionChecker> fcl_checker_;
 
   /**

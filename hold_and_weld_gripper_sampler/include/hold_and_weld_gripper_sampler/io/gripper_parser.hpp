@@ -113,7 +113,6 @@ private:
     const std::string & urdf_string,
     const std::string & link_name);
 
-  /// Overload accepting a pre-parsed <robot> element — avoids re-parsing the URDF string.
   TopoDS_Shape extract_link_shape(
     tinyxml2::XMLElement * robot,
     const std::string & link_name);
@@ -130,7 +129,6 @@ private:
     const std::string & urdf_string,
     const std::string & joint_name);
 
-  /// Overload accepting a pre-parsed <robot> element.
   Eigen::Vector3d extract_joint_axis(
     tinyxml2::XMLElement * robot,
     const std::string & joint_name);

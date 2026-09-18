@@ -138,6 +138,15 @@ std::string GraspFinder::initialize()
         exclusion_constraint_->set_fcl_checker(fcl_checker_);
         kissing_constraint_->set_fcl_checker(fcl_checker_);
 
+        if (config_.jaw_clearance.enabled) {
+          jaw_clearance_check_ = std::make_shared<geometry::JawClearanceCheck>(
+          config_.jaw_clearance, gripper_, config_.orientation.finger_length);
+          jaw_clearance_check_->set_fcl_checker(fcl_checker_);
+          RCLCPP_INFO(logger_,
+          "Jaw clearance enabled: length=%.4fm, clearance margin=%.4fm",
+          jaw_clearance_check_->get_length(), config_.jaw_clearance.clearance_margin);
+        }
+
         init_error_ = "";
       } catch (const Standard_Failure & e) {
         RCLCPP_ERROR(logger_, "OCCT Failure during GraspFinder init: %s", e.GetMessageString());
@@ -200,6 +209,7 @@ GraspFinderResult GraspFinder::find()
       exclusion_constraint_, kissing_constraint_,
       config_.orientation);
 
+    finder.set_jaw_clearance_check(jaw_clearance_check_);
     finder.set_fcl_checker(fcl_checker_);
     if (fcl_checker_) {
       finder.set_embree_checker(fcl_checker_->get_embree_primary());

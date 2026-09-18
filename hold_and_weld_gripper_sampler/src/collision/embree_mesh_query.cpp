@@ -42,6 +42,7 @@ static void check_embree_error(RTCDevice device, const char * context)
   if (err != RTC_ERROR_NONE) {
     std::string msg = std::string("Embree error in ") + context + ": ";
     switch (err) {
+      case RTC_ERROR_NONE:              break;
       case RTC_ERROR_UNKNOWN:           msg += "RTC_ERROR_UNKNOWN"; break;
       case RTC_ERROR_INVALID_ARGUMENT:  msg += "RTC_ERROR_INVALID_ARGUMENT"; break;
       case RTC_ERROR_INVALID_OPERATION: msg += "RTC_ERROR_INVALID_OPERATION"; break;

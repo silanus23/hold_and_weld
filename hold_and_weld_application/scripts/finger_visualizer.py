@@ -16,23 +16,22 @@
 """
 Finger visualizer — publishes gripper finger box markers in RViz.
 
-Publishes markers for each sampled grasp, showing exactly where the fingers
-will be placed on the part.
-
-  - Spawns objects at their START pose (where the gripper picks them up).
-  - Reads the latest grasp JSON from grasps/ by metadata.generated_at.
-  - Publishes two CUBE markers per grasp (one per finger) on /grasp_markers.
+Spawns objects.yaml at their START pose, then reads the latest grasp JSON
+from grasps/ and publishes finger boxes (/grasp_markers), jaw-clearance
+cylinders (/jaw_clearance_markers), and exclusion-zone geometry
+(/constraint_markers) as independent topics.
 """
 
 import colorsys
 import glob
 import json
+import math
 import os
 import subprocess
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Point, Pose
 from interactive_markers import InteractiveMarkerServer
 from moveit_msgs.msg import CollisionObject
 import rclpy
@@ -57,7 +56,6 @@ _GRASPS_DIRS = [
         _WORKSPACE_ROOT,
         'src/hold_and_weld/hold_and_weld_application/grasps',
     ),
-    # Resolved at runtime in _visualize_latest_grasps() from ament_index
 ]
 
 
@@ -65,15 +63,8 @@ class FingerVisualizer(Node):
     """
     Publishes gripper finger box markers in RViz for each sampled grasp.
 
-    Startup sequence
-    ----------------
-    1. Load objects.yaml to get start poses and URDF paths.
-    2. Wait up to 5 s for a /collision_object subscriber (MoveIt).
-    3. Spawn all objects from objects.yaml at their START poses in the planning
-       scene (so the scene matches what the grasp sampler saw).
-    4. Find the latest grasp JSON in grasps/ by metadata.generated_at.
-    5. Publish two CUBE markers per grasp (finger_1, finger_2) on /grasp_markers.
-    6. Spin forever (markers persist until the node dies).
+    Spawns objects.yaml at their START poses (waiting up to 5s for MoveIt),
+    then publishes markers for the latest grasp JSON and spins forever.
     """
 
     def __init__(self):
@@ -97,11 +88,28 @@ class FingerVisualizer(Node):
         self.frame_id = objects_cfg.get('frame_id', 'world')
         self._desc_pkg = desc_pkg
 
+        self.declare_parameter('publish_jaw_clearance', True)
+        self.declare_parameter('publish_constraints', True)
+        self.declare_parameter('max_grasps', 0)
+        self._publish_jaw_clearance = self.get_parameter(
+            'publish_jaw_clearance'
+        ).value
+        self._publish_constraints = self.get_parameter(
+            'publish_constraints'
+        ).value
+        self._max_grasps = self.get_parameter('max_grasps').value
+
         self.collision_pub = self.create_publisher(
             CollisionObject, '/collision_object', 10
         )
         self.marker_pub = self.create_publisher(
             MarkerArray, '/grasp_markers', 10
+        )
+        self.jaw_clearance_pub = self.create_publisher(
+            MarkerArray, '/jaw_clearance_markers', 10
+        )
+        self.constraint_pub = self.create_publisher(
+            MarkerArray, '/constraint_markers', 10
         )
         self.marker_server = InteractiveMarkerServer(self, 'grasp_poses')
 
@@ -132,8 +140,6 @@ class FingerVisualizer(Node):
             urdf_rel = cfg.get('urdf_path', '')
             obj_id = cfg.get('id', key)
 
-            # Start pose lives under cfg['pose'] (x/y/z flat dict) and
-            # cfg['orientation'] (x/y/z/w flat dict) — matching objects.yaml.
             pose_cfg = cfg.get('pose', {})
             orient_cfg = cfg.get('orientation', {})
 
@@ -163,7 +169,6 @@ class FingerVisualizer(Node):
         """Parse a xacro/URDF, extract collision geometry, publish to MoveIt."""
         full_urdf_path = os.path.join(self._desc_pkg, urdf_rel)
 
-        # xacro -> plain URDF string
         try:
             result = subprocess.run(
                 ['xacro', full_urdf_path],
@@ -176,7 +181,6 @@ class FingerVisualizer(Node):
             )
             return
 
-        # Parse XML
         try:
             root = ET.fromstring(urdf_content)
         except ET.ParseError as exc:
@@ -190,7 +194,6 @@ class FingerVisualizer(Node):
         collision_obj.header.frame_id = self.frame_id
         collision_obj.id = object_id
 
-        # Match the specific link by name; fall back to first link if not found
         link = root.find(f".//link[@name='{object_id}']")
         if link is None:
             link = root.find('.//link')
@@ -198,7 +201,6 @@ class FingerVisualizer(Node):
             self.get_logger().error(f"No <link> in URDF for '{object_id}'")
             return
 
-        # Iterate ALL <collision> tags so multi-primitive objects are fully represented
         collisions = link.findall('collision')
         if not collisions:
             self.get_logger().error(
@@ -215,7 +217,6 @@ class FingerVisualizer(Node):
             if primitive is None:
                 continue
 
-            # Local collision origin offset (translation only; rpy ignored for primitives)
             local_x, local_y, local_z = 0.0, 0.0, 0.0
             origin = col.find('origin')
             if origin is not None:
@@ -335,7 +336,6 @@ class FingerVisualizer(Node):
             f'(generated_at: {latest_time})'
         )
 
-        # Sanity-check: must have a 'grasps' key, not 'seams' (trajectory JSON).
         if 'grasps' not in latest_data:
             self.get_logger().error(
                 f'{os.path.basename(latest_path)} does not look like a grasp '
@@ -344,7 +344,21 @@ class FingerVisualizer(Node):
             )
             return
 
+        total_grasps = len(latest_data['grasps'])
+        if self._max_grasps > 0 and total_grasps > self._max_grasps:
+            latest_data['grasps'] = latest_data['grasps'][:self._max_grasps]
+            self.get_logger().info(
+                f'Visualizing {self._max_grasps} of {total_grasps} grasp(s) '
+                '(max_grasps parameter) — takes the first N as they appear '
+                'in the JSON, not sorted by quality.'
+            )
+
         self._publish_grasp_markers(latest_data)
+
+        if self._publish_jaw_clearance:
+            self._publish_jaw_clearance_markers(latest_data)
+        if self._publish_constraints:
+            self._publish_constraint_markers(latest_data)
 
     def _publish_grasp_markers(self, data: dict):
         """Build and publish MarkerArray + InteractiveMarkers for all grasps."""
@@ -376,6 +390,161 @@ class FingerVisualizer(Node):
             f'(2 fingers + 2 tip spheres each) for {len(grasps)} grasp(s)'
         )
 
+    def _publish_jaw_clearance_markers(self, data: dict):
+        """Publish one translucent CYLINDER per grasp's jaw-clearance volume."""
+        metadata = data.get('metadata', {})
+        grasps = data.get('grasps', [])
+        frame_id = metadata.get('coordinate_frame', self.frame_id)
+
+        marker_array = MarkerArray()
+        for i, grasp in enumerate(grasps):
+            cyl = grasp.get('jaw_clearance_cylinder')
+            if cyl is None:
+                continue
+
+            center = cyl.get('center', [0.0, 0.0, 0.0])
+            quat = cyl.get('quaternion', [0.0, 0.0, 0.0, 1.0])
+            radius = float(cyl.get('radius', 0.0))
+            length = float(cyl.get('length', 0.0))
+
+            m = Marker()
+            m.header = Header(frame_id=frame_id)
+            m.ns = 'jaw_clearance'
+            m.id = i
+            m.type = Marker.CYLINDER
+            m.action = Marker.ADD
+            m.pose.position.x = center[0]
+            m.pose.position.y = center[1]
+            m.pose.position.z = center[2]
+            m.pose.orientation.x = quat[0]
+            m.pose.orientation.y = quat[1]
+            m.pose.orientation.z = quat[2]
+            m.pose.orientation.w = quat[3]
+            m.scale.x = radius * 2.0
+            m.scale.y = radius * 2.0
+            m.scale.z = length
+            m.color = ColorRGBA(r=0.7, g=0.1, b=0.9, a=0.25)
+            m.lifetime.sec = 0
+            marker_array.markers.append(m)
+
+        self.jaw_clearance_pub.publish(marker_array)
+        self.get_logger().info(
+            f'Published {len(marker_array.markers)} jaw-clearance cylinder(s) '
+            'on /jaw_clearance_markers'
+        )
+
+    def _publish_constraint_markers(self, data: dict):
+        """
+        Publish the run's exclusion-zone geometry once, on /constraint_markers.
+
+        Secondary shapes are deliberately not drawn: step/urdf secondaries can
+        be arbitrary CAD geometry, and a box/bbox stand-in would misrepresent
+        what the sampler actually collided against.
+        """
+        geom = data.get('constraint_geometry')
+        if not geom:
+            self.get_logger().info(
+                'No "constraint_geometry" in grasp JSON — nothing to publish '
+                'on /constraint_markers.'
+            )
+            return
+
+        metadata = data.get('metadata', {})
+        frame_id = metadata.get('coordinate_frame', self.frame_id)
+
+        marker_array = MarkerArray()
+        marker_id = 0
+
+        circle_color = ColorRGBA(r=1.0, g=0.2, b=0.2, a=0.5)
+        for circle in geom.get('exclusion_circles', []):
+            center = circle.get('center', [0.0, 0.0, 0.0])
+            normal = circle.get('normal', [0.0, 0.0, 1.0])
+            radius = float(circle.get('radius', 0.0))
+
+            m = Marker()
+            m.header = Header(frame_id=frame_id)
+            m.ns = 'exclusion_circles'
+            m.id = marker_id
+            marker_id += 1
+            m.type = Marker.CYLINDER
+            m.action = Marker.ADD
+            m.pose.position.x = center[0]
+            m.pose.position.y = center[1]
+            m.pose.position.z = center[2]
+            qx, qy, qz, qw = self._quat_align_z(normal)
+            m.pose.orientation.x = qx
+            m.pose.orientation.y = qy
+            m.pose.orientation.z = qz
+            m.pose.orientation.w = qw
+            m.scale.x = radius * 2.0
+            m.scale.y = radius * 2.0
+            m.scale.z = 0.002
+            m.color = circle_color
+            m.lifetime.sec = 0
+            marker_array.markers.append(m)
+
+        line_color = ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.5)
+        for line in geom.get('exclusion_lines', []):
+            start = line.get('start', [0.0, 0.0, 0.0])
+            end = line.get('end', [0.0, 0.0, 0.0])
+            radius = float(line.get('exclusion_radius', 0.0))
+
+            direction = [end[i] - start[i] for i in range(3)]
+            length = math.sqrt(sum(d * d for d in direction))
+            midpoint = [(start[i] + end[i]) / 2.0 for i in range(3)]
+
+            m = Marker()
+            m.header = Header(frame_id=frame_id)
+            m.ns = 'exclusion_lines'
+            m.id = marker_id
+            marker_id += 1
+            m.type = Marker.CYLINDER
+            m.action = Marker.ADD
+            m.pose.position.x = midpoint[0]
+            m.pose.position.y = midpoint[1]
+            m.pose.position.z = midpoint[2]
+            if length > 1e-9:
+                qx, qy, qz, qw = self._quat_align_z(direction)
+            else:
+                qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
+            m.pose.orientation.x = qx
+            m.pose.orientation.y = qy
+            m.pose.orientation.z = qz
+            m.pose.orientation.w = qw
+            m.scale.x = radius * 2.0
+            m.scale.y = radius * 2.0
+            m.scale.z = length
+            m.color = line_color
+            m.lifetime.sec = 0
+            marker_array.markers.append(m)
+
+        polygon_color = ColorRGBA(r=1.0, g=1.0, b=0.0, a=0.8)
+        for polygon in geom.get('exclusion_polygons', []):
+            corners = polygon.get('corners', [])
+            if len(corners) < 2:
+                continue
+
+            m = Marker()
+            m.header = Header(frame_id=frame_id)
+            m.ns = 'exclusion_polygons'
+            m.id = marker_id
+            marker_id += 1
+            m.type = Marker.LINE_STRIP
+            m.action = Marker.ADD
+            m.pose.orientation.w = 1.0
+            m.scale.x = 0.003
+            m.color = polygon_color
+            m.lifetime.sec = 0
+            for corner in corners + [corners[0]]:
+                m.points.append(Point(x=corner[0], y=corner[1], z=corner[2]))
+            marker_array.markers.append(m)
+
+        self.constraint_pub.publish(marker_array)
+        self.get_logger().info(
+            f'Published {len(marker_array.markers)} constraint-geometry marker(s) '
+            'on /constraint_markers'
+        )
+
     @staticmethod
     def _quat_rotate(quat: list, v: list) -> list:
         """Rotate vector v by unit quaternion quat = [x, y, z, w]."""
@@ -391,39 +560,52 @@ class FingerVisualizer(Node):
             v[2] + qw * tz + qx * ty - qy * tx,
         ]
 
+    @staticmethod
+    def _quat_align_z(target: list) -> list:
+        """
+        Return the quaternion [x, y, z, w] that rotates +Z onto target.
+
+        Marker CYLINDERs are symmetric about local Z, so rotation about
+        target itself doesn't matter — this is enough to orient one.
+        """
+        tx, ty, tz = target
+        norm = math.sqrt(tx * tx + ty * ty + tz * tz)
+        if norm < 1e-9:
+            return [0.0, 0.0, 0.0, 1.0]
+        tx, ty, tz = tx / norm, ty / norm, tz / norm
+
+        dot = tz  # dot(z_axis, target)
+        if dot > 0.999999:
+            return [0.0, 0.0, 0.0, 1.0]
+        if dot < -0.999999:
+            # 180 deg flip — any axis perpendicular to Z works, use X.
+            return [1.0, 0.0, 0.0, 0.0]
+
+        ax, ay, az = -ty, tx, 0.0
+        axis_norm = math.sqrt(ax * ax + ay * ay + az * az)
+        ax, ay, az = ax / axis_norm, ay / axis_norm, az / axis_norm
+
+        angle = math.acos(max(-1.0, min(1.0, dot)))
+        s = math.sin(angle / 2.0)
+        return [ax * s, ay * s, az * s, math.cos(angle / 2.0)]
+
     def _make_grasp_markers(
         self, grasp: dict, index: int, frame_id: str, finger_length: float = 0.05
     ) -> list:
         """
-        Return a list of Marker messages for one grasp.
+        Return a list of Marker messages for one grasp: a CUBE + tip SPHERE per finger.
 
-        Finger geometry matches gripper_prefix.xacro exactly:
-          - Box cross-section : 30 mm (X) × 40 mm (Y)  [local gripper frame]
-          - Box length        : 200 mm (Z)  — finger_length from metadata
-          - Finger origin offset in URDF: xyz="0 0 -0.1" meaning the box centre
-            is 100 mm below the joint origin, so the tip is at z=-0.20 and the
-            root is at z=0.00 relative to the joint.
-
-        # In the gripper frame built by compute_gripper_transform:
-          Y = grip axis (contact_1 -> contact_2)
-          Z = approach direction (outward from workpiece face, away from palm)
-          X = Y × Z
-
-        So -Z in gripper frame points inward (toward palm), and the finger tip
-        sits at the contact point (z_local = 0), with the body extending
-        finger_length along -Z.  Centre of the box is at finger_length/2
-        along -Z from the contact point.
-
-        Each finger also gets a SPHERE marker at its tip (the contact face) so
-        the exact contact location is clearly visible.  Sphere radius equals
-        half the smaller cross-section dimension (15 mm).
+        Gripper frame (from compute_gripper_transform): Y = grip axis, Z =
+        approach (outward from the face). So -Z points inward toward the
+        palm; the finger tip sits at the contact point and the box body
+        extends finger_length along -Z, centered at finger_length/2 in.
+        Cross-section (30x40 mm) matches gripper_prefix.xacro.
         """
         markers = []
 
         tcp = grasp.get('tcp_pose', {})
         quat = tcp.get('quaternion', [0.0, 0.0, 0.0, 1.0])
 
-        # contact position arrays: [x, y, z]
         c1 = grasp.get('contact_1', {}).get('position', [0.0, 0.0, 0.0])
         c2 = grasp.get('contact_2', {}).get('position', [0.0, 0.0, 0.0])
 
@@ -461,7 +643,6 @@ class FingerVisualizer(Node):
         f1.lifetime.sec = 0
         markers.append(f1)
 
-        # Tip sphere: sits exactly at the contact point (no inward offset)
         s1 = Marker()
         s1.header = Header(frame_id=frame_id)
         s1.ns = 'grasp_tip_1'
@@ -482,7 +663,6 @@ class FingerVisualizer(Node):
         s1.lifetime.sec = 0
         markers.append(s1)
 
-        # Box
         f2 = Marker()
         f2.header = Header(frame_id=frame_id)
         f2.ns = 'grasp_finger_2'
@@ -503,7 +683,6 @@ class FingerVisualizer(Node):
         f2.lifetime.sec = 0
         markers.append(f2)
 
-        # Tip sphere
         s2 = Marker()
         s2.header = Header(frame_id=frame_id)
         s2.ns = 'grasp_tip_2'

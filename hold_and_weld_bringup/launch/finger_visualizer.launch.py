@@ -55,12 +55,28 @@ def generate_launch_description():
             default_value='true',
             description='Launch RViz2 for visualization',
         ),
+        DeclareLaunchArgument(
+            'publish_jaw_clearance',
+            default_value='true',
+            description='Publish jaw-clearance cylinders on /jaw_clearance_markers',
+        ),
+        DeclareLaunchArgument(
+            'publish_constraints',
+            default_value='true',
+            description='Publish exclusion-zone/secondary geometry on /constraint_markers',
+        ),
+        DeclareLaunchArgument(
+            'max_grasps',
+            default_value='0',
+            description='Visualize only the first N grasps from the JSON (0 = all)',
+        ),
     ]
 
     use_rviz = LaunchConfiguration('use_rviz')
+    publish_jaw_clearance = LaunchConfiguration('publish_jaw_clearance')
+    publish_constraints = LaunchConfiguration('publish_constraints')
+    max_grasps = LaunchConfiguration('max_grasps')
 
-    # Reuse the magic_wand RViz config — same robot, same frame, same
-    # display types (MarkerArray + InteractiveMarkers).
     rviz_config = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_description'), 'rviz', 'finger_vis.rviz']
     )
@@ -175,24 +191,19 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # Finger visualizer — spawns objects at START pose and publishes finger markers.
-    # No add_collision_objects.py here: finger_visualizer.py owns the scene setup
-    # so objects are guaranteed to be at the position the sampler used.
     finger_visualizer = Node(
         package='hold_and_weld_application',
         executable='finger_visualizer.py',
         name='finger_visualizer',
         output='screen',
-        parameters=[{'use_sim_time': False}],
+        parameters=[{
+            'use_sim_time': False,
+            'publish_jaw_clearance': publish_jaw_clearance,
+            'publish_constraints': publish_constraints,
+            'max_grasps': max_grasps,
+        }],
     )
 
-    # Same timing as magic_wand.launch.py:
-    #   t=0 s  robot_state_publisher + static_tf (immediate)
-    #   t=2 s  move_group
-    #   t=5 s  rviz2
-    #   t=9 s  finger_visualizer  (move_group must be ready before collision objects
-    #                        are published — 7 s is enough, but 9 s gives
-    #                        RViz time to connect its planning scene monitor)
     delay_move_group = TimerAction(period=2.0, actions=[move_group])
     delay_rviz = TimerAction(period=5.0, actions=[rviz])
     delay_finger_visualizer = TimerAction(period=9.0, actions=[finger_visualizer])

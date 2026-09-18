@@ -27,6 +27,21 @@
         size_y: 4.0
         z_position: 0.0
 
+    exclusion_zones:
+      circles:
+        - id: 'screw_hole_1'
+          center:
+            x: 1.28
+            y: 0.0
+            z: 0.25
+          normal:
+            x: 0.0
+            y: 0.0
+            z: 1.0
+          radius: 0.02
+          projection_depth: 0.03
+          clearance: 0.005
+
     sampling:
       min_angle_deg: 173.0
       max_angle_deg: 180.0
@@ -64,6 +79,14 @@
       debug_sweep_step_deg: 5.0
 
       randomize_seeds: true
+
+    jaw_clearance:
+      # Cylinder on the jaw axis ending at the TCP, covering the open mouth:
+      # radius = grip_distance / 2 + clearance_margin, length = orientation.finger_length.
+      # Rejects candidates with a secondary or an exclusion volume in or beside the
+      # mouth. The gripped part and the ground are not tested.
+      enabled: true
+      clearance_margin: 0.005
 
     kissing:
       contact_threshold: 0.8

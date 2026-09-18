@@ -158,6 +158,21 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       }
     }
 
+    if (params["jaw_clearance"]) {
+      auto & ac = config.finder_config.jaw_clearance;
+      const auto & ac_node = params["jaw_clearance"];
+      if (ac_node["enabled"]) {
+        ac.enabled = ac_node["enabled"].as<bool>();
+      }
+      if (ac_node["clearance_margin"]) {
+        ac.clearance_margin = ac_node["clearance_margin"].as<double>();
+        if (ac.clearance_margin < 0.0) {
+          set_error("jaw_clearance.clearance_margin must be >= 0");
+          return std::nullopt;
+        }
+      }
+    }
+
     if (params["shape_refiner"]) {
       auto & sr = config.finder_config.shape_refiner;
       const auto & sr_node = params["shape_refiner"];
