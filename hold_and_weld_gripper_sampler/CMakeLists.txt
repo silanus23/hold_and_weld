@@ -184,6 +184,7 @@ if(BUILD_TESTING)
   add_sampler_test(collision_checker_test test/collision_checker_test.cpp)
   add_sampler_test(math_unit_test test/math_unit_test.cpp)
   add_sampler_test(config_parser_test test/config_parser_test.cpp)
+  add_sampler_test(occt_utils_test test/occt_utils_test.cpp)
 
 endif()
 
