@@ -51,6 +51,47 @@ namespace geometry
 
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
+namespace
+{
+
+// Adds one iso-parameter split edge, or logs and skips it (UIso/VIso/MakeEdge
+// can fail without throwing, e.g. at a pole) so one bad candidate doesn't abort
+// the whole face's split pass.
+bool add_iso_split_edge(
+  BRepFeat_SplitShape & splitter,
+  const Handle(Geom_Surface) & surf,
+  bool along_u,
+  double param,
+  double other_min,
+  double other_max,
+  const TopoDS_Face & face)
+{
+  try {
+    Handle(Geom_Curve) iso = along_u ? surf->UIso(param) : surf->VIso(param);
+    if (iso.IsNull()) {
+      RCLCPP_WARN(logger_, "%sIso(%.6f) returned a null curve - skipping this split",
+        along_u ? "U" : "V", param);
+      return false;
+    }
+
+    BRepBuilderAPI_MakeEdge edge_maker(iso, other_min, other_max);
+    if (!edge_maker.IsDone()) {
+      RCLCPP_WARN(logger_, "MakeEdge failed for %sIso(%.6f) - skipping this split",
+        along_u ? "U" : "V", param);
+      return false;
+    }
+
+    splitter.Add(edge_maker.Edge(), face);
+    return true;
+  } catch (const Standard_Failure & e) {
+    RCLCPP_WARN(logger_, "%sIso(%.6f) split failed: %s - skipping this split",
+      along_u ? "U" : "V", param, e.GetMessageString());
+    return false;
+  }
+}
+
+}  // namespace
+
 ShapeRefiner::ShapeRefiner(
   double max_cylinder_radius,
   double max_arc_length,
@@ -239,17 +280,11 @@ TopoDS_Shape ShapeRefiner::refine_phase2_arc_length_split(
     double v_max = adaptor.LastVParameter();
 
     for (double u : u_splits) {
-      Handle(Geom_Curve) u_iso = surf->UIso(u);
-      BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
-      splitter.Add(edge_maker.Edge(), face);
-      needs_split = true;
+      needs_split |= add_iso_split_edge(splitter, surf, true, u, v_min, v_max, face);
     }
 
     for (double v : v_splits) {
-      Handle(Geom_Curve) v_iso = surf->VIso(v);
-      BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
-      splitter.Add(edge_maker.Edge(), face);
-      needs_split = true;
+      needs_split |= add_iso_split_edge(splitter, surf, false, v, u_min, u_max, face);
     }
   }
 
@@ -314,17 +349,11 @@ TopoDS_Shape ShapeRefiner::refine_phase3_area_ratio_split(
     double v_max = adaptor.LastVParameter();
 
     for (double u : u_splits) {
-      Handle(Geom_Curve) u_iso = surf->UIso(u);
-      BRepBuilderAPI_MakeEdge edge_maker(u_iso, v_min, v_max);
-      final_splitter.Add(edge_maker.Edge(), face);
-      needs_final_split = true;
+      needs_final_split |= add_iso_split_edge(final_splitter, surf, true, u, v_min, v_max, face);
     }
 
     for (double v : v_splits) {
-      Handle(Geom_Curve) v_iso = surf->VIso(v);
-      BRepBuilderAPI_MakeEdge edge_maker(v_iso, u_min, u_max);
-      final_splitter.Add(edge_maker.Edge(), face);
-      needs_final_split = true;
+      needs_final_split |= add_iso_split_edge(final_splitter, surf, false, v, u_min, u_max, face);
     }
   }
 
@@ -495,7 +524,7 @@ void ShapeRefiner::find_inflections(
     if (props.IsCurvatureDefined()) {
       double current_k = props.GaussianCurvature();
       if (i > 0 && (prev_k * current_k) < 0.0) {
-        // Curvature sign change — interpolate split position
+        // Curvature sign change, interpolate split position
         double denom = std::abs(prev_k) + std::abs(current_k);
         if (denom > 1e-6) {
           splits.push_back((start + (i - 1) * step) + (step * std::abs(prev_k) / denom));
@@ -542,7 +571,7 @@ void ShapeRefiner::check_edge_arc_lengths(
           max_v_edge_length = std::max(max_v_edge_length, length);
         }
       } else {
-        // No pcurve available — conservatively assign to U only.
+        // No pcurve available, conservatively assign to U only.
         // Assigning to both would trigger unnecessary splits in both directions.
         max_u_edge_length = std::max(max_u_edge_length, length);
       }
