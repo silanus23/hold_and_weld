@@ -72,7 +72,6 @@ public:
    *
    * @param urdf_string Complete URDF XML content as string
    * @return ParsedGripper with all extracted information
-   * @throw std::runtime_error if parsing fails or required elements are missing
    */
   ParsedGripper parse_from_urdf_string(const std::string & urdf_string);
 
@@ -81,7 +80,6 @@ public:
    *
    * @param urdf_path Path to URDF file
    * @return ParsedGripper with all extracted information
-   * @throw std::runtime_error if file cannot be read or parsing fails
    */
   ParsedGripper parse_from_urdf_file(const std::string & urdf_path);
 
@@ -94,7 +92,6 @@ public:
    * @param xacro_path Path to xacro file
    * @param xacro_args Optional xacro arguments (e.g., "prefix:=left_")
    * @return ParsedGripper with all extracted information
-   * @throw std::runtime_error if xacro processing or parsing fails
    */
   ParsedGripper parse_from_xacro_file(
     const std::string & xacro_path,
@@ -107,7 +104,6 @@ private:
    * @param urdf_string Complete URDF string
    * @param link_name Name of the link to extract
    * @return TopoDS_Shape (compound if multiple collision elements) representing the collision geometry
-   * @throw std::runtime_error if link not found or geometry unsupported
    */
   TopoDS_Shape extract_link_shape(
     const std::string & urdf_string,
@@ -123,7 +119,6 @@ private:
    * @param urdf_string Complete URDF string
    * @param joint_name Name of the joint
    * @return Unit vector representing joint axis
-   * @throw std::runtime_error if joint not found
    */
   Eigen::Vector3d extract_joint_axis(
     const std::string & urdf_string,
@@ -139,7 +134,6 @@ private:
    * @param urdf_string Complete URDF string
    * @param joint_name Name of the joint
    * @return Pair of (lower_limit, upper_limit) in meters
-   * @throw std::runtime_error if joint not found or limits not defined
    */
   std::pair<double, double> extract_joint_limits(
     const std::string & urdf_string,
@@ -155,7 +149,6 @@ private:
    * @param urdf_string Complete URDF string
    * @param joint_name Name of the joint
    * @return Transform from parent link to child link origin
-   * @throw std::runtime_error if joint not found
    */
   gp_Trsf extract_joint_origin(
     const std::string & urdf_string,

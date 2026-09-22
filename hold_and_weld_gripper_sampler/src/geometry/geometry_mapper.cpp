@@ -232,6 +232,8 @@ TopoDS_Shape GeometryMapper::create_shape_from_step(
       throw std::runtime_error("STEP file contains no valid shapes: " + step_path);
     }
 
+    validate_shape_or_throw(shape, "STEP file: " + step_path);
+
     gp_Trsf rot_trsf;
     rot_trsf.SetRotation(gp_Quaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w()));
 

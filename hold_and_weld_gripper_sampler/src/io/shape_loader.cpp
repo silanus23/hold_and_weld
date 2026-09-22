@@ -169,6 +169,8 @@ TopoDS_Shape ShapeLoader::load_from_step(
     throw std::runtime_error("Null shape loaded from STEP file: " + step_path);
   }
 
+  geometry::validate_shape_or_throw(shape, "STEP file: " + step_path);
+
   if (!translation.isZero() || !normalized_rotation.isApprox(Eigen::Quaterniond::Identity())) {
     shape = apply_transform(shape, translation, normalized_rotation);
   }

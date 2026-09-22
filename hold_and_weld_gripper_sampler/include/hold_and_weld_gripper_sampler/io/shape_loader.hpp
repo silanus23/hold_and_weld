@@ -66,7 +66,6 @@ public:
    * @param translation Translation to apply [m]
    * @param rotation Rotation to apply
    * @return Loaded and transformed shape
-   * @throw std::runtime_error if file cannot be read or is invalid
    */
   TopoDS_Shape load_from_step(
     const std::string & step_path,
@@ -80,7 +79,6 @@ public:
    * @param translation Translation to apply [m]
    * @param rotation Rotation to apply
    * @return Loaded and transformed shape
-   * @throw std::runtime_error if file cannot be read or is invalid
    */
   TopoDS_Shape load_from_stl(
     const std::string & stl_path,
@@ -95,7 +93,6 @@ public:
    *
    * @param urdf_path Path to URDF file
    * @return Combined collision geometry shape
-   * @throw std::runtime_error if file cannot be read or parsed
    */
   TopoDS_Shape load_from_urdf(const std::string & urdf_path);
 
@@ -104,7 +101,6 @@ public:
    *
    * @param urdf_string URDF XML content as string
    * @return Combined collision geometry shape
-   * @throw std::runtime_error if parsing fails
    */
   TopoDS_Shape load_from_urdf_string(const std::string & urdf_string);
 
@@ -214,7 +210,6 @@ private:
    *
    * @param url URL to resolve (package:// or absolute path)
    * @return Resolved absolute path
-   * @throw std::runtime_error if package cannot be found
    */
   std::string resolve_package_url(const std::string & url) const;
 };

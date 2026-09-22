@@ -171,7 +171,6 @@ public:
    *
    * @param id Corner ID (0-indexed)
    * @return Reference to Corner struct
-   * @throws std::out_of_range if ID is invalid
    */
   const Corner & get_corner(int id) const;
 
@@ -180,7 +179,6 @@ public:
    *
    * @param id Edge ID (0-indexed)
    * @return Reference to Edge struct
-   * @throws std::out_of_range if ID is invalid
    */
   const Edge & get_edge(int id) const;
 
@@ -189,7 +187,6 @@ public:
    *
    * @param id Surface ID (0-indexed)
    * @return Reference to Surface struct
-   * @throws std::out_of_range if ID is invalid
    */
   const Surface & get_surface(int id) const;
 

@@ -90,7 +90,6 @@ public:
    *
    * @param occt_face Face to look up
    * @return 0-indexed surface ID
-   * @throws std::runtime_error if face not found in topology
    */
   int find_topology_surface_id(const TopoDS_Face & occt_face) const;
 
@@ -99,7 +98,6 @@ public:
    *
    * @param surface_id 0-indexed surface ID
    * @return Corresponding OCCT face
-   * @throws std::out_of_range if surface_id is invalid
    */
   TopoDS_Face get_occt_face(int surface_id) const;
 

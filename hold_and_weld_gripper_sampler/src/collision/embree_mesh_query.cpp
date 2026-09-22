@@ -144,7 +144,6 @@ EmbreeMeshQuery::EmbreeMeshQuery(EmbreeMeshQuery && other) noexcept
 EmbreeMeshQuery & EmbreeMeshQuery::operator=(EmbreeMeshQuery && other) noexcept
 {
   if (this != &other) {
-    // Release owned handles
     if (scene_) {rtcReleaseScene(scene_);   scene_ = nullptr;}
     if (device_) {rtcReleaseDevice(device_); device_ = nullptr;}
 

@@ -68,9 +68,6 @@ public:
    * @param linear_deflection Triangulation chord-height tolerance in metres.
    *                          Smaller values produce denser meshes.
    *                          Typical value: 0.0001 (0.1 mm).
-   *
-   * @throws std::runtime_error if the shape is null, produces no triangles,
-   *         or if Embree device/scene creation fails.
    */
   explicit EmbreeMeshQuery(
     const TopoDS_Shape & shape,
@@ -85,8 +82,6 @@ public:
    * @param vertices  Flat vertex array — each element is {x, y, z} in metres.
    * @param triangles Flat triangle index array — each element holds three
    *                  zero-based indices into @p vertices.
-   *
-   * @throws std::runtime_error if either array is empty or Embree fails.
    */
   EmbreeMeshQuery(
     const std::vector<std::array<float, 3>> & vertices,
