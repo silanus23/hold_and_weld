@@ -18,6 +18,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -26,9 +27,9 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
-#include <BRepClass_FaceClassifier.hxx>
 #include <BRepLib.hxx>
 #include <BRepTools.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Tool.hxx>
 
 #include <GCE2d_MakeSegment.hxx>
@@ -195,15 +196,13 @@ SampleAxis uniform_axis(double lo, double hi, int steps, bool cell_centres)
 
 bool passes_wire_restrictions(
   const gp_Pnt2d & point_2d,
-  const std::vector<std::pair<TopoDS_Face, bool>> & wire_faces,
-  double tolerance)
+  const std::vector<RegionClassifier> & wire_classifiers)
 {
-  for (const auto & [wire_face, is_exclusion_zone] : wire_faces) {
-    BRepClass_FaceClassifier classifier(wire_face, point_2d, tolerance);
-    const TopAbs_State state = classifier.State();
+  for (const auto & entry : wire_classifiers) {
+    const TopAbs_State state = entry.classifier->Perform(point_2d);
     const bool inside_wire = (state == TopAbs_IN || state == TopAbs_ON);
 
-    if (is_exclusion_zone == inside_wire) {
+    if (entry.is_exclusion_zone == inside_wire) {
       // Inside a banned region, or outside a required one.
       return false;
     }
@@ -269,15 +268,45 @@ std::vector<FaceSample> sample_face_region(
   const int u_count = static_cast<int>(u_axis.coords.size());
   const int v_count = static_cast<int>(v_axis.coords.size());
 
-  std::vector<std::pair<TopoDS_Face, bool>> wire_faces;
-  wire_faces.reserve(wires_with_flags.size());
+  std::vector<RegionClassifier> wire_classifiers;
+  wire_classifiers.reserve(wires_with_flags.size());
   for (const auto & [wire, is_excl] : wires_with_flags) {
     const TopoDS_Face wire_face = face_bounded_by_wire(face, wire);
-    if (!wire_face.IsNull()) {
-      wire_faces.emplace_back(wire_face, is_excl);
-    } else {
+    if (wire_face.IsNull()) {
       RCLCPP_WARN(logger_, "sample_face_region: failed to build face for wire, skipping");
+      continue;
     }
+
+    try {
+      RegionClassifier entry;
+      entry.classifier =
+        std::make_unique<BRepTopAdaptor_FClass2d>(wire_face, config.classifier_tolerance);
+      entry.is_exclusion_zone = is_excl;
+      wire_classifiers.push_back(std::move(entry));
+    } catch (const Standard_Failure & e) {
+      // A region wire whose in/out state cannot be determined must not be
+      // silently treated as "no restriction" — that would let samples through
+      // an exclusion zone or contact area a bad wire happens to shadow. Reject
+      // the whole face's samples instead, matching the other structural
+      // early-outs above (no surface, degenerate UV bounds).
+      RCLCPP_WARN(
+        logger_,
+        "sample_face_region: region classifier failed to build (%s), "
+        "rejecting this face's samples conservatively",
+        e.GetMessageString());
+      return samples;
+    }
+  }
+
+  std::unique_ptr<BRepTopAdaptor_FClass2d> face_classifier;
+  try {
+    face_classifier =
+      std::make_unique<BRepTopAdaptor_FClass2d>(face, config.classifier_tolerance);
+  } catch (const Standard_Failure & e) {
+    RCLCPP_WARN(
+      logger_, "sample_face_region: face classifier failed to build (%s), skipping",
+      e.GetMessageString());
+    return samples;
   }
 
   const bool reversed = (face.Orientation() == TopAbs_REVERSED);
@@ -290,14 +319,13 @@ std::vector<FaceSample> sample_face_region(
 
       const gp_Pnt2d point_2d(u, v);
 
-      BRepClass_FaceClassifier face_classifier(face, point_2d, config.classifier_tolerance);
-      const TopAbs_State face_state = face_classifier.State();
+      const TopAbs_State face_state = face_classifier->Perform(point_2d);
       if (face_state != TopAbs_IN && face_state != TopAbs_ON) {
         continue;
       }
 
-      if (!wire_faces.empty() &&
-        !passes_wire_restrictions(point_2d, wire_faces, config.classifier_tolerance))
+      if (!wire_classifiers.empty() &&
+        !passes_wire_restrictions(point_2d, wire_classifiers))
       {
         continue;
       }

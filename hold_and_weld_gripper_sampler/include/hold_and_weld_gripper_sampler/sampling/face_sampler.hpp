@@ -16,9 +16,11 @@
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__SAMPLING__FACE_SAMPLER_HPP_
 
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
@@ -92,6 +94,17 @@ struct SampleAxis
   std::vector<double> widths;
   int cells{0};
   double max_width{0.0};
+};
+
+/**
+ * @brief One region wire's classifier, built once per face and reused across
+ * samples so its pcurve cache pays off. Held by pointer since
+ * BRepTopAdaptor_FClass2d isn't vector-reallocation-safe.
+ */
+struct RegionClassifier
+{
+  std::unique_ptr<BRepTopAdaptor_FClass2d> classifier;
+  bool is_exclusion_zone{false};
 };
 
 /**
