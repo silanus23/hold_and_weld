@@ -92,6 +92,8 @@ public:
    * @param lines Optional exclusion lines (e.g. weld seams)
    * @param mesh_linear_deflection Max distance between mesh edge and actual curve (meters)
    * @param mesh_angular_deflection Max angular deviation between adjacent mesh triangles (radians)
+   * @param sample_density Spacing of the face samples used to find each zone's
+   *   footprint on the part (meters). Zones narrower than this can fall between samples.
    */
   ExclusionZoneConstraint(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
@@ -100,7 +102,8 @@ public:
     const std::optional<std::vector<exclusion_polygon>> & polygons = std::nullopt,
     const std::optional<std::vector<exclusion_line>> & lines = std::nullopt,
     double mesh_linear_deflection = 0.001,
-    double mesh_angular_deflection = 0.1
+    double mesh_angular_deflection = 0.1,
+    double sample_density = 0.005
   );
 
   /**
@@ -113,10 +116,11 @@ public:
   /**
    * @brief Analyze exclusion constraints against primary shape
    *
-   * Creates constraint volumes and projects them onto the primary shape to
-   * extract exclusion wires. Must be called before get_sample_areas().
+   * Creates constraint volumes and finds each one's footprint on every face of
+   * the primary shape, as a closed exclusion wire per touched face. Must be
+   * called before get_sample_areas().
    *
-   * @param shape Primary shape to project constraints onto
+   * @param shape Primary shape (unused; faces come from topology)
    * @param topology Topology of the primary shape
    */
   void analyze_constraints(
@@ -177,6 +181,7 @@ private:
   // Angular deflection: max angular deviation between adjacent triangles (radians)
   double mesh_linear_deflection_;
   double mesh_angular_deflection_;
+  double sample_density_;
 
   rclcpp::Logger logger_;
 
@@ -217,15 +222,16 @@ private:
   ) const;
 
   /**
-   * @brief Section constraint volume with shape to extract exclusion wires
+   * @brief Find a constraint volume's footprint on each face as exclusion wires
+   * using face_sampler
    *
-   * @param constraint_volume Constraint geometry to section
-   * @param shape Primary shape to section against
+   * @param constraint_volume Projection volume of one exclusion zone
+   * @param topology Primary shape topology
    * @return Vector of SampleArea objects with exclusion wires per surface
    */
   std::vector<core::SampleArea> process_constraint_volume(
     const TopoDS_Shape & constraint_volume,
-    const TopoDS_Shape & shape
+    const geometry::Topology & topology
   ) const;
 };
 

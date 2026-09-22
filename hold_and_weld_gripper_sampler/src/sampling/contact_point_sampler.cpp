@@ -22,15 +22,12 @@
 #include <vector>
 
 #include <BRep_Tool.hxx>
-#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
-#include <BRepTools.hxx>
 #include <Geom_Surface.hxx>
 #include <Geom2d_Curve.hxx>
-#include <GeomLProp_SLProps.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
@@ -42,6 +39,7 @@
 #include <TopoDS.hxx>
 #include <rclcpp/rclcpp.hpp>
 
+#include "hold_and_weld_gripper_sampler/sampling/face_sampler.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
 // TODO(@silanus23): Surface pairing uses face_min_distance as a pre-filter which false-rejects
@@ -320,67 +318,9 @@ std::vector<gp_Pnt> ContactPointSampler::sample_surface(
     }
   }
 
-  if (wires_with_flags.empty()) {
-    auto points = sample_full_face(face);
-    RCLCPP_DEBUG(logger_, "Surface %d: %zu points sampled", surface_id, points.size());
-    return points;
-  } else {
-    auto points = sample_with_exclusions(face, wires_with_flags);
-    RCLCPP_DEBUG(logger_, "Surface %d: %zu points sampled (with exclusions)", surface_id,
-          points.size());
-    return points;
-  }
-}
-
-std::vector<gp_Pnt> ContactPointSampler::sample_full_face(const TopoDS_Face & face) const
-{
-  std::vector<gp_Pnt> points;
-
-  Standard_Real u_min, u_max, v_min, v_max;
-  BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-
-  double u_range = u_max - u_min;
-  double v_range = v_max - v_min;
-
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-
-  // Estimate physical arc length per UV unit at the face midpoint so that
-  // sample_density is respected in metres regardless of surface parameterisation
-  double u_mid = u_min + u_range * 0.5;
-  double v_mid = v_min + v_range * 0.5;
-  constexpr double kProbeEps = 1e-4;
-  gp_Pnt p0 = surf->Value(u_mid, v_mid);
-  gp_Pnt pu = surf->Value(std::min(u_mid + kProbeEps, u_max), v_mid);
-  gp_Pnt pv = surf->Value(u_mid, std::min(v_mid + kProbeEps, v_max));
-  double du_scale = p0.Distance(pu) / kProbeEps;   // metres per U-unit
-  double dv_scale = p0.Distance(pv) / kProbeEps;   // metres per V-unit
-  if (du_scale < 1e-9) {du_scale = 1.0;}
-  if (dv_scale < 1e-9) {dv_scale = 1.0;}
-
-  int u_steps = static_cast<int>(std::ceil(u_range * du_scale / config_.sample_density));
-  int v_steps = static_cast<int>(std::ceil(v_range * dv_scale / config_.sample_density));
-
-  if (u_steps < 1) {u_steps = 1;}
-  if (v_steps < 1) {v_steps = 1;}
-
-  for (int i = 0; i <= u_steps; i++) {
-    for (int j = 0; j <= v_steps; j++) {
-      double u = u_min + i * u_range / u_steps;
-      double v = v_min + j * v_range / v_steps;
-
-      gp_Pnt2d uv_point(u, v);
-      BRepClass_FaceClassifier classifier(face, uv_point, 1e-6);
-      TopAbs_State state = classifier.State();
-
-      if (state != TopAbs_IN && state != TopAbs_ON) {
-        continue;
-      }
-
-      gp_Pnt point = surf->Value(u, v);
-      points.push_back(point);
-    }
-  }
-
+  auto points = sample_with_exclusions(face, wires_with_flags);
+  RCLCPP_DEBUG(logger_, "Surface %d: %zu points sampled (%zu region wire(s))",
+    surface_id, points.size(), wires_with_flags.size());
   return points;
 }
 
@@ -388,82 +328,19 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
   const TopoDS_Face & face,
   const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags) const
 {
+  sampling::FaceSamplingConfig sampling_config;
+  sampling_config.sample_density = config_.sample_density;
+  // Grid nodes, endpoints included: contact points should reach the face
+  // boundary, unlike area measurement which wants one sample per cell.
+  sampling_config.layout = sampling::GridLayout::kNodes;
+
+  const auto samples = sampling::sample_face_region(face, sampling_config, wires_with_flags);
+
   std::vector<gp_Pnt> points;
-
-  Standard_Real u_min, u_max, v_min, v_max;
-  BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-
-  double u_range = u_max - u_min;
-  double v_range = v_max - v_min;
-
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-
-  // Estimate physical arc length per UV unit at the face midpoint — same fix
-  // as sample_full_face so exclusion-zone sampling also honours sample_density in metres.
-  double u_mid = u_min + u_range * 0.5;
-  double v_mid = v_min + v_range * 0.5;
-  constexpr double kProbeEps = 1e-4;
-  gp_Pnt p0 = surf->Value(u_mid, v_mid);
-  gp_Pnt pu = surf->Value(std::min(u_mid + kProbeEps, u_max), v_mid);
-  gp_Pnt pv = surf->Value(u_mid, std::min(v_mid + kProbeEps, v_max));
-  double du_scale = p0.Distance(pu) / kProbeEps;   // metres per U-unit
-  double dv_scale = p0.Distance(pv) / kProbeEps;   // metres per V-unit
-  if (du_scale < 1e-9) {du_scale = 1.0;}
-  if (dv_scale < 1e-9) {dv_scale = 1.0;}
-
-  int u_steps = static_cast<int>(std::ceil(u_range * du_scale / config_.sample_density));
-  int v_steps = static_cast<int>(std::ceil(v_range * dv_scale / config_.sample_density));
-
-  if (u_steps < 1) {u_steps = 1;}
-  if (v_steps < 1) {v_steps = 1;}
-
-  std::vector<std::pair<TopoDS_Face, bool>> wire_faces;
-  wire_faces.reserve(wires_with_flags.size());
-  for (const auto & [wire, is_excl] : wires_with_flags) {
-    BRepBuilderAPI_MakeFace maker(surf, wire, Standard_True);
-    if (maker.IsDone()) {
-      wire_faces.emplace_back(maker.Face(), is_excl);
-    } else {
-      RCLCPP_WARN(logger_, "sample_with_exclusions: failed to build face for wire, skipping");
-    }
+  points.reserve(samples.size());
+  for (const auto & sample : samples) {
+    points.push_back(sample.point);
   }
-
-  for (int i = 0; i <= u_steps; i++) {
-    for (int j = 0; j <= v_steps; j++) {
-      double u = u_min + i * u_range / u_steps;
-      double v = v_min + j * v_range / v_steps;
-
-      gp_Pnt2d point_2d(u, v);
-
-      BRepClass_FaceClassifier face_classifier(face, point_2d, 1e-6);
-      TopAbs_State face_state = face_classifier.State();
-
-      if (face_state != TopAbs_IN && face_state != TopAbs_ON) {
-        continue;
-      }
-
-      bool is_excluded = false;
-      for (const auto & [wire_face, is_exclusion_zone] : wire_faces) {
-        bool inside_wire = is_point_inside_wire(point_2d, wire_face);
-
-        if (is_exclusion_zone && inside_wire) {
-          is_excluded = true;
-          break;
-        } else if (!is_exclusion_zone && !inside_wire) {
-          is_excluded = true;
-          break;
-        }
-      }
-
-      if (is_excluded) {
-        continue;
-      }
-
-      gp_Pnt point = surf->Value(u, v);
-      points.push_back(point);
-    }
-  }
-
   return points;
 }
 
@@ -472,21 +349,9 @@ bool ContactPointSampler::is_point_inside_wire(
   const TopoDS_Wire & wire,
   const TopoDS_Face & face) const
 {
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-  if (surf.IsNull()) {return false;}
+  const TopoDS_Face wire_face = sampling::face_bounded_by_wire(face, wire);
+  if (wire_face.IsNull()) {return false;}
 
-  BRepBuilderAPI_MakeFace maker(surf, wire, Standard_True);
-  if (!maker.IsDone()) {return false;}
-
-  BRepClass_FaceClassifier classifier(maker.Face(), point_2d, 1e-6);
-  const TopAbs_State state = classifier.State();
-  return state == TopAbs_IN || state == TopAbs_ON;
-}
-
-bool ContactPointSampler::is_point_inside_wire(
-  const gp_Pnt2d & point_2d,
-  const TopoDS_Face & wire_face) const
-{
   BRepClass_FaceClassifier classifier(wire_face, point_2d, 1e-6);
   const TopAbs_State state = classifier.State();
   return state == TopAbs_IN || state == TopAbs_ON;
@@ -725,9 +590,6 @@ bool ContactPointSampler::has_antiparallel_local_normals(
     return false;
   }
 
-  Handle(Geom_Surface) surf_1 = BRep_Tool::Surface(face_1);
-  Handle(Geom_Surface) surf_2 = BRep_Tool::Surface(face_2);
-
   std::vector<std::pair<TopoDS_Wire, bool>> wires_1, wires_2;
   for (const auto & area : exclusion_areas) {
     if (area.surface_id == surface_id_1) {
@@ -746,8 +608,8 @@ bool ContactPointSampler::has_antiparallel_local_normals(
   int target_samples = std::max(10, std::min(100,
     static_cast<int>(max_area_cm2 * config_.normal_sample_density)));
 
-  auto normals_1 = sample_normals_from_allowed_region(face_1, surf_1, wires_1, target_samples);
-  auto normals_2 = sample_normals_from_allowed_region(face_2, surf_2, wires_2, target_samples);
+  auto normals_1 = sample_normals_from_allowed_region(face_1, wires_1, target_samples);
+  auto normals_2 = sample_normals_from_allowed_region(face_2, wires_2, target_samples);
 
   if (normals_1.empty() || normals_2.empty()) {
     RCLCPP_DEBUG(logger_,
@@ -773,73 +635,25 @@ bool ContactPointSampler::has_antiparallel_local_normals(
 
 std::vector<gp_Vec> ContactPointSampler::sample_normals_from_allowed_region(
   const TopoDS_Face & face,
-  const Handle(Geom_Surface) & surf,
   const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags,
   int target_samples) const
 {
-  std::vector<gp_Vec> normals;
-
-  Standard_Real u_min, u_max, v_min, v_max;
-  BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-
+  sampling::FaceSamplingConfig sampling_config;
   // Oversample by 2x so the actual count exceeds target after exclusion filtering.
-  int samples_per_dim = std::max(1, static_cast<int>(std::sqrt(target_samples * 2.0)));
+  sampling_config.grid_steps = std::max(1, static_cast<int>(std::sqrt(target_samples * 2.0)));
+  sampling_config.layout = sampling::GridLayout::kCellCentres;
+  sampling_config.compute_normals = true;
 
-  RCLCPP_DEBUG(logger_, "Sampling %d normals (target=%d, grid=%dx%d)",
-    samples_per_dim * samples_per_dim, target_samples,
-    samples_per_dim, samples_per_dim);
+  RCLCPP_DEBUG(logger_, "Sampling normals (target=%d, grid=%dx%d)",
+    target_samples, sampling_config.grid_steps, sampling_config.grid_steps);
 
-  std::vector<std::pair<TopoDS_Face, bool>> wire_faces;
-  wire_faces.reserve(wires_with_flags.size());
-  for (const auto & [wire, is_excl] : wires_with_flags) {
-    BRepBuilderAPI_MakeFace maker(surf, wire, Standard_True);
-    if (maker.IsDone()) {
-      wire_faces.emplace_back(maker.Face(), is_excl);
-    } else {
-      RCLCPP_WARN(logger_,
-            "sample_normals_from_allowed_region: failed to build face for wire, skipping");
-    }
-  }
+  const auto samples = sampling::sample_face_region(face, sampling_config, wires_with_flags);
 
-  for (int i = 0; i < samples_per_dim; ++i) {
-    for (int j = 0; j < samples_per_dim; ++j) {
-      double u = u_min + (u_max - u_min) * (i + 0.5) / samples_per_dim;
-      double v = v_min + (v_max - v_min) * (j + 0.5) / samples_per_dim;
-      gp_Pnt2d point_2d(u, v);
-
-      BRepClass_FaceClassifier classifier(face, point_2d, 1e-6);
-      if (classifier.State() != TopAbs_IN && classifier.State() != TopAbs_ON) {
-        continue;
-      }
-
-      if (!wires_with_flags.empty()) {
-        bool is_allowed = true;
-
-        for (const auto & [wire_face, is_exclusion_zone] : wire_faces) {
-          bool inside_wire = is_point_inside_wire(point_2d, wire_face);
-
-          if (is_exclusion_zone && inside_wire) {
-            is_allowed = false;
-            break;
-          } else if (!is_exclusion_zone && !inside_wire) {
-            is_allowed = false;
-            break;
-          }
-        }
-
-        if (!is_allowed) {
-          continue;
-        }
-      }
-
-      GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
-      if (props.IsNormalDefined()) {
-        gp_Vec normal = props.Normal();
-        if (face.Orientation() == TopAbs_REVERSED) {
-          normal.Reverse();
-        }
-        normals.push_back(normal);
-      }
+  std::vector<gp_Vec> normals;
+  normals.reserve(samples.size());
+  for (const auto & sample : samples) {
+    if (sample.has_normal) {
+      normals.push_back(sample.normal);
     }
   }
 

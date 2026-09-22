@@ -18,25 +18,30 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <BRepAlgoAPI_Section.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_WireError.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
+#include <BRepLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <GCE2d_MakeSegment.hxx>
+#include <Geom2d_TrimmedCurve.hxx>
 #include <Geom_Surface.hxx>
 #include <GProp_GProps.hxx>
-#include <Poly_Triangulation.hxx>
 #include <rclcpp/rclcpp.hpp>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -48,6 +53,7 @@
 #include <gp_Vec.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
+#include "hold_and_weld_gripper_sampler/sampling/face_sampler.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
 
 namespace hold_and_weld_gripper_sampler
@@ -63,7 +69,8 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
   double collision_tolerance,
   double contact_distance_threshold,
   double mesh_linear_deflection,
-  double mesh_angular_deflection)
+  double mesh_angular_deflection,
+  double contact_sample_density)
 : mapper_(mapper),
   gripper_(gripper),
   secondary_shapes_(secondary_shapes),
@@ -72,6 +79,7 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
   contact_distance_threshold_(contact_distance_threshold),
   mesh_linear_deflection_(mesh_linear_deflection),
   mesh_angular_deflection_(mesh_angular_deflection),
+  contact_sample_density_(contact_sample_density),
   fcl_checker_(nullptr),
   logger_(rclcpp::get_logger("gripper_sampler"))
 {
@@ -115,7 +123,8 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
   partial_exclusions_.clear();
 
   if (secondary_shapes_.empty()) {
-    RCLCPP_WARN(logger_, "No secondary shapes defined - skipping kissing surface analysis");
+    // Normal for a setup with no fixtures: ground is handled by GroundConstraint.
+    RCLCPP_DEBUG(logger_, "No fixture shapes defined - skipping kissing surface analysis");
     return;
   }
 
@@ -125,35 +134,25 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
     "contact_threshold=%.1f%%",
     all_surfaces.size(), contact_threshold_ * 100.0);
 
-  // Mesh all primary faces before contact ratio sampling — topology faces are
-  // not guaranteed to have triangulation until explicitly meshed here.
-  for (const auto & surface : all_surfaces) {
-    try {
-      BRepMesh_IncrementalMesh(surface.face, mesh_linear_deflection_, Standard_False,
-            mesh_angular_deflection_);
-    } catch (const Standard_Failure & e) {
-      RCLCPP_WARN(logger_, "Failed to mesh surface %d - contact ratio may be zero",
-            mapper_->find_topology_surface_id(surface.face));
-    }
-  }
+  // No meshing pass here any more: measure_contact_ratio samples the face's
+  // own UV domain, so primary triangulation is irrelevant to contact ratio.
 
   for (size_t i = 0; i < all_surfaces.size(); i++) {
     int surface_id = static_cast<int>(i);
-    double contact_ratio = measure_contact_ratio(surface_id, topology);
+    std::vector<sampling::FaceSample> contact_samples;
+    double contact_ratio = measure_contact_ratio(surface_id, topology, &contact_samples);
 
     if (contact_ratio < 1e-9) {
       continue;
     }
-
-    RCLCPP_DEBUG(logger_, "Surface %d: contact_ratio=%.1f%%",
-      surface_id, contact_ratio * 100.0);
 
     if (contact_ratio > contact_threshold_) {
       banned_surface_ids_.push_back(surface_id);
       RCLCPP_DEBUG(logger_, "  -> banned (%.1f%% > threshold %.1f%%)",
         contact_ratio * 100.0, contact_threshold_ * 100.0);
     } else {
-      TopoDS_Wire boundary = extract_contact_boundary(surface_id, topology);
+      TopoDS_Wire boundary = sampling::bounding_wire_in_uv(
+        all_surfaces[i].face, contact_samples);
       if (!boundary.IsNull()) {
         core::SampleArea area;
         area.surface_id = surface_id;
@@ -163,8 +162,9 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
         RCLCPP_DEBUG(logger_, "  -> partial exclusion wire created (%.1f%% contact)",
           contact_ratio * 100.0);
       } else {
-        RCLCPP_DEBUG(logger_, "  -> partial contact (%.1f%%) but wire extraction failed",
-          contact_ratio * 100.0);
+        RCLCPP_WARN(logger_, "Surface %d: %.1f%% contact but wire extraction failed — "
+          "fixture contact not excluded from sampling on this face",
+          surface_id, contact_ratio * 100.0);
       }
     }
   }
@@ -184,124 +184,76 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
 
 double KissingSurfaceConstraint::measure_contact_ratio(
   int surface_id,
-  const geometry::Topology & topology) const
+  const geometry::Topology & topology,
+  std::vector<sampling::FaceSample> * contact_samples) const
 {
+  if (contact_samples != nullptr) {
+    contact_samples->clear();
+  }
+
   const auto & surface = topology.get_surface(surface_id);
-  TopoDS_Face face = surface.face;
+  const TopoDS_Face & face = surface.face;
 
-  TopLoc_Location location;
-  Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
+  // Cheap reject, if inflated not touching any other object it's safe
+  Bnd_Box face_box;
+  BRepBndLib::Add(face, face_box);
+  if (face_box.IsVoid()) {
+    return 0.0;
+  }
+  face_box.Enlarge(contact_distance_threshold_);
 
-  if (triangulation.IsNull() || triangulation->NbTriangles() == 0) {
-    RCLCPP_DEBUG(logger_, "Surface %d: no triangulation available", surface_id);
+  std::vector<std::pair<const TopoDS_Shape *, Bnd_Box>> near_secondaries;
+  for (const auto & secondary : secondary_shapes_) {
+    if (secondary.IsNull()) {continue;}
+    Bnd_Box secondary_box;
+    BRepBndLib::Add(secondary, secondary_box);
+    if (secondary_box.IsVoid() || face_box.IsOut(secondary_box)) {continue;}
+    secondary_box.Enlarge(contact_distance_threshold_);
+    near_secondaries.emplace_back(&secondary, secondary_box);
+  }
+
+  if (near_secondaries.empty()) {
     return 0.0;
   }
 
-  const gp_Trsf & trsf = location.Transformation();
-  const int num_triangles = triangulation->NbTriangles();
+  // Sample the face itself rather than its triangulation. A planar face is two
+  // triangles at any mesh deflection, so triangle-centroid sampling quantized
+  // this ratio to {0, 0.5, 1.0} and reported 0% for real partial contact.
+  sampling::FaceSamplingConfig sampling_config;
+  sampling_config.sample_density = contact_sample_density_;
+  sampling_config.layout = sampling::GridLayout::kCellCentres;
 
-  double total_area = 0.0;
-  double contact_area = 0.0;
+  const auto samples = sampling::sample_face_region(face, sampling_config);
+  if (samples.empty()) {
+    RCLCPP_DEBUG(logger_, "Surface %d: no samples produced", surface_id);
+    return 0.0;
+  }
 
-  for (int tri_idx = 1; tri_idx <= num_triangles; ++tri_idx) {
-    int n1, n2, n3;
-    triangulation->Triangle(tri_idx).Get(n1, n2, n3);
-
-    gp_Pnt p1 = triangulation->Node(n1).Transformed(trsf);
-    gp_Pnt p2 = triangulation->Node(n2).Transformed(trsf);
-    gp_Pnt p3 = triangulation->Node(n3).Transformed(trsf);
-
-    // Area-weighted contact ratio: weight each sample by its triangle area
-    gp_Vec v1(p1, p2);
-    gp_Vec v2(p1, p3);
-    double tri_area = 0.5 * v1.Crossed(v2).Magnitude();
-
-    if (tri_area < 1e-12) {
-      continue;
-    }
-
-    total_area += tri_area;
-
-    gp_Pnt centroid(
-      (p1.X() + p2.X() + p3.X()) / 3.0,
-      (p1.Y() + p2.Y() + p3.Y()) / 3.0,
-      (p1.Z() + p2.Z() + p3.Z()) / 3.0);
-
-    for (const auto & secondary : secondary_shapes_) {
-      if (secondary.IsNull()) {continue;}
-      try {
-        TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(centroid);
-        BRepExtrema_DistShapeShape dist(v, secondary);
-
-        if (dist.Value() <= contact_distance_threshold_) {
-          contact_area += tri_area;
-          break;
+  const double contact_ratio = sampling::area_fraction(
+    samples,
+    [this, &near_secondaries, contact_samples](const sampling::FaceSample & sample) {
+      for (const auto & [secondary, secondary_box] : near_secondaries) {
+        if (secondary_box.IsOut(sample.point)) {continue;}
+        try {
+          BRepExtrema_DistShapeShape dist(
+            BRepBuilderAPI_MakeVertex(sample.point), *secondary);
+          if (dist.Value() <= contact_distance_threshold_) {
+            if (contact_samples != nullptr) {
+              contact_samples->push_back(sample);
+            }
+            return true;
+          }
+        } catch (const Standard_Failure &) {
+          continue;
         }
-      } catch (const Standard_Failure & e) {
-        continue;
       }
-    }
-  }
+      return false;
+    });
 
-  if (total_area < 1e-9) {
-    return 0.0;
-  }
-
-  double contact_ratio = contact_area / total_area;
-  RCLCPP_DEBUG(logger_, "Surface %d: contact_ratio=%.1f%% (%d triangles)",
-    surface_id, contact_ratio * 100.0, num_triangles);
+  RCLCPP_DEBUG(logger_, "Surface %d: contact_ratio=%.1f%% (%zu samples, %zu secondaries near)",
+    surface_id, contact_ratio * 100.0, samples.size(), near_secondaries.size());
 
   return contact_ratio;
-}
-
-TopoDS_Wire KissingSurfaceConstraint::extract_contact_boundary(
-  int surface_id,
-  const geometry::Topology & topology) const
-{
-  const auto & surface = topology.get_surface(surface_id);
-  TopoDS_Face face = surface.face;
-
-  std::vector<TopoDS_Edge> boundary_edges;
-
-  for (size_t i = 0; i < secondary_shapes_.size(); ++i) {
-    if (secondary_shapes_[i].IsNull()) {continue;}
-    try {
-      BRepAlgoAPI_Section section(face, secondary_shapes_[i]);
-      section.Build();
-
-      if (!section.IsDone() || section.Shape().IsNull()) {continue;}
-
-      for (TopExp_Explorer exp(section.Shape(), TopAbs_EDGE); exp.More(); exp.Next()) {
-        boundary_edges.push_back(TopoDS::Edge(exp.Current()));
-      }
-    } catch (const Standard_Failure & e) {
-      RCLCPP_DEBUG(logger_, "Section failed for surface %d: %s", surface_id, e.GetMessageString());
-    }
-  }
-
-  if (boundary_edges.empty()) {
-    return TopoDS_Wire();
-  }
-
-  try {
-    BRepBuilderAPI_MakeWire wire_builder;
-    for (const auto & edge : boundary_edges) {
-      wire_builder.Add(edge);
-    }
-
-    if (!wire_builder.IsDone()) {
-      RCLCPP_WARN(logger_,
-        "MakeWire failed for surface %d — contact boundary wire skipped", surface_id);
-      return TopoDS_Wire();
-    }
-
-    TopoDS_Wire boundary_wire = wire_builder.Wire();
-    return boundary_wire;
-  } catch (const Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "Wire building failure on surface %d: %s", surface_id,
-          e.GetMessageString());
-    return TopoDS_Wire();
-  }
 }
 
 bool KissingSurfaceConstraint::intersects_secondary(
@@ -310,7 +262,7 @@ bool KissingSurfaceConstraint::intersects_secondary(
 {
   collision_stats_.total_checks++;
 
-  if (secondary_shapes_.empty() && (!fcl_checker_ || !fcl_checker_->has_ground_plane())) {
+  if (secondary_shapes_.empty()) {
     return false;
   }
 
@@ -319,10 +271,6 @@ bool KissingSurfaceConstraint::intersects_secondary(
     return true;
   }
 
-  if (fcl_checker_->collides_with_ground(grasp_transform, grip_distance, collision_tolerance_)) {
-    collision_stats_.fcl_rejections++;
-    return true;
-  }
   bool collision = fcl_checker_->collides_with_secondaries(
     grasp_transform, grip_distance, collision_tolerance_);
 

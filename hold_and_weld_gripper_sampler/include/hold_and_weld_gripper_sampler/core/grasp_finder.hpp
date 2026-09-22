@@ -29,6 +29,7 @@
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/collision/jaw_clearance_check.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
+#include "hold_and_weld_gripper_sampler/constraints/ground_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
@@ -103,13 +104,21 @@ struct GraspFinderConfig
   double kissing_contact_threshold = 0.8;
   double kissing_contact_distance_threshold = 0.005;
 
-  // TODO(@silanus23): unused — preserved for future auto-detection of ground-facing surfaces
-  // from primary shape topology (surfaces with normal.z < ground_normal_z_threshold).
-  // ground_safety_margin was intended as a small Z offset added to ground_bottom_z
-  // to avoid false positives at the exact contact plane.
+  // Spacing of the face samples that find each exclusion zone's footprint [m].
+  double exclusion_sample_density = 0.005;
+
+  // TODO(@silanus23): still unused. GroundConstraint decides support by measured
+  // area fraction rather than by face normal, which handles faces that graze the
+  // ground at an angle; a normal test would reject those. Kept in case explicit
+  // normal-based filtering is wanted later.
   double ground_normal_z_threshold = -0.9;
+
+  // Live: consumed by GroundConstraint. A surface sample within ground_safety_margin
+  // of ground_bottom_z counts as resting on the ground.
   double ground_safety_margin = 0.005;
 
+  // Live: the ground is a finite footprint, not an infinite plane. A weld setup is
+  // a bounded thing, and a part hanging off the edge is over open floor.
   double ground_bottom_z = 0.0;
   double ground_center_x = 0.0;
   double ground_center_y = 0.0;
@@ -224,6 +233,7 @@ private:
   mutable std::optional<GraspFinderResult> cached_result_;
   std::shared_ptr<constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<constraints::KissingSurfaceConstraint> kissing_constraint_;
+  std::shared_ptr<constraints::GroundConstraint> ground_constraint_;
   std::shared_ptr<geometry::JawClearanceCheck> jaw_clearance_check_;
   std::shared_ptr<geometry::FCLCollisionChecker> fcl_checker_;
 

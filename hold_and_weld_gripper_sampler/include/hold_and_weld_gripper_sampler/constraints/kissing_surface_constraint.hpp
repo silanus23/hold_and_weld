@@ -26,6 +26,7 @@
 
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
+#include "hold_and_weld_gripper_sampler/sampling/face_sampler.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
@@ -39,7 +40,7 @@ namespace constraints
  * @brief High-level collision rejection statistics for a full grasp search
  *
  * Tracks how many gripper poses were checked and how many were rejected
- * by FCL during secondary/ground collision validation. This is a simple
+ * by FCL during secondary collision validation. This is a simple
  * pass/fail counter — distinct from FCLCollisionChecker::CollisionStats
  * which tracks per-part, per-target rejection counts at the BVH level.
  */
@@ -59,7 +60,9 @@ struct GraspCollisionStats
 };
 
 /**
- * @brief Constraint for handling fixture and ground plane collisions
+ * @brief Constraint for handling fixture collisions
+ *
+ * The ground is not a secondary; GroundConstraint owns it.
  *
  * Performs three jobs:
  * 1. Identifies surfaces in full contact with secondaries (banned from sampling)
@@ -74,9 +77,16 @@ public:
    *
    * @param mapper Shared geometry mapper for face lookups
    * @param gripper Parsed gripper kinematic information
-   * @param secondary_shapes Fixtures, ground plane, obstacles
+   * @param secondary_shapes Fixtures and obstacles (not the ground)
    * @param contact_threshold Surfaces with contact > this ratio are banned (default 0.8 = 80%)
    * @param collision_tolerance Distance threshold for collision detection in meters (default 1e-6)
+   * @param contact_distance_threshold Distance under which a sample counts as touching (meters)
+   * @param mesh_linear_deflection Meshing deflection for secondary collision geometry (meters)
+   * @param mesh_angular_deflection Meshing angular deflection for secondary geometry (radians)
+   * @param contact_sample_density Spacing between contact-ratio samples (meters, default 5 mm).
+   *   Measuring a contact *fraction* needs far less resolution than placing contact points,
+   *   and each sample costs an exact distance query, so this is deliberately coarser than
+   *   SamplingConfig::sample_density.
    */
   KissingSurfaceConstraint(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
@@ -86,7 +96,8 @@ public:
     double collision_tolerance = 1e-6,
     double contact_distance_threshold = 0.005,
     double mesh_linear_deflection = 0.001,
-    double mesh_angular_deflection = 0.1
+    double mesh_angular_deflection = 0.1,
+    double contact_sample_density = 0.005
   );
 
   /**
@@ -175,6 +186,7 @@ private:
   double contact_distance_threshold_;
   double mesh_linear_deflection_;
   double mesh_angular_deflection_;
+  double contact_sample_density_;
 
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
 
@@ -189,29 +201,22 @@ private:
   /**
    * @brief Measure contact ratio between a surface and all secondaries
    *
-   * Uses existing mesh triangulation for area-uniform sampling.
-   * Each triangle centroid is tested against secondary shapes.
-   * Result is weighted by triangle area for correctness on curved surfaces.
+   * Walks the face's own UV domain via sampling::sample_face_region and returns
+   * the area-weighted fraction of samples within contact_distance_threshold of
+   * a secondary. Area weights use the exact local Jacobian, so the result is
+   * correct on freeform surfaces as well as primitives.
+   *
+   * Faces whose bounding box clears every secondary return 0 without sampling.
    *
    * @param surface_id Surface to measure
    * @param topology Primary shape topology
+   * @param contact_samples Optional output: the samples found to be in contact
    * @return Contact ratio (0.0 = no contact, 1.0 = full contact)
    */
   double measure_contact_ratio(
     int surface_id,
-    const geometry::Topology & topology
-  ) const;
-
-  /**
-   * @brief Extract boundary wire of contact region on a surface
-   *
-   * @param surface_id Surface with partial contact
-   * @param topology Primary shape topology
-   * @return Wire representing contact boundary
-   */
-  TopoDS_Wire extract_contact_boundary(
-    int surface_id,
-    const geometry::Topology & topology
+    const geometry::Topology & topology,
+    std::vector<sampling::FaceSample> * contact_samples = nullptr
   ) const;
 };
 

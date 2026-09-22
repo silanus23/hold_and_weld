@@ -69,6 +69,10 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 
 ## Exclusion Zones
 
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `exclusion_zones.sample_density` | double | 0.005 | Spacing of the face samples used to find each zone's footprint on the part [m]. The footprint is bounded by a closed UV rectangle per face, so it over-excludes rather than under-excludes. A zone narrower than this can fall between samples and go unexcluded from sampling — only the pose-level FCL check still catches it. **If a zone's smallest dimension (line/circle diameter, shortest polygon edge) is close to or below this value, lower `sample_density` for that job** (a runtime warning is logged when this happens); don't rely on the pose-level check alone as the primary defense. |
+
 ### Circles
 
 | Parameter | Type | Default | Description |
@@ -115,6 +119,17 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 | `sampling.normal_sample_density` | double | 1.0 | Samples per cm² for normal antiparallelism check |
 | `sampling.alignment_threshold` | double | 0.95 | Minimum dot product between grip axis and surface normal |
 | `sampling.max_lateral_deviation` | double | 0.02 | Maximum allowed lateral offset between contact points [m] |
+
+`FaceSamplingConfig::max_cells_per_tile` (default 16) is **not yet exposed as a
+YAML key** — it is settable through the C++ API only, pending the call-site
+wiring tracked in ROADMAP.md. It bounds how far a single measured `|dS/du|` can be wrong
+over the region it sizes. Face sampling splits the UV box at the surface's own
+knot values, then subdivides each tile until no tile needs more than this many
+cells, re-measuring the local scale each time. Lowering it tracks a varying
+parameterisation more closely at the cost of more probe evaluations; raising it
+tends back towards a single estimate for the whole face, which under-samples
+surfaces whose parameterisation is non-uniform — clustered knot vectors, and the
+vanishing `|dS/du|` at a cone apex or sphere pole.
 
 ## Orientation
 
@@ -174,7 +189,7 @@ test rather than a sampling constraint: `JawClearanceCheck`, in `collision/`.
 |---|---|---|---|
 | `kissing.contact_threshold` | double | 0.8 | Surfaces with contact area ratio above this are banned from sampling |
 | `kissing.contact_distance_threshold` | double | 0.005 | Maximum distance between primary and secondary surfaces to classify as kissing contact [m] |
-| `kissing.collision_tolerance` | double | 1e-6 | Distance threshold for secondary collision detection [m] |
+| `kissing.collision_tolerance` | double | 1e-6 | Distance threshold for secondary and ground collision detection [m] |
 
 ## FCL
 

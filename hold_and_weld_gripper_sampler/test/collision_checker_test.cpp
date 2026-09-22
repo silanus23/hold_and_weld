@@ -36,7 +36,6 @@ using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 namespace
 {
 
-// Box: 160 × 120 × 200 mm centred at origin
 constexpr double kHalfX = 0.08, kHalfY = 0.06, kHalfZ = 0.10;
 
 TopoDS_Shape make_prism()
@@ -65,7 +64,6 @@ ParsedGripper make_gripper()
   return g;
 }
 
-// Build a pure-translation gp_Trsf
 gp_Trsf translation(double x, double y, double z)
 {
   gp_Trsf tf;
@@ -174,6 +172,59 @@ TEST_F(FCLTest, GroundPlane_CollidesBelow_ClearAbove)
 
   EXPECT_TRUE(checker.collides_with_ground(translation(0.0, 0.0, -0.2), 0.02, 0.001));
   EXPECT_FALSE(checker.collides_with_ground(translation(0.0, 0.0, 0.5), 0.02, 0.001));
+  EXPECT_FALSE(checker.has_finite_ground()) << "no footprint given, so infinite";
+}
+
+// With a footprint the ground is finite: below the floor still collides, but only
+// while over the floor. Past the edge of the setup there is nothing to hit.
+TEST_F(FCLTest, FiniteGround_OnlyCollidesWithinFootprint)
+{
+  FCLCollisionChecker checker(gripper_, primary_);
+  checker.add_ground_plane(Eigen::Vector3d(0.0, 0.0, 1.0), 0.0, 1.0, 1.0, 0.0, 0.0);
+  ASSERT_TRUE(checker.has_ground_plane());
+  ASSERT_TRUE(checker.has_finite_ground());
+
+  EXPECT_TRUE(checker.collides_with_ground(translation(0.0, 0.0, -0.2), 0.02, 0.001))
+    << "below the floor, over the footprint";
+  EXPECT_FALSE(checker.collides_with_ground(translation(0.0, 0.0, 0.5), 0.02, 0.001))
+    << "above the floor";
+  EXPECT_FALSE(checker.collides_with_ground(translation(5.0, 0.0, -0.2), 0.02, 0.001))
+    << "below the floor's height but 5 m past its edge — an infinite plane "
+    << "would wrongly reject this pose";
+}
+
+// The infinite fallback rejects that same pose, which is the behaviour the
+// footprint exists to fix.
+TEST_F(FCLTest, InfiniteGround_RejectsPoseOutsideAnyFootprint)
+{
+  FCLCollisionChecker checker(gripper_, primary_);
+  checker.add_ground_plane(Eigen::Vector3d(0.0, 0.0, 1.0), 0.0);
+
+  EXPECT_TRUE(checker.collides_with_ground(translation(5.0, 0.0, -0.2), 0.02, 0.001));
+}
+
+// A tilted ground has no axis-aligned footprint, so it stays a halfspace even
+// when sizes are supplied.
+TEST_F(FCLTest, NonLevelGroundFallsBackToHalfspace)
+{
+  FCLCollisionChecker checker(gripper_, primary_);
+  checker.add_ground_plane(Eigen::Vector3d(0.0, 0.3, 1.0).normalized(), 0.0, 1.0, 1.0);
+
+  EXPECT_TRUE(checker.has_ground_plane());
+  EXPECT_FALSE(checker.has_finite_ground());
+}
+
+// Ground surface height is honoured by the finite model, not just the infinite one.
+TEST_F(FCLTest, FiniteGround_HonoursSurfaceHeight)
+{
+  FCLCollisionChecker checker(gripper_, primary_);
+  checker.add_ground_plane(Eigen::Vector3d(0.0, 0.0, 1.0), 0.4, 2.0, 2.0);
+  ASSERT_TRUE(checker.has_finite_ground());
+
+  EXPECT_TRUE(checker.collides_with_ground(translation(0.0, 0.0, 0.2), 0.02, 0.001))
+    << "0.2 m is below a floor raised to 0.4 m";
+  EXPECT_FALSE(checker.collides_with_ground(translation(0.0, 0.0, 0.9), 0.02, 0.001))
+    << "0.9 m clears it";
 }
 
 // The cylinder query covers obstacles only — a secondary in reach collides, one

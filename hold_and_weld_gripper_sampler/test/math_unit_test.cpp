@@ -38,10 +38,8 @@ using namespace hold_and_weld_gripper_sampler::angle_finding;  // NOLINT
 namespace
 {
 
-// ---------------------------------------------------------------------------
-// Local copy of build_tangent_frame (mirrors the static implementation in
-// grasp_orientation_finder.cpp exactly, so we can test its math properties).
-// ---------------------------------------------------------------------------
+// Mirrors the static build_tangent_frame in grasp_orientation_finder.cpp exactly,
+// so we can test its math properties.
 void build_tangent_frame_local(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec & out_ly)
 {
   const double sign = (normal.Z() >= 0.0) ? 1.0 : -1.0;
@@ -59,26 +57,16 @@ void build_tangent_frame_local(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec & 
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// Test 1 — BuildTangentFrame_KnownNormal
-//
-// Call build_tangent_frame with a unit normal (0, 0, 1).  The three vectors
-// {normal, lx, ly} must form an orthonormal basis:
-//   * each must have magnitude ≈ 1  (tol 1e-10)
-//   * every pair must be orthogonal (dot ≈ 0, tol 1e-10)
-// ---------------------------------------------------------------------------
 TEST(MathUnit, BuildTangentFrame_KnownNormal)
 {
   const gp_Vec normal(0.0, 0.0, 1.0);
   gp_Vec lx, ly;
   build_tangent_frame_local(normal, lx, ly);
 
-  // Unit-length check
   EXPECT_NEAR(normal.Magnitude(), 1.0, 1e-10) << "Input normal should already be unit length";
   EXPECT_NEAR(lx.Magnitude(), 1.0, 1e-10) << "lx must be unit length";
   EXPECT_NEAR(ly.Magnitude(), 1.0, 1e-10) << "ly must be unit length";
 
-  // Orthogonality checks
   EXPECT_NEAR(normal.Dot(lx), 0.0, 1e-10) << "normal · lx must be 0";
   EXPECT_NEAR(normal.Dot(ly), 0.0, 1e-10) << "normal · ly must be 0";
   EXPECT_NEAR(lx.Dot(ly), 0.0, 1e-10) << "lx · ly must be 0";
@@ -87,7 +75,6 @@ TEST(MathUnit, BuildTangentFrame_KnownNormal)
 // The same properties must hold for a non-axis-aligned normal.
 TEST(MathUnit, BuildTangentFrame_ArbitraryNormal)
 {
-  // A unit normal at 45° in XZ plane
   const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
   const gp_Vec normal(inv_sqrt2, 0.0, inv_sqrt2);
   gp_Vec lx, ly;
@@ -101,7 +88,7 @@ TEST(MathUnit, BuildTangentFrame_ArbitraryNormal)
   EXPECT_NEAR(lx.Dot(ly), 0.0, 1e-10) << "lx · ly must be 0";
 }
 
-// Negative-Z normal (sign = -1 branch)
+// sign = -1 branch
 TEST(MathUnit, BuildTangentFrame_NegativeZNormal)
 {
   const gp_Vec normal(0.0, 0.0, -1.0);
@@ -116,14 +103,6 @@ TEST(MathUnit, BuildTangentFrame_NegativeZNormal)
   EXPECT_NEAR(lx.Dot(ly), 0.0, 1e-10) << "lx · ly must be 0";
 }
 
-// ---------------------------------------------------------------------------
-// Test 2 — ExtractQuaternion_90DegZRotation
-//
-// Build a gp_Trsf that rotates 90° around the world Z axis.
-// extract_quaternion must return a quaternion with:
-//   norm ≈ 1.0
-//   x ≈ 0, y ≈ 0, |z| ≈ sin(π/4), |w| ≈ cos(π/4)  (either sign is valid)
-// ---------------------------------------------------------------------------
 TEST(MathUnit, ExtractQuaternion_90DegZRotation)
 {
   gp_Trsf trsf;
@@ -149,17 +128,10 @@ TEST(MathUnit, ExtractQuaternion_90DegZRotation)
     << " but got z=" << q.z() << " w=" << q.w();
 }
 
-// ---------------------------------------------------------------------------
-// Test 3 — RpyToQuaternion_HalfPiZ
-//
-// rpy_to_quaternion(0, 0, π/2) must produce the same 90° Z-rotation quaternion
-// as the one verified in ExtractQuaternion_90DegZRotation.
-// ---------------------------------------------------------------------------
+// Must produce the same 90-degree Z-rotation quaternion as ExtractQuaternion_90DegZRotation.
 TEST(MathUnit, RpyToQuaternion_HalfPiZ)
 {
   const gp_Quaternion q_occt = rpy_to_quaternion(0.0, 0.0, M_PI / 2.0);
-
-  // Convert to Eigen for easier norm check
   const Eigen::Quaterniond q(q_occt.W(), q_occt.X(), q_occt.Y(), q_occt.Z());
 
   constexpr double tol = 1e-6;
@@ -179,14 +151,8 @@ TEST(MathUnit, RpyToQuaternion_HalfPiZ)
     << " but got z=" << q.z() << " w=" << q.w();
 }
 
-// ---------------------------------------------------------------------------
-// Test 4 — ToGrasp_QuaternionNormAndTranslation
-//
-// Build a GraspCandidate with two known contact points and an identity
-// gripper transform.  to_grasp must return:
-//   * tcp_orientation.norm() ≈ 1.0
-//   * tcp_position ≈ midpoint of contact_1 and contact_2
-// ---------------------------------------------------------------------------
+// to_grasp must return tcp_orientation.norm() ≈ 1.0 and tcp_position ≈
+// midpoint of contact_1/contact_2.
 TEST(MathUnit, ToGrasp_QuaternionNormAndTranslation)
 {
   GraspCandidate candidate;
@@ -196,9 +162,7 @@ TEST(MathUnit, ToGrasp_QuaternionNormAndTranslation)
   candidate.surface_id_2 = 1;
   candidate.grip_distance = 0.05;
   candidate.quality_score = 1.0;
-
-  // Identity transform — no rotation, no translation
-  candidate.gripper_transform = gp_Trsf();
+  candidate.gripper_transform = gp_Trsf();  // identity
 
   // Needed by to_grasp but not asserted here
   candidate.approach_direction = gp_Vec(1.0, 0.0, 0.0);
@@ -207,29 +171,18 @@ TEST(MathUnit, ToGrasp_QuaternionNormAndTranslation)
   const Grasp grasp = to_grasp(candidate);
 
   constexpr double tol = 1e-6;
-
-  // Orientation quaternion must be unit-length
   EXPECT_NEAR(grasp.tcp_orientation.norm(), 1.0, tol)
     << "Grasp orientation quaternion must be unit length";
 
-  // TCP position must be the midpoint of the two contact points
   const Eigen::Vector3d expected_mid(0.0, 0.0, 0.025);
   EXPECT_NEAR(grasp.tcp_position.x(), expected_mid.x(), tol);
   EXPECT_NEAR(grasp.tcp_position.y(), expected_mid.y(), tol);
   EXPECT_NEAR(grasp.tcp_position.z(), expected_mid.z(), tol);
 }
 
-// ---------------------------------------------------------------------------
-// Test 5 — ContactPointSampler_TightBox_FindsOpposingFaces
-//
-// Build a 0.04 m × 0.10 m × 0.10 m box (4 cm gap in X).
-// Configure sampler with min_opening=0.038, max_opening=0.041.
-// generate_contact_pairs must find at least one pair and every pair must
-// have grip_distance ∈ [0.038, 0.041].
-// ---------------------------------------------------------------------------
 TEST(MathUnit, ContactPointSampler_TightBox_FindsOpposingFaces)
 {
-  // Box: 4 cm (X) × 10 cm (Y) × 10 cm (Z)
+  // 4 cm (X) x 10 cm (Y) x 10 cm (Z)
   const double box_x = 0.04;
   const double box_y = 0.10;
   const double box_z = 0.10;

@@ -214,6 +214,8 @@ int main(int argc, char ** argv)
           config.finder_config.ground_bottom_z = sec_config.z_position;
           config.finder_config.ground_center_x = sec_config.translation.x();
           config.finder_config.ground_center_y = sec_config.translation.y();
+          config.finder_config.ground_size_x = sec_config.size_x;
+          config.finder_config.ground_size_y = sec_config.size_y;
 
 
         } else if (sec_config.type == "box") {

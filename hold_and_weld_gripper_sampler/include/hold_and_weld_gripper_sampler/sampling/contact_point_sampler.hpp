@@ -169,18 +169,12 @@ private:
     const std::vector<core::SampleArea> & exclusion_areas) const;
 
   /**
-   * @brief Sample points on a face with no exclusions.
+   * @brief Sample points on a face, optionally filtered by inclusion/exclusion wires.
    *
-   * @param face Face to sample
-   * @return Sampled 3D points
-   */
-  std::vector<gp_Pnt> sample_full_face(const TopoDS_Face & face) const;
-
-  /**
-   * @brief Sample points on a face filtered by inclusion/exclusion wires.
-   *
-   * Each entry is a (wire, is_exclusion) pair: when is_exclusion is true,
-   * points inside the wire are rejected; when false, points outside are rejected.
+   * Thin wrapper over sampling::sample_face_region that keeps only the point of
+   * each sample. Each wire entry is a (wire, is_exclusion) pair: when
+   * is_exclusion is true, points inside the wire are rejected; when false,
+   * points outside are rejected. Pass an empty vector to sample the whole face.
    *
    * @param face Face to sample
    * @param wires_with_flags Wires paired with their exclusion/inclusion flag
@@ -202,20 +196,6 @@ private:
     const gp_Pnt2d & point_2d,
     const TopoDS_Wire & wire,
     const TopoDS_Face & face) const;
-
-  /**
-   * @brief Check if a 2D UV point is inside a pre-built wire face.
-   *
-   * Prefer this overload when testing many points against the same wire:
-   * build the face once with BRepBuilderAPI_MakeFace and reuse it across calls.
-   *
-   * @param point_2d UV point to test
-   * @param wire_face Pre-built TopoDS_Face constructed from the wire
-   * @return true if point is inside the wire face
-   */
-  bool is_point_inside_wire(
-    const gp_Pnt2d & point_2d,
-    const TopoDS_Face & wire_face) const;
 
   /**
    * @brief Check if a 3D point falls within any exclusion zone on a surface.
@@ -312,15 +292,16 @@ private:
    * Each entry is a (wire, is_exclusion) pair: when is_exclusion is true,
    * points inside the wire are excluded; when false, points outside are excluded.
    *
+   * Normals are evaluated per sample, so curved faces report the full range of
+   * directions rather than a single face-average normal.
+   *
    * @param face Face to sample
-   * @param surf Geometric surface handle
    * @param wires_with_flags Wires paired with their exclusion/inclusion flag
    * @param target_samples Number of grid points to place (caller is responsible for sizing)
    * @return Sampled normal vectors
    */
   std::vector<gp_Vec> sample_normals_from_allowed_region(
     const TopoDS_Face & face,
-    const Handle(Geom_Surface) & surf,
     const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags,
     int target_samples) const;
 

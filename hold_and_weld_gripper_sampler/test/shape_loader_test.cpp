@@ -70,7 +70,6 @@ protected:
     loader_ = std::make_unique<ShapeLoader>();
   }
 
-  // Helper to compute bounding box dimensions
   Eigen::Vector3d get_bounding_box_size(const TopoDS_Shape & shape) const
   {
     Bnd_Box box;
@@ -82,7 +81,6 @@ protected:
     return Eigen::Vector3d(x_max - x_min, y_max - y_min, z_max - z_min);
   }
 
-  // Helper to compute bounding box center
   Eigen::Vector3d get_bounding_box_center(const TopoDS_Shape & shape) const
   {
     Bnd_Box box;
@@ -97,7 +95,6 @@ protected:
       (z_min + z_max) / 2.0);
   }
 
-  // Helper to compute volume
   double get_volume(const TopoDS_Shape & shape) const
   {
     GProp_GProps props;
@@ -105,7 +102,6 @@ protected:
     return props.Mass();
   }
 
-  // Helper to count faces
   int count_faces(const TopoDS_Shape & shape) const
   {
     int count = 0;

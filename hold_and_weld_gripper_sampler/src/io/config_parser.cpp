@@ -27,6 +27,12 @@ namespace io
 
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
+// " 'id'" for error messages, or nothing when the zone has no id.
+static std::string id_suffix(const std::string & id)
+{
+  return id.empty() ? "" : " '" + id + "'";
+}
+
 std::optional<ParsedConfig> ConfigParser::parse_file(
   const std::string & yaml_path,
   const std::string & package_share_dir)
@@ -336,6 +342,10 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
     if (node["size_y"]) {
       config.size_y = node["size_y"].as<double>();
     }
+    if (config.size_x <= 0.0 || config.size_y <= 0.0) {
+      set_error("Ground plane size_x and size_y must be > 0");
+      return false;
+    }
     if (node["z_position"]) {
       config.z_position = node["z_position"].as<double>();
     }
@@ -353,6 +363,14 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
 
 bool ConfigParser::parse_exclusion_zones(const YAML::Node & node, ParsedConfig & config)
 {
+  if (node["sample_density"]) {
+    config.finder_config.exclusion_sample_density = node["sample_density"].as<double>();
+    if (config.finder_config.exclusion_sample_density <= 0.0) {
+      set_error("exclusion_zones.sample_density must be > 0");
+      return false;
+    }
+  }
+
   if (node["circles"] && node["circles"].IsSequence()) {
     for (const auto & item : node["circles"]) {
       constraints::exclusion_circle circle;
@@ -408,6 +426,16 @@ bool ConfigParser::parse_exclusion_circle(
     circle.id = node["id"].as<std::string>();
   }
 
+  const std::string name = "Exclusion circle" + id_suffix(circle.id);
+  if (circle.radius <= 0.0 || circle.projection_depth <= 0.0) {
+    set_error(name + ": 'radius' and 'projection_depth' must be > 0");
+    return false;
+  }
+  if (circle.clearance < 0.0) {
+    set_error(name + ": 'clearance' must be >= 0");
+    return false;
+  }
+
   return true;
 }
 
@@ -434,6 +462,26 @@ bool ConfigParser::parse_exclusion_polygon(
     polygon.id = node["id"].as<std::string>();
   }
 
+  const std::string name = "Exclusion polygon" + id_suffix(polygon.id);
+  const auto & corners = polygon.exclusion_corners;
+  if (corners.size() < 3) {
+    set_error(name + ": needs at least 3 corners");
+    return false;
+  }
+  // The polygon normal is taken from corners 0-2, so they must span a plane.
+  if ((corners[1] - corners[0]).cross(corners[2] - corners[0]).norm() < 1e-6) {
+    set_error(name + ": corners 0-2 are collinear; start the corner list at a real corner");
+    return false;
+  }
+  if (polygon.projection_depth <= 0.0) {
+    set_error(name + ": 'projection_depth' must be > 0");
+    return false;
+  }
+  if (polygon.clearance < 0.0) {
+    set_error(name + ": 'clearance' must be >= 0");
+    return false;
+  }
+
   return true;
 }
 
@@ -457,6 +505,16 @@ bool ConfigParser::parse_exclusion_line(
 
   if (node["id"]) {
     line.id = node["id"].as<std::string>();
+  }
+
+  const std::string name = "Exclusion line" + id_suffix(line.id);
+  if (line.exclusion_radius <= 0.0) {
+    set_error(name + ": 'exclusion_radius' must be > 0");
+    return false;
+  }
+  if (line.clearance < 0.0) {
+    set_error(name + ": 'clearance' must be >= 0");
+    return false;
   }
 
   return true;

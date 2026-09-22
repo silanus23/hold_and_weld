@@ -16,22 +16,23 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <BRepPrimAPI_MakeBox.hxx>
-#include <BRepPrimAPI_MakeCylinder.hxx>
-#include <BRepBuilderAPI_Transform.hxx>
 
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
-#include <gp_Ax2.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Wire.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
+#include "hold_and_weld_gripper_sampler/sampling/face_sampler.hpp"
 #include "test_helpers.hpp"
 
 using namespace hold_and_weld_gripper_sampler;  // NOLINT
@@ -65,69 +66,6 @@ protected:
   ParsedGripper gripper_;
 };
 
-// Constraint constructed with no exclusion inputs reports empty sample areas.
-TEST_F(ExclusionZoneConstraintTest, ConstructWithNoConstraints)
-{
-  ExclusionZoneConstraint constraint(mapper_, gripper_);
-
-  EXPECT_EQ(constraint.get_name(), "ExclusionZoneConstraint");
-  EXPECT_TRUE(constraint.get_sample_areas().empty());
-}
-
-// Constraint accepts a polygon exclusion zone at construction.
-TEST_F(ExclusionZoneConstraintTest, ConstructWithPolygonConstraint)
-{
-  exclusion_polygon polygon;
-  polygon.exclusion_corners = {
-    Eigen::Vector3d(0.0, 0.0, 0.0),
-    Eigen::Vector3d(0.1, 0.0, 0.0),
-    Eigen::Vector3d(0.1, 0.1, 0.0),
-    Eigen::Vector3d(0.0, 0.1, 0.0)
-  };
-  polygon.projection_depth = 0.02;
-  polygon.clearance = 0.01;
-
-  std::vector<exclusion_polygon> polygons = {polygon};
-
-  ExclusionZoneConstraint constraint(
-    mapper_, gripper_, std::nullopt, polygons);
-
-  EXPECT_EQ(constraint.get_name(), "ExclusionZoneConstraint");
-}
-
-// Constraint accepts circle, polygon, and line exclusion zones simultaneously.
-TEST_F(ExclusionZoneConstraintTest, ConstructWithMultipleConstraints)
-{
-  exclusion_circle circle;
-  circle.center = Eigen::Vector3d(0.0, 0.0, 0.0);
-  circle.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
-  circle.radius = 0.05;
-  circle.projection_depth = 0.02;
-
-  exclusion_line line;
-  line.start = Eigen::Vector3d(0.2, 0.0, 0.0);
-  line.end = Eigen::Vector3d(0.3, 0.0, 0.0);
-  line.exclusion_radius = 0.01;
-
-  exclusion_polygon polygon;
-  polygon.exclusion_corners = {
-    Eigen::Vector3d(0.4, 0.0, 0.0),
-    Eigen::Vector3d(0.5, 0.0, 0.0),
-    Eigen::Vector3d(0.5, 0.1, 0.0),
-    Eigen::Vector3d(0.4, 0.1, 0.0)
-  };
-  polygon.projection_depth = 0.02;
-
-  std::vector<exclusion_circle> circles = {circle};
-  std::vector<exclusion_polygon> polygons = {polygon};
-  std::vector<exclusion_line> lines = {line};
-
-  ExclusionZoneConstraint constraint(
-    mapper_, gripper_, circles, polygons, lines);
-
-  EXPECT_EQ(constraint.get_name(), "ExclusionZoneConstraint");
-}
-
 // Gripper placed 1 m away from a circle exclusion zone must not collide.
 TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
 {
@@ -154,36 +92,32 @@ TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
   EXPECT_FALSE(collision);
 }
 
-// TODO(@silanus23): Fix CollisionWhenInsideExclusionZone - FCL collision check returns false
-// even when gripper is placed at origin inside a circle exclusion zone. Likely a volume
-// construction or transform issue in the FCL wiring for circle exclusions.
-// TEST_F(ExclusionZoneConstraintTest, CollisionWhenInsideExclusionZone)
-// {
-//   // Create exclusion circle at origin
-//   exclusion_circle circle;
-//   circle.center = Eigen::Vector3d(0.0, 0.0, 0.0);
-//   circle.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
-//   circle.radius = 0.1;
-//   circle.projection_depth = 0.1;
-//   circle.clearance = 0.01;
-//
-//   std::vector<exclusion_circle> circles = {circle};
-//
-//   ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
-//
-//   // Create a test shape and analyze
-//   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
-//   Topology topology = mapper_->load_from_shape(test_box);
-//   constraint.analyze_constraints(test_box, topology);
-//   wire_fcl(constraint, gripper_, test_box);
-//
-//   // Place gripper at origin (inside the exclusion zone)
-//   gp_Trsf origin_transform;
-//   origin_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
-//
-//   bool collision = constraint.intersects_exclusion_zone(origin_transform, 0.03);
-//   EXPECT_TRUE(collision);
-// }
+// TODO(@silanus23): FCL collision check returns false even when the gripper is
+// placed at origin inside a circle exclusion zone. Likely a volume construction
+// or transform issue in the FCL wiring for circle exclusions.
+TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWhenInsideExclusionZone)
+{
+  exclusion_circle circle;
+  circle.center = Eigen::Vector3d(0.0, 0.0, 0.0);
+  circle.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
+  circle.radius = 0.1;
+  circle.projection_depth = 0.1;
+  circle.clearance = 0.01;
+
+  std::vector<exclusion_circle> circles = {circle};
+
+  ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
+
+  TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
+  Topology topology = mapper_->load_from_shape(test_box);
+  constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
+
+  gp_Trsf origin_transform;
+  origin_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
+
+  EXPECT_TRUE(constraint.intersects_exclusion_zone(origin_transform, 0.03));
+}
 
 // Gripper inside a line exclusion tube collides; gripper 0.5 m away does not.
 TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
@@ -217,42 +151,38 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
   EXPECT_FALSE(collision);
 }
 
-// TODO(@silanus23): Fix CollisionWithPolygonExclusionZone - FCL collision check returns false
-// even when gripper is placed inside a polygon exclusion prism. Likely a volume
-// construction or transform issue in the FCL wiring for polygon exclusions.
-// TEST_F(ExclusionZoneConstraintTest, CollisionWithPolygonExclusionZone)
-// {
-//   // Create exclusion polygon (square in XY plane)
-//   exclusion_polygon polygon;
-//   polygon.exclusion_corners = {
-//     Eigen::Vector3d(-0.05, -0.05, 0.0),
-//     Eigen::Vector3d(0.05, -0.05, 0.0),
-//     Eigen::Vector3d(0.05, 0.05, 0.0),
-//     Eigen::Vector3d(-0.05, 0.05, 0.0)
-//   };
-//   polygon.projection_depth = 0.1;
-//   polygon.clearance = 0.01;
-//
-//   std::vector<exclusion_polygon> polygons = {polygon};
-//
-//   ExclusionZoneConstraint constraint(
-//     mapper_, gripper_, std::nullopt, polygons);
-//
-//   // Create a test shape and analyze
-//   TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
-//   Topology topology = mapper_->load_from_shape(test_box);
-//   constraint.analyze_constraints(test_box, topology);
-//   wire_fcl(constraint, gripper_, test_box);
-//
-//   // Place gripper at origin (inside the prism)
-//   gp_Trsf origin_transform;
-//   origin_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.02));
-//
-//   bool collision = constraint.intersects_exclusion_zone(origin_transform, 0.03);
-//   EXPECT_TRUE(collision);
-// }
+// TODO(@silanus23): FCL collision check returns false even when the gripper is
+// placed inside a polygon exclusion prism. Likely a volume construction or
+// transform issue in the FCL wiring for polygon exclusions.
+TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWithPolygonExclusionZone)
+{
+  exclusion_polygon polygon;
+  polygon.exclusion_corners = {
+    Eigen::Vector3d(-0.05, -0.05, 0.0),
+    Eigen::Vector3d(0.05, -0.05, 0.0),
+    Eigen::Vector3d(0.05, 0.05, 0.0),
+    Eigen::Vector3d(-0.05, 0.05, 0.0)
+  };
+  polygon.projection_depth = 0.1;
+  polygon.clearance = 0.01;
 
-// Degenerate zero-length line exclusion must not crash or trigger a fatal failure.
+  std::vector<exclusion_polygon> polygons = {polygon};
+
+  ExclusionZoneConstraint constraint(
+    mapper_, gripper_, std::nullopt, polygons);
+
+  TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.3, 0.3, 0.2).Shape();
+  Topology topology = mapper_->load_from_shape(test_box);
+  constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
+
+  gp_Trsf origin_transform;
+  origin_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.02));
+
+  EXPECT_TRUE(constraint.intersects_exclusion_zone(origin_transform, 0.03));
+}
+
+// Degenerate zero-length line exclusion must not crash.
 TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
 {
   exclusion_line line;
@@ -263,16 +193,13 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
 
   std::vector<exclusion_line> lines = {line};
 
-  // Degenerate geometry — must not crash.
-  EXPECT_NO_FATAL_FAILURE({
-    ExclusionZoneConstraint constraint(
-      mapper_, gripper_, std::nullopt, std::nullopt, lines);
+  ExclusionZoneConstraint constraint(
+    mapper_, gripper_, std::nullopt, std::nullopt, lines);
 
-    TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
-    Topology topology = mapper_->load_from_shape(test_box);
-    constraint.analyze_constraints(test_box, topology);
-    wire_fcl(constraint, gripper_, test_box);
-  });
+  TopoDS_Shape test_box = BRepPrimAPI_MakeBox(0.2, 0.2, 0.1).Shape();
+  Topology topology = mapper_->load_from_shape(test_box);
+  constraint.analyze_constraints(test_box, topology);
+  wire_fcl(constraint, gripper_, test_box);
 }
 
 // Sub-millimetre exclusion geometry must not crash during collision query.
@@ -297,9 +224,7 @@ TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
   gp_Trsf transform;
   transform.SetTranslation(gp_Vec(0.1, 0.1, 0.1));
 
-  EXPECT_NO_FATAL_FAILURE({
-    constraint.intersects_exclusion_zone(transform, 0.03);
-  });
+  constraint.intersects_exclusion_zone(transform, 0.03);
 }
 
 // Sample areas are empty until analyze_constraints() is called.
@@ -315,9 +240,113 @@ TEST_F(ExclusionZoneConstraintTest, SampleAreasEmptyBeforeAnalysis)
 
   ExclusionZoneConstraint constraint(mapper_, gripper_, circles);
 
-  std::vector<hold_and_weld_gripper_sampler::core::SampleArea> areas =
-    constraint.get_sample_areas();
-  EXPECT_TRUE(areas.empty());
+  EXPECT_EQ(constraint.get_name(), "ExclusionZoneConstraint");
+  EXPECT_TRUE(constraint.get_sample_areas().empty());
+}
+
+// --- Exclusion wires ---------------------------------------------------------
+//
+// The wires feed the contact sampler's point-in-wire test, so each must be
+// closed, and together they must keep every sample out of the zone.
+
+namespace
+{
+
+// Walk every face with its exclusion wires applied and return the surviving
+// samples that satisfy `inside_zone`.
+std::vector<gp_Pnt> samples_left_in_zone(
+  const Topology & topology,
+  const std::vector<core::SampleArea> & areas,
+  const std::function<bool(const gp_Pnt &)> & inside_zone)
+{
+  sampling::FaceSamplingConfig config;
+  config.sample_density = 0.002;
+
+  std::vector<gp_Pnt> leaked;
+  const auto & surfaces = topology.get_all_surfaces();
+  for (size_t id = 0; id < surfaces.size(); ++id) {
+    std::vector<std::pair<TopoDS_Wire, bool>> wires;
+    for (const auto & area : areas) {
+      if (area.surface_id == static_cast<int>(id)) {
+        wires.emplace_back(area.wire, area.is_exclusion);
+      }
+    }
+    for (const auto & sample : sampling::sample_face_region(surfaces[id].face, config, wires)) {
+      if (inside_zone(sample.point)) {leaked.push_back(sample.point);}
+    }
+  }
+  return leaked;
+}
+
+}  // namespace
+
+// A weld seam running off the edge of a face: the tube cuts the top face in a
+// strip that ends at the face's own boundary, and cuts the side face in a
+// half-disk. A section of the tube against the part returns only the cut
+// curves, never the face edges that close these regions, so the wires came out
+// open and the sampler could not tell inside from outside.
+TEST_F(ExclusionZoneConstraintTest, SeamRunningOffAFaceYieldsClosedWiresThatExclude)
+{
+  exclusion_line seam;
+  seam.start = Eigen::Vector3d(0.05, 0.05, 0.1);
+  seam.end = Eigen::Vector3d(0.2, 0.05, 0.1);
+  seam.exclusion_radius = 0.01;
+
+  ExclusionZoneConstraint constraint(
+    mapper_, gripper_, std::nullopt, std::nullopt, std::vector<exclusion_line>{seam});
+
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
+  const Topology topology = mapper_->load_from_shape(box);
+  constraint.analyze_constraints(box, topology);
+
+  const auto areas = constraint.get_sample_areas();
+  ASSERT_FALSE(areas.empty()) << "the seam crosses the top and side faces";
+  for (const auto & area : areas) {
+    ASSERT_FALSE(area.wire.IsNull());
+    EXPECT_TRUE(area.is_exclusion);
+    EXPECT_TRUE(is_wire_closed(area.wire))
+      << "surface " << area.surface_id << ": open wires break point-in-wire ray casting";
+  }
+
+  // Strictly inside the tube, with a margin so boundary samples do not count.
+  const auto leaked = samples_left_in_zone(
+    topology, areas, [](const gp_Pnt & p) {
+      const double r = std::hypot(p.Y() - 0.05, p.Z() - 0.1);
+      return p.X() > 0.052 && r < 0.008;
+    });
+  EXPECT_TRUE(leaked.empty())
+    << leaked.size() << " sample(s) survive inside the seam, first at ("
+    << (leaked.empty() ? 0.0 : leaked[0].X()) << ", "
+    << (leaked.empty() ? 0.0 : leaked[0].Y()) << ", "
+    << (leaked.empty() ? 0.0 : leaked[0].Z()) << ")";
+}
+
+// A screw hole in the middle of a face. The volume sits on the face, so the
+// samples to exclude lie on its boundary rather than strictly inside it.
+TEST_F(ExclusionZoneConstraintTest, CircleInsideAFaceExcludesItsDisk)
+{
+  exclusion_circle hole;
+  hole.center = Eigen::Vector3d(0.05, 0.05, 0.1);
+  hole.normal = Eigen::Vector3d(0.0, 0.0, 1.0);
+  hole.radius = 0.02;
+  hole.projection_depth = 0.02;
+
+  ExclusionZoneConstraint constraint(mapper_, gripper_, std::vector<exclusion_circle>{hole});
+
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
+  const Topology topology = mapper_->load_from_shape(box);
+  constraint.analyze_constraints(box, topology);
+
+  const auto areas = constraint.get_sample_areas();
+  ASSERT_EQ(areas.size(), 1u) << "only the top face touches the hole";
+  EXPECT_TRUE(is_wire_closed(areas[0].wire));
+
+  const auto leaked = samples_left_in_zone(
+    topology, areas, [](const gp_Pnt & p) {
+      return std::abs(p.Z() - 0.1) < 1e-9 &&
+             std::hypot(p.X() - 0.05, p.Y() - 0.05) < 0.018;
+    });
+  EXPECT_TRUE(leaked.empty()) << leaked.size() << " sample(s) survive inside the hole";
 }
 
 int main(int argc, char ** argv)

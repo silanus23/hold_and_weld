@@ -102,14 +102,37 @@ public:
   void add_secondary_shapes(const std::vector<TopoDS_Shape> & secondary_shapes);
 
   /**
-   * @brief Add ground plane as an FCL Halfspace (infinite, no size limits).
+   * @brief Add the ground the workpiece sits on.
+   *
+   * With a positive footprint and an upward normal the ground is a finite box:
+   * a weld setup is bounded, and an infinite plane rejects gripper poses that
+   * reach past the edge of the table into free space. Falls back to an infinite
+   * FCL Halfspace when no footprint is given, or when the normal is not +Z
+   * (a tilted ground has no axis-aligned footprint to speak of).
    *
    * @param normal Outward unit normal of the ground surface (default (0,0,1) = floor up).
    * @param plane_offset Signed distance from world origin along normal to the plane surface.
+   * @param size_x Footprint extent along X [m]; <= 0 selects the infinite halfspace.
+   * @param size_y Footprint extent along Y [m]; <= 0 selects the infinite halfspace.
+   * @param center_x Footprint centre along X [m].
+   * @param center_y Footprint centre along Y [m].
+   * @param thickness How far the ground body extends below its surface [m]. Only
+   *   needs to exceed how far below the floor a candidate pose can reach.
    */
   void add_ground_plane(
     const Eigen::Vector3d & normal = Eigen::Vector3d(0.0, 0.0, 1.0),
-    double plane_offset = 0.0);
+    double plane_offset = 0.0,
+    double size_x = 0.0,
+    double size_y = 0.0,
+    double center_x = 0.0,
+    double center_y = 0.0,
+    double thickness = 1.0);
+
+  /**
+   * @brief True if the ground is modelled as a finite footprint rather than an
+   *        infinite plane.
+   */
+  bool has_finite_ground() const;
 
   /**
    * @brief Returns true if a ground plane BVH has been added to this checker.
@@ -240,9 +263,12 @@ private:
     size_t secondary_index = 0) const;
 
   /**
-   * @brief Check collision between gripper components and the ground halfspace
+   * @brief Check collision between gripper components and the ground body
+   *
+   * Handles both ground models: the finite footprint box and the infinite
+   * halfspace fallback.
    */
-  bool check_gripper_collision_halfspace(
+  bool check_gripper_collision_ground(
     const gp_Trsf & gripper_transform,
     double grip_distance,
     double tolerance) const;
@@ -276,9 +302,15 @@ private:
   std::vector<std::shared_ptr<BVHModel>> exclusion_bvhs_;
   std::vector<std::shared_ptr<BVHModel>> secondary_bvhs_;
 
-  // Ground plane as an FCL Halfspace — infinite, normal · x <= d is solid.
+  // The ground, in one of two forms. Preferred: a finite box covering the weld
+  // setup's footprint, top face at the ground surface. Fallback, used when no
+  // footprint is configured or the ground is not level: an infinite halfspace,
+  // normal · x <= d is solid.
   using Halfspace = fcl::Halfspace<FCLScalar>;
+  using Box = fcl::Box<FCLScalar>;
   std::shared_ptr<Halfspace> ground_halfspace_;
+  std::shared_ptr<Box> ground_box_;
+  Transform3 ground_box_tf_{Transform3::Identity()};
 
   double linear_deflection_;
   bool valid_;

@@ -182,18 +182,46 @@ void FCLCollisionChecker::add_secondary_shapes(
 
 void FCLCollisionChecker::add_ground_plane(
   const Eigen::Vector3d & normal,
-  double plane_offset)
+  double plane_offset,
+  double size_x,
+  double size_y,
+  double center_x,
+  double center_y,
+  double thickness)
 {
+  ground_halfspace_ = nullptr;
+  ground_box_ = nullptr;
+
   double norm_mag = normal.norm();
   if (norm_mag < 1e-9) {
     RCLCPP_ERROR(logger_,
       "add_ground_plane: normal vector has near-zero magnitude — "
       "ground collision will NOT be checked");
-    ground_halfspace_ = nullptr;
     return;
   }
 
   Eigen::Vector3d unit_normal = normal / norm_mag;
+  const bool level = unit_normal.z() > 1.0 - 1e-9;
+  const bool have_footprint = size_x > 0.0 && size_y > 0.0 && thickness > 0.0;
+
+  if (level && have_footprint) {
+    ground_box_ = std::make_shared<Box>(
+      static_cast<FCLScalar>(size_x),
+      static_cast<FCLScalar>(size_y),
+      static_cast<FCLScalar>(thickness));
+
+    // Top face sits on the ground surface, body hangs below it.
+    ground_box_tf_ = Transform3::Identity();
+    ground_box_tf_.translation() = fcl::Vector3<FCLScalar>(
+      static_cast<FCLScalar>(center_x),
+      static_cast<FCLScalar>(center_y),
+      static_cast<FCLScalar>(plane_offset - thickness * 0.5));
+
+    RCLCPP_DEBUG(logger_,
+      "Ground box set: %.2f x %.2f m centred on (%.3f, %.3f), surface z=%.4f, %.2f m thick",
+      size_x, size_y, center_x, center_y, plane_offset, thickness);
+    return;
+  }
 
   // FCL Halfspace(n, d): solid is n·x < d — pass plane_offset directly
   ground_halfspace_ = std::make_shared<Halfspace>(
@@ -201,8 +229,14 @@ void FCLCollisionChecker::add_ground_plane(
     plane_offset);
 
   RCLCPP_DEBUG(logger_,
-    "Ground halfspace set: normal=(%.4f,%.4f,%.4f) offset=%.4f",
-    unit_normal.x(), unit_normal.y(), unit_normal.z(), plane_offset);
+    "Ground halfspace set (infinite): normal=(%.4f,%.4f,%.4f) offset=%.4f%s",
+    unit_normal.x(), unit_normal.y(), unit_normal.z(), plane_offset,
+    level ? " — no footprint configured" : " — ground is not level");
+}
+
+bool FCLCollisionChecker::has_finite_ground() const
+{
+  return ground_box_ != nullptr;
 }
 
 bool FCLCollisionChecker::collides_with_primary(
@@ -237,8 +271,8 @@ bool FCLCollisionChecker::collides_with_ground(
   double grip_distance,
   double tolerance) const
 {
-  if (!valid_ || !ground_halfspace_) {return false;}
-  return check_gripper_collision_halfspace(gripper_transform, grip_distance, tolerance);
+  if (!valid_ || (!ground_halfspace_ && !ground_box_)) {return false;}
+  return check_gripper_collision_ground(gripper_transform, grip_distance, tolerance);
 }
 
 bool FCLCollisionChecker::collides_with_secondaries(
@@ -317,7 +351,7 @@ bool FCLCollisionChecker::is_valid() const
 
 bool FCLCollisionChecker::has_ground_plane() const
 {
-  return ground_halfspace_ != nullptr;
+  return ground_halfspace_ != nullptr || ground_box_ != nullptr;
 }
 
 void FCLCollisionChecker::log_collision_stats() const
@@ -508,12 +542,12 @@ void FCLCollisionChecker::compute_finger_transforms(
   f2_tf.translation() = finger_2_axis_ * ((grip_distance + rest_gap_) / 2.0);
 }
 
-bool FCLCollisionChecker::check_gripper_collision_halfspace(
+bool FCLCollisionChecker::check_gripper_collision_ground(
   const gp_Trsf & gripper_transform,
   double grip_distance,
   double tolerance) const
 {
-  if (!ground_halfspace_) {return false;}
+  if (!ground_halfspace_ && !ground_box_) {return false;}
 
   ++stats_.total_checks;
 
@@ -523,16 +557,31 @@ bool FCLCollisionChecker::check_gripper_collision_halfspace(
   Transform3 f1_tf = base_tf * f1_local;
   Transform3 f2_tf = base_tf * f2_local;
 
-  std::shared_ptr<Halfspace> hs_for_check;
-  if (tolerance > 0.0) {
-    hs_for_check = std::make_shared<Halfspace>(
+  // Tolerance inflates the ground body. For the box that means growing every
+  // dimension, which lifts the top face by exactly tolerance.
+  std::shared_ptr<fcl::CollisionGeometry<FCLScalar>> ground_geom;
+  Transform3 ground_tf = Transform3::Identity();
+
+  if (ground_box_) {
+    ground_tf = ground_box_tf_;
+    if (tolerance > 0.0) {
+      const auto & side = ground_box_->side;
+      ground_geom = std::make_shared<Box>(
+        side[0] + static_cast<FCLScalar>(2.0 * tolerance),
+        side[1] + static_cast<FCLScalar>(2.0 * tolerance),
+        side[2] + static_cast<FCLScalar>(2.0 * tolerance));
+    } else {
+      ground_geom = ground_box_;
+    }
+  } else if (tolerance > 0.0) {
+    ground_geom = std::make_shared<Halfspace>(
       ground_halfspace_->n,
       ground_halfspace_->d + static_cast<FCLScalar>(tolerance));
   } else {
-    hs_for_check = ground_halfspace_;
+    ground_geom = ground_halfspace_;
   }
 
-  CollisionObject hs_obj(hs_for_check, Transform3::Identity());
+  CollisionObject hs_obj(ground_geom, ground_tf);
 
   fcl::CollisionRequest<FCLScalar> request;
   fcl::CollisionResult<FCLScalar> result;

@@ -349,7 +349,6 @@ TEST_F(ContactPointSamplerTest, InclusionZoneRestrictsSampling)
   std::vector<SampleArea> inclusions = {inclusion};
   auto pairs_restricted = sampler.generate_contact_pairs(topology, all_ids, inclusions);
 
-  // Any contact point that landed on the restricted surface must be within the inclusion bounds
   for (const auto & pair : pairs_restricted) {
     if (pair.surface_id_1 == z_surfaces[0]) {
       EXPECT_GE(pair.contact_1.X(), 0.03 - 1e-6);
@@ -389,7 +388,6 @@ TEST_F(ContactPointSamplerTest, PairContactGeometryIsValid)
   ASSERT_GT(pairs.size(), 0);
 
   for (const auto & pair : pairs) {
-    // Check projection distance: contact points lie on their respective surfaces
     Handle(Geom_Surface) surf1 = BRep_Tool::Surface(pair.face_1);
     GeomAPI_ProjectPointOnSurf proj1(pair.contact_1, surf1);
     if (proj1.NbPoints() > 0) {
@@ -402,7 +400,6 @@ TEST_F(ContactPointSamplerTest, PairContactGeometryIsValid)
       EXPECT_LT(proj2.LowerDistance(), 0.001);
     }
 
-    // Check alignment: grip axis aligns with surface normals
     gp_Vec grip_axis(pair.contact_1, pair.contact_2);
     grip_axis.Normalize();
 
@@ -412,7 +409,6 @@ TEST_F(ContactPointSamplerTest, PairContactGeometryIsValid)
     EXPECT_GE(align1, config.alignment_threshold * 0.99);
     EXPECT_GE(align2, config.alignment_threshold * 0.99);
 
-    // Check grip_distance matches computed point-to-point distance
     EXPECT_GE(pair.grip_distance, config.min_gripper_opening);
     EXPECT_LE(pair.grip_distance, config.max_gripper_opening);
 
@@ -443,7 +439,6 @@ TEST_F(ContactPointSamplerTest, WedgeAngledSurfaces)
 
   EXPECT_GT(pairs.size(), 0u);
 
-  // Every pair must satisfy the antiparallelism constraint
   const double cos_min_angle = std::cos(config.min_angle_deg * M_PI / 180.0);
   for (const auto & pair : pairs) {
     gp_Vec n1 = pair.normal_1.Normalized();
@@ -462,12 +457,10 @@ TEST_F(ContactPointSamplerTest, BoundaryConditions_ZeroPairs)
   ContactPointSampler sampler;
   std::vector<SampleArea> no_exclusions;
 
-  // Empty id list must produce zero pairs
   std::vector<int> empty_ids;
   auto pairs_empty = sampler.generate_contact_pairs(topology, empty_ids, no_exclusions);
   EXPECT_EQ(pairs_empty.size(), 0);
 
-  // A single surface id cannot form any pair
   std::vector<int> single_id = {0};
   auto pairs_single = sampler.generate_contact_pairs(topology, single_id, no_exclusions);
   EXPECT_EQ(pairs_single.size(), 0);

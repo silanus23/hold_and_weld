@@ -46,6 +46,7 @@ class JawClearanceCheck;
 namespace constraints
 {
 class ExclusionZoneConstraint;
+class GroundConstraint;
 class KissingSurfaceConstraint;
 }
 
@@ -186,8 +187,8 @@ inline Grasp to_grasp(const GraspCandidate & candidate)
  *    too narrow after trimming (< min_cliff_width_deg) are discarded.
  * 6. Intersect surviving LOW arcs from both contacts, then cluster -> one
  *    approach seed per cliff.
- * 7. Validate each seed against primary collision, exclusion zones, and
- *    secondary shapes via FCL.
+ * 7. Validate each seed against primary collision, exclusion zones, the
+ *    ground, and secondary shapes via FCL.
  */
 class GraspOrientationFinder
 {
@@ -202,6 +203,8 @@ public:
 
   void set_jaw_clearance_check(
     std::shared_ptr<const geometry::JawClearanceCheck> jaw_clearance_check);
+  void set_ground_constraint(
+    std::shared_ptr<const constraints::GroundConstraint> ground_constraint);
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
   void set_embree_checker(std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker);
 
@@ -239,6 +242,7 @@ private:
   ParsedGripper gripper_;
   std::shared_ptr<const constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<const constraints::KissingSurfaceConstraint> kissing_constraint_;
+  std::shared_ptr<const constraints::GroundConstraint> ground_constraint_;
   std::shared_ptr<const geometry::JawClearanceCheck> jaw_clearance_check_;
   OrientationConfig config_;
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;

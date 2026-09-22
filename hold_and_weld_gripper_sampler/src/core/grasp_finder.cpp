@@ -87,23 +87,31 @@ std::string GraspFinder::initialize()
 
         exclusion_constraint_ = std::make_shared<constraints::ExclusionZoneConstraint>(
         mapper_, gripper_, circles_opt, polygons_opt, lines_opt,
-        config_.mesh_linear_deflection, config_.mesh_angular_deflection);
+        config_.mesh_linear_deflection, config_.mesh_angular_deflection,
+        config_.exclusion_sample_density);
 
-      // Merge ground shapes into the secondary list for kissing surface contact analysis.
-      // Ground shapes must be included here so the bottom face of the workpiece is
-      // correctly banned. They are kept separate for FCL (routed to ground_halfspace_).
-        std::vector<TopoDS_Shape> all_contact_shapes = secondary_shapes_;
-        for (const auto & gs : config_.ground_shapes) {
-          all_contact_shapes.push_back(gs);
-        }
 
         kissing_constraint_ = std::make_shared<constraints::KissingSurfaceConstraint>(
-        mapper_, gripper_, all_contact_shapes,
+        mapper_, gripper_, secondary_shapes_,
         config_.kissing_contact_threshold, config_.collision_tolerance,
         config_.kissing_contact_distance_threshold, config_.mesh_linear_deflection);
 
+        constraints::GroundConfig ground_config;
+        ground_config.bottom_z = config_.ground_bottom_z;
+        ground_config.center_x = config_.ground_center_x;
+        ground_config.center_y = config_.ground_center_y;
+        ground_config.size_x = config_.ground_size_x;
+        ground_config.size_y = config_.ground_size_y;
+        ground_config.contact_band = config_.ground_safety_margin;
+        ground_config.support_threshold = config_.kissing_contact_threshold;
+        ground_config.collision_tolerance = config_.collision_tolerance;
+        ground_constraint_ = std::make_shared<constraints::GroundConstraint>(ground_config);
+
         exclusion_constraint_->analyze_constraints(primary_shape_, primary_topology_);
         kissing_constraint_->analyze_constraints(primary_topology_);
+        if (!config_.ground_shapes.empty() || config_.enable_ground_plane_check) {
+          ground_constraint_->analyze_constraints(primary_topology_);
+        }
 
         if (!config_.use_fcl) {
           RCLCPP_ERROR(logger_, "GraspFinder::initialize(): FCL is required but use_fcl=false. "
@@ -126,8 +134,14 @@ std::string GraspFinder::initialize()
         if (config_.use_fcl_for_ground_plane &&
         (!config_.ground_shapes.empty() || config_.enable_ground_plane_check))
         {
-          fcl_checker_->add_ground_plane(Eigen::Vector3d(0.0, 0.0, 1.0), config_.ground_bottom_z);
-          RCLCPP_DEBUG(logger_, "Ground halfspace added to FCL (z=%.4f)", config_.ground_bottom_z);
+          fcl_checker_->add_ground_plane(
+            Eigen::Vector3d(0.0, 0.0, 1.0), config_.ground_bottom_z,
+            config_.ground_size_x, config_.ground_size_y,
+            config_.ground_center_x, config_.ground_center_y);
+          RCLCPP_INFO(logger_,
+            "Ground added to FCL: %s, surface z=%.4f",
+            fcl_checker_->has_finite_ground() ? "finite footprint" : "infinite halfspace",
+            config_.ground_bottom_z);
         }
 
         if (!fcl_checker_->is_valid()) {
@@ -137,6 +151,7 @@ std::string GraspFinder::initialize()
 
         exclusion_constraint_->set_fcl_checker(fcl_checker_);
         kissing_constraint_->set_fcl_checker(fcl_checker_);
+        ground_constraint_->set_fcl_checker(fcl_checker_);
 
         if (config_.jaw_clearance.enabled) {
           jaw_clearance_check_ = std::make_shared<geometry::JawClearanceCheck>(
@@ -175,6 +190,10 @@ GraspFinderResult GraspFinder::find()
 
   try {
     auto banned_ids = kissing_constraint_->get_banned_surface_ids();
+    if (ground_constraint_) {
+      const auto & ground_banned = ground_constraint_->get_banned_surface_ids();
+      banned_ids.insert(banned_ids.end(), ground_banned.begin(), ground_banned.end());
+    }
     auto valid_ids = compute_valid_surface_ids(banned_ids);
     auto exclusion_areas = merge_sample_areas();
 
@@ -210,6 +229,7 @@ GraspFinderResult GraspFinder::find()
       config_.orientation);
 
     finder.set_jaw_clearance_check(jaw_clearance_check_);
+    finder.set_ground_constraint(ground_constraint_);
     finder.set_fcl_checker(fcl_checker_);
     if (fcl_checker_) {
       finder.set_embree_checker(fcl_checker_->get_embree_primary());
@@ -300,6 +320,11 @@ std::vector<core::SampleArea> GraspFinder::merge_sample_areas() const
   merged.reserve(exclusion_areas.size() + kissing_areas.size());
   merged.insert(merged.end(), exclusion_areas.begin(), exclusion_areas.end());
   merged.insert(merged.end(), kissing_areas.begin(), kissing_areas.end());
+
+  if (ground_constraint_) {
+    const auto & ground_areas = ground_constraint_->get_sample_areas();
+    merged.insert(merged.end(), ground_areas.begin(), ground_areas.end());
+  }
 
   return merged;
 }

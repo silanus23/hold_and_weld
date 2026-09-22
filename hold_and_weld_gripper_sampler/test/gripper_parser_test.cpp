@@ -318,19 +318,16 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_ExtractsAllFields
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
 
-  // Check link names
   EXPECT_EQ(gripper.base_link_name, test_constants::kValidBaseLinkName);
   EXPECT_EQ(gripper.finger_1_link_name, test_constants::kValidFinger1LinkName);
   EXPECT_EQ(gripper.finger_2_link_name, test_constants::kValidFinger2LinkName);
 
-  // Check joint names
   EXPECT_EQ(gripper.finger_1_joint_name, test_constants::kValidFinger1JointName);
   EXPECT_EQ(gripper.finger_2_joint_name, test_constants::kValidFinger2JointName);
 
-  // Check gripper type
   EXPECT_EQ(gripper.gripper_type, test_constants::kDefaultGripperType);
 
-  // Check joint axes - left finger moves along +Y, right finger moves along -Y
+  // left finger moves along +Y, right finger moves along -Y
   EXPECT_NEAR(gripper.finger_1_axis.x(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_1_axis.y(), 1.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_1_axis.z(), 0.0, test_constants::kPositionTolerance);
@@ -339,11 +336,10 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_ExtractsAllFields
   EXPECT_NEAR(gripper.finger_2_axis.y(), -1.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_2_axis.z(), 0.0, test_constants::kPositionTolerance);
 
-  // Check opening limits - max should be 2 * 0.15 = 0.30 (min is always 0, not stored)
+  // max = 2 * 0.15 = 0.30 (min is always 0, not stored)
   EXPECT_NEAR(gripper.max_opening, test_constants::kValidGripperMaxOpening,
     test_constants::kPositionTolerance);
 
-  // Check TCP offset
   EXPECT_NEAR(gripper.tcp_offset.x(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.tcp_offset.y(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.tcp_offset.z(), test_constants::kValidGripperTcpOffsetZ,
@@ -353,7 +349,6 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_ExtractsAllFields
   EXPECT_NEAR(gripper.tcp_rpy.y(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.tcp_rpy.z(), 0.0, test_constants::kPositionTolerance);
 
-  // Check shapes are valid (not null)
   EXPECT_FALSE(gripper.base.IsNull());
   EXPECT_FALSE(gripper.finger_1.IsNull());
   EXPECT_FALSE(gripper.finger_2.IsNull());
@@ -363,7 +358,6 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_CreatesCorrectGeo
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
 
-  // Verify base geometry dimensions using bounding box
   // Base is a box with size="0.08 0.12 0.04"
   Bnd_Box base_bbox;
   BRepBndLib::Add(gripper.base, base_bbox);
@@ -379,9 +373,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithValidGripper_CreatesCorrectGeo
   EXPECT_NEAR(base_y_size, 0.12, test_constants::kPositionTolerance);
   EXPECT_NEAR(base_z_size, 0.04, test_constants::kPositionTolerance);
 
-  // Verify finger geometry dimensions
-  // Each finger is a box with size="0.03 0.04 0.20"
-  // But finger has origin xyz="0 0 -0.1", so it's offset
+  // Each finger is a box with size="0.03 0.04 0.20", origin xyz="0 0 -0.1" (offset)
   Bnd_Box finger1_bbox;
   BRepBndLib::Add(gripper.finger_1, finger1_bbox);
 
@@ -400,21 +392,18 @@ TEST_F(GripperParserTest, ConfigureGripper_WithValidGripper_CreatesCompoundShape
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
 
-  // Configure gripper at min opening (closed) — min is always 0
+  // min opening (closed) is always 0
   TopoDS_Shape closed_gripper = gripper.configure(0.0);
   EXPECT_FALSE(closed_gripper.IsNull());
 
-  // Configure gripper at mid opening
   double mid_opening = gripper.max_opening / 2.0;
   TopoDS_Shape mid_gripper = gripper.configure(mid_opening);
   EXPECT_FALSE(mid_gripper.IsNull());
 
-  // Configure gripper at max opening
   TopoDS_Shape open_gripper = gripper.configure(gripper.max_opening);
   EXPECT_FALSE(open_gripper.IsNull());
 
-  // Verify bounding boxes increase as gripper opens
-  // Gripper opens along Y axis, so Y dimension should increase
+  // Gripper opens along Y axis, so Y span must increase as it opens
   Bnd_Box closed_bbox, mid_bbox, open_bbox;
   BRepBndLib::Add(closed_gripper, closed_bbox);
   BRepBndLib::Add(mid_gripper, mid_bbox);
@@ -431,7 +420,6 @@ TEST_F(GripperParserTest, ConfigureGripper_WithValidGripper_CreatesCompoundShape
   open_bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
   double open_y_span = ymax - ymin;
 
-  // Y span should increase as gripper opens
   EXPECT_LT(closed_y_span, mid_y_span);
   EXPECT_LT(mid_y_span, open_y_span);
 }
@@ -440,11 +428,8 @@ TEST_F(GripperParserTest, ConfigureGripper_WithExcessiveOpening_ClampsToMaxOpeni
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(VALID_GRIPPER_URDF);
 
-  // Request opening beyond max
   double excessive_opening = gripper.max_opening + 0.5;
   TopoDS_Shape clamped_gripper = gripper.configure(excessive_opening);
-
-  // Should clamp to max opening
   TopoDS_Shape max_gripper = gripper.configure(gripper.max_opening);
 
   Bnd_Box clamped_bbox, max_bbox;
@@ -459,7 +444,6 @@ TEST_F(GripperParserTest, ConfigureGripper_WithExcessiveOpening_ClampsToMaxOpeni
   max_bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
   double max_y_span = ymax - ymin;
 
-  // Both should be the same (clamped to max)
   EXPECT_NEAR(clamped_y_span, max_y_span, test_constants::kPositionTolerance);
 }
 
@@ -467,12 +451,11 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithCylinderGripper_ParsesCorrectl
 {
   ParsedGripper gripper = parser_.parse_from_urdf_string(CYLINDER_GRIPPER_URDF);
 
-  // Shapes should be valid
   EXPECT_FALSE(gripper.base.IsNull());
   EXPECT_FALSE(gripper.finger_1.IsNull());
   EXPECT_FALSE(gripper.finger_2.IsNull());
 
-  // Axes should be along X (finger 1: +X, finger 2: -X)
+  // finger 1: +X, finger 2: -X
   EXPECT_NEAR(gripper.finger_1_axis.x(), 1.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_1_axis.y(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_1_axis.z(), 0.0, test_constants::kPositionTolerance);
@@ -481,7 +464,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithCylinderGripper_ParsesCorrectl
   EXPECT_NEAR(gripper.finger_2_axis.y(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_2_axis.z(), 0.0, test_constants::kPositionTolerance);
 
-  // Max opening should be 2 * 0.05 = 0.10
+  // max = 2 * 0.05 = 0.10
   EXPECT_NEAR(gripper.max_opening, test_constants::kCylinderGripperMaxOpening,
     test_constants::kPositionTolerance);
 }
@@ -541,7 +524,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingOptionalFields_UsesDefa
 
   ParsedGripper gripper = parser_.parse_from_urdf_string(minimal_urdf);
 
-  // Default TCP offset should be zero
+  // default TCP offset is zero
   EXPECT_NEAR(gripper.tcp_offset.x(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.tcp_offset.y(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.tcp_offset.z(), 0.0, test_constants::kPositionTolerance);
@@ -550,7 +533,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingOptionalFields_UsesDefa
   EXPECT_NEAR(gripper.tcp_rpy.y(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.tcp_rpy.z(), 0.0, test_constants::kPositionTolerance);
 
-  // Default gripper type should be "parallel"
+  // default gripper type is "parallel"
   EXPECT_EQ(gripper.gripper_type, test_constants::kDefaultGripperType);
 }
 
@@ -608,7 +591,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithNonNormalizedAxis_NormalizesTo
 
   ParsedGripper gripper = parser_.parse_from_urdf_string(non_normalized_urdf);
 
-  // Both axes should be normalized to unit vectors
+  // both axes normalized to unit vectors
   double finger_1_magnitude = gripper.finger_1_axis.norm();
   double finger_2_magnitude = gripper.finger_2_axis.norm();
 
@@ -617,12 +600,10 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithNonNormalizedAxis_NormalizesTo
   EXPECT_NEAR(finger_2_magnitude, test_constants::kUnitMagnitude,
     test_constants::kPositionTolerance);
 
-  // Verify normalized components (0, 3, 4) -> (0, 0.6, 0.8)
   EXPECT_NEAR(gripper.finger_1_axis.x(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_1_axis.y(), 0.6, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_1_axis.z(), 0.8, test_constants::kPositionTolerance);
 
-  // Verify finger 2: (0, -2, 0) -> (0, -1, 0)
   EXPECT_NEAR(gripper.finger_2_axis.x(), 0.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_2_axis.y(), -1.0, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_2_axis.z(), 0.0, test_constants::kPositionTolerance);

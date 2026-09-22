@@ -50,6 +50,31 @@ ament_cpplint, ament_uncrustify (auto-reformats C++), ament_lint_cmake, ament_xm
 ament_flake8, pydocstyle, codespell. Run `pre-commit run --all-files` before
 submitting non-trivial changes if the hooks are installed.
 
+## Doxygen convention for private helpers
+
+Public methods always get full `@brief` + one `@param` per parameter + `@return`
+if non-void — that's the class's contract with everyone else, no exceptions.
+
+Private/static helpers get `@brief` only, by default: the reader is already in
+the `.cpp` file, one line above the body. Add `@param` to a private helper only
+when the signature alone wouldn't stop a misuse the compiler can't catch:
+
+- a boolean flag whose meaning isn't obvious from the name alone
+  (`include_clearance` in `exclusion_zone_constraint.hpp` needs it; a name like
+  `strict` would too — `hit_found` doesn't)
+- an output/mutated parameter (non-const reference or pointer used to return
+  data), e.g. the optional `resting_samples` output on
+  `GroundConstraint::measure_ground_support`
+- a unit, frame, or sign convention not encoded in the name (a bare `x`, `y`
+  pair with no frame in the name)
+- two or more same-type parameters whose order compiles either way but is
+  silently wrong if swapped
+
+Pick one or the other per file, not per function — a header with several
+near-identical private helpers (e.g. a family of `parse_X(node, config)`
+functions) reads fine as all-brief; a header of one-off helpers with
+distinct signatures usually wants @param throughout.
+
 ## Cross-package data flow
 
 ```

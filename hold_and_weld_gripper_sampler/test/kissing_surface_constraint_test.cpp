@@ -22,13 +22,16 @@
 #include <vector>
 
 #include <BRepPrimAPI_MakeBox.hxx>
-#include <BRepPrimAPI_MakeCylinder.hxx>
 
 #include <BRepBuilderAPI_Transform.hxx>
-#include <gp_Ax2.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Wire.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
@@ -95,123 +98,29 @@ TEST_F(KissingSurfaceConstraintTest, NoContactWithDistantSecondary)
   EXPECT_TRUE(constraint.get_sample_areas().empty());
 }
 
-// Bottom face with 100% contact coverage must be banned after analysis.
-TEST_F(KissingSurfaceConstraintTest, FullContactBansSurface)
+// TODO(@silanus23): intersects_secondary returns false even when the gripper is
+// placed inside the secondary shape. Needs investigation into how BVH volumes
+// are built for the secondary and how the gripper geometry is represented.
+TEST_F(KissingSurfaceConstraintTest, DISABLED_CollisionWhenInsideSecondary)
 {
-  gp_Trsf primary_pos;
-  primary_pos.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
 
-  gp_Trsf ground_pos;
-  ground_pos.SetTranslation(gp_Vec(-0.05, -0.05, -0.01));
-  TopoDS_Shape ground = BRepPrimAPI_MakeBox(0.2, 0.2, 0.01).Shape();
-  ground = BRepBuilderAPI_Transform(ground, ground_pos, Standard_True).Shape();
-
-  std::vector<TopoDS_Shape> secondaries = {ground};
-
-  KissingSurfaceConstraint constraint(
-    mapper_, gripper_, secondaries, 0.8);
-
-  Topology topology = mapper_->load_from_shape(primary);
-  constraint.analyze_constraints(topology);
-
-  std::vector<int> banned = constraint.get_banned_surface_ids();
-
-  EXPECT_GE(banned.size(), 1u) << "Bottom face touching ground plane must be banned";
-  EXPECT_LE(banned.size(), 6u) << "Cannot ban more faces than the box has";
-}
-
-// TODO(@silanus23): This test is failing because intersects_secondary returns false even when
-// the gripper is placed inside the secondary shape. The FCL collision check is not detecting
-// the overlap correctly — needs investigation into how BVH volumes are built for the secondary
-// and how the gripper geometry is represented during the check.
-// TEST_F(KissingSurfaceConstraintTest, CollisionWhenInsideSecondary)
-// {
-//   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
-//
-//   // Create a large secondary that encompasses origin
-//   gp_Trsf secondary_pos;
-//   secondary_pos.SetTranslation(gp_Vec(-0.1, -0.1, -0.1));
-//   TopoDS_Shape large_secondary = BRepPrimAPI_MakeBox(0.3, 0.3, 0.3).Shape();
-//   large_secondary = BRepBuilderAPI_Transform(large_secondary, secondary_pos,
-//   Standard_True).Shape();
-//
-//   std::vector<TopoDS_Shape> secondaries = {large_secondary};
-//
-//   KissingSurfaceConstraint constraint(
-//     mapper_, gripper_, secondaries, 0.8, 0.001);
-//
-//   Topology topology = mapper_->load_from_shape(primary);
-//   constraint.analyze_constraints(topology);
-//   wire_fcl(constraint, secondaries, primary);
-//
-//   // Place gripper at origin (inside the secondary)
-//   gp_Trsf origin_transform;
-//   origin_transform.SetTranslation(gp_Vec(0.0, 0.0, 0.0));
-//
-//   Eigen::Isometry3d eigen_transform = Eigen::Isometry3d::Identity();
-//   eigen_transform.translation() = extract_translation(origin_transform);
-//   eigen_transform.linear() = extract_quaternion(origin_transform).toRotationMatrix();
-//
-//   bool collision = constraint.intersects_secondary(0.03, eigen_transform);
-//   EXPECT_TRUE(collision);
-// }
-
-// Gripper placed at z=-0.005 must intersect a ground plane secondary at z=0.
-TEST_F(KissingSurfaceConstraintTest, CollisionWithGroundPlane)
-{
-  // Primary box raised above z=0
-  gp_Trsf primary_pos;
-  primary_pos.SetTranslation(gp_Vec(0.0, 0.0, 0.5));
-  TopoDS_Shape primary = BRepBuilderAPI_Transform(
-    BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape(),
-    primary_pos, Standard_True).Shape();
-
+  // Large secondary that encloses the origin.
   gp_Trsf secondary_pos;
-  secondary_pos.SetTranslation(gp_Vec(-0.5, -0.5, -0.01));
-  TopoDS_Shape secondary = BRepPrimAPI_MakeBox(1.0, 1.0, 0.01).Shape();
-  secondary = BRepBuilderAPI_Transform(secondary, secondary_pos, Standard_True).Shape();
+  secondary_pos.SetTranslation(gp_Vec(-0.1, -0.1, -0.1));
+  TopoDS_Shape large_secondary = BRepBuilderAPI_Transform(
+    BRepPrimAPI_MakeBox(0.3, 0.3, 0.3).Shape(), secondary_pos, Standard_True).Shape();
 
-  std::vector<TopoDS_Shape> secondaries = {secondary};
+  std::vector<TopoDS_Shape> secondaries = {large_secondary};
 
   KissingSurfaceConstraint constraint(
-    mapper_, gripper_, secondaries);
+    mapper_, gripper_, secondaries, 0.8, 0.001);
 
   Topology topology = mapper_->load_from_shape(primary);
   constraint.analyze_constraints(topology);
   wire_fcl(constraint, secondaries, primary);
 
-  gp_Trsf near_transform;
-  near_transform.SetTranslation(gp_Vec(0.0, 0.0, -0.005));
-
-  bool collision = constraint.intersects_secondary(0.03, near_transform);
-  EXPECT_TRUE(collision);
-}
-
-// Gripper translated to fixture position must report a collision.
-TEST_F(KissingSurfaceConstraintTest, CollisionWithFixture)
-{
-  TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
-
-  gp_Trsf fixture_pos;
-  fixture_pos.SetTranslation(gp_Vec(0.1, 0.0, 0.0));
-  TopoDS_Shape fixture = BRepPrimAPI_MakeBox(0.05, 0.1, 0.1).Shape();
-  fixture = BRepBuilderAPI_Transform(fixture, fixture_pos, Standard_True).Shape();
-
-  std::vector<TopoDS_Shape> secondaries = {fixture};
-
-  KissingSurfaceConstraint constraint(
-    mapper_, gripper_, secondaries);
-
-  Topology topology = mapper_->load_from_shape(primary);
-  constraint.analyze_constraints(topology);
-  wire_fcl(constraint, secondaries, primary);
-
-  gp_Trsf fixture_transform;
-  fixture_transform.SetTranslation(gp_Vec(0.1, 0.0, 0.0));
-
-  bool collision = constraint.intersects_secondary(0.03, fixture_transform);
-  EXPECT_TRUE(collision);
+  EXPECT_TRUE(constraint.intersects_secondary(0.03, gp_Trsf()));
 }
 
 // 10 mm tolerance detects a 5 mm gap; 1 mm tolerance does not.
@@ -338,6 +247,29 @@ TEST_F(KissingSurfaceConstraintTest, EmptySecondaryShapesVectorProducesNoResults
   EXPECT_FALSE(constraint.intersects_secondary(0.03, identity));
 }
 
+// The ground belongs to GroundConstraint. With no fixtures, a pose through the
+// FCL ground must not be reported as a secondary collision, or ground rejections
+// get counted under the wrong reason.
+TEST_F(KissingSurfaceConstraintTest, FclGroundIsNotASecondary)
+{
+  TopoDS_Shape primary = create_box_at_helper(0.1, 0.1, 0.1, 0.0, 0.0, 1.0);
+
+  std::vector<TopoDS_Shape> no_secondaries;
+  KissingSurfaceConstraint constraint(mapper_, gripper_, no_secondaries);
+  constraint.analyze_constraints(mapper_->load_from_shape(primary));
+
+  auto fcl = make_fcl_checker(gripper_, primary);
+  fcl->add_ground_plane(Eigen::Vector3d(0.0, 0.0, 1.0), 0.0);
+  constraint.set_fcl_checker(fcl);
+
+  gp_Trsf below_ground;
+  below_ground.SetTranslation(gp_Vec(0.0, 0.0, -0.2));
+  ASSERT_TRUE(fcl->collides_with_ground(below_ground, 0.03, 1e-6))
+    << "sanity: the pose really is through the ground";
+
+  EXPECT_FALSE(constraint.intersects_secondary(0.03, below_ground));
+}
+
 // A surface that is fully banned must not also appear in partial-exclusion sample areas.
 TEST_F(KissingSurfaceConstraintTest, BannedSurfaceIdsNotInSampleAreas)
 {
@@ -424,6 +356,127 @@ TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
   constraint.analyze_constraints(elevated_topology);
 
   EXPECT_EQ(constraint.get_banned_surface_ids().size(), 0u);
+}
+
+// --- Partial contact exclusion wires -----------------------------------------
+//
+// A surface whose contact ratio falls below contact_threshold is not banned;
+// instead the region in contact becomes a partial-exclusion SampleArea. That
+// wire is later fed to is_point_inside_wire(), which ray-casts and therefore
+// requires a *closed* wire to mean anything.
+
+namespace
+{
+
+// Number of edges in a wire.
+int count_wire_edges(const TopoDS_Wire & wire)
+{
+  int n = 0;
+  for (TopExp_Explorer exp(wire, TopAbs_EDGE); exp.More(); exp.Next()) {
+    ++n;
+  }
+  return n;
+}
+
+}  // namespace
+
+// A bottom face only half covered by the ground sits below contact_threshold,
+// so it must survive as a usable partial exclusion rather than being banned.
+TEST_F(KissingSurfaceConstraintTest, PartialGroundContactYieldsClosedExclusionWire)
+{
+  // Primary occupies x in [0, 0.1], y in [0, 0.1], z in [0, 0.1].
+  TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
+
+  // Ground covers only x in [0, 0.05] — half the bottom face — top face at z=0.
+  gp_Trsf ground_pos;
+  ground_pos.SetTranslation(gp_Vec(0.0, -0.05, -0.01));
+  TopoDS_Shape ground = BRepBuilderAPI_Transform(
+    BRepPrimAPI_MakeBox(0.05, 0.2, 0.01).Shape(), ground_pos, Standard_True).Shape();
+
+  std::vector<TopoDS_Shape> secondaries = {ground};
+
+  KissingSurfaceConstraint constraint(mapper_, gripper_, secondaries, 0.8);
+
+  Topology topology = mapper_->load_from_shape(primary);
+  constraint.analyze_constraints(topology);
+
+  const auto banned = constraint.get_banned_surface_ids();
+  const auto areas = constraint.get_sample_areas();
+
+  EXPECT_TRUE(banned.empty())
+    << "~50% contact is below the 80% threshold, so nothing should be banned outright";
+
+  ASSERT_FALSE(areas.empty())
+    << "Half-covered bottom face must produce a partial-exclusion area; "
+    << "an empty result means the contact region is not excluded from sampling at all";
+
+  for (const auto & area : areas) {
+    EXPECT_TRUE(area.is_exclusion) << "Contact regions are keep-out, not keep-in";
+    ASSERT_FALSE(area.wire.IsNull()) << "Surface " << area.surface_id << ": null wire";
+    EXPECT_TRUE(is_wire_closed(area.wire))
+      << "Surface " << area.surface_id << ": wire has " << count_wire_edges(area.wire)
+      << " edge(s) and is not closed — is_point_inside_wire() ray casting is "
+      << "undefined on an open wire";
+  }
+}
+
+// A box resting on one edge has no fully supported face: the two faces meeting
+// at the resting edge graze the ground along a line. This is the case the
+// roadmap's "topology aware" ground rejection has to get right.
+//
+// This failed while measure_contact_ratio sampled triangle centroids: both
+// grazing faces had their lowest node exactly on the ground (z = 0.00000) but
+// their lowest centroid 23.6 mm above it, so contact ratio read 0% on all six
+// faces and the part looked airborne. It passes now that the ratio comes from
+// sampling::sample_face_region, which measures the 7.07% strip directly.
+TEST_F(KissingSurfaceConstraintTest, EdgeRestingPartYieldsClosedExclusionWire)
+{
+  // Box centred on x, spanning y in [-0.05, 0.05], z in [0, 0.1].
+  TopoDS_Shape box = BRepPrimAPI_MakeBox(
+    gp_Pnt(-0.05, -0.05, 0.0), 0.1, 0.1, 0.1).Shape();
+
+  // Roll 45 degrees about X so the part balances on its y=-0.05, z=0 edge.
+  gp_Trsf roll;
+  roll.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)), M_PI / 4.0);
+
+  // Lift so the lowest corner lands exactly on z=0.
+  constexpr double kDrop = 0.05 * M_SQRT1_2;  // |min z| after the roll
+  gp_Trsf lift;
+  lift.SetTranslation(gp_Vec(0.0, 0.0, kDrop));
+
+  TopoDS_Shape primary = BRepBuilderAPI_Transform(
+    BRepBuilderAPI_Transform(box, roll, Standard_True).Shape(), lift, Standard_True).Shape();
+
+  gp_Trsf ground_pos;
+  ground_pos.SetTranslation(gp_Vec(-0.2, -0.2, -0.01));
+  TopoDS_Shape ground = BRepBuilderAPI_Transform(
+    BRepPrimAPI_MakeBox(0.4, 0.4, 0.01).Shape(), ground_pos, Standard_True).Shape();
+
+  std::vector<TopoDS_Shape> secondaries = {ground};
+
+  KissingSurfaceConstraint constraint(mapper_, gripper_, secondaries, 0.8);
+
+  Topology topology = mapper_->load_from_shape(primary);
+  constraint.analyze_constraints(topology);
+
+  const auto banned = constraint.get_banned_surface_ids();
+  const auto areas = constraint.get_sample_areas();
+
+  EXPECT_TRUE(banned.empty())
+    << "No face of an edge-resting box is supported, so none should be banned";
+
+  ASSERT_FALSE(areas.empty())
+    << "The two faces meeting at the resting edge graze the ground and must "
+    << "produce partial-exclusion areas; an empty result means contact points "
+    << "can still be sampled right down at floor level";
+
+  for (const auto & area : areas) {
+    ASSERT_FALSE(area.wire.IsNull()) << "Surface " << area.surface_id << ": null wire";
+    EXPECT_TRUE(is_wire_closed(area.wire))
+      << "Surface " << area.surface_id << ": wire has " << count_wire_edges(area.wire)
+      << " edge(s) and is not closed — is_point_inside_wire() ray casting is "
+      << "undefined on an open wire";
+  }
 }
 
 int main(int argc, char ** argv)

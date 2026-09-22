@@ -92,7 +92,6 @@ TopoDS_Shape create_face_with_edge(const TopoDS_Shape & edge_shape, double size 
 
   TopoDS_Face face = BRepBuilderAPI_MakeFace(wire).Face();
 
-  // Combine face with the test edge(s)
   BRep_Builder builder;
   TopoDS_Compound compound;
   builder.MakeCompound(compound);
@@ -112,16 +111,13 @@ TopoDS_Shape create_face_with_arc_boundary(double radius)
   Handle(Geom_TrimmedCurve) arc = arc_maker.Value();
   TopoDS_Edge arc_edge = BRepBuilderAPI_MakeEdge(arc).Edge();
 
-  // Create straight edge to close the shape (from p3 back to p1)
   TopoDS_Edge closing_edge = BRepBuilderAPI_MakeEdge(p3, p1).Edge();
 
-  // Build wire from arc + closing edge
   BRepBuilderAPI_MakeWire wire_maker;
   wire_maker.Add(arc_edge);
   wire_maker.Add(closing_edge);
   TopoDS_Wire wire = wire_maker.Wire();
 
-  // Create face from the closed wire
   TopoDS_Face face = BRepBuilderAPI_MakeFace(wire).Face();
 
   return face;
@@ -399,7 +395,6 @@ TEST_F(GraspOrientationFinderTest, EmptyAngleOffsetsDefaultsToZero)
   auto grasps_empty = finder_empty.find_valid_grasps(pairs, topology);
   auto grasps_zero = finder_zero.find_valid_grasps(pairs, topology);
 
-  // Should produce same number of results
   EXPECT_EQ(grasps_empty.size(), grasps_zero.size());
 }
 
@@ -475,7 +470,6 @@ TEST_F(GraspOrientationFinderTest, MaxEdgeCandidatesLimitsOutput)
   auto grasps_unlimited = finder_unlimited.find_valid_grasps(pairs, topology);
   auto grasps_limited = finder_limited.find_valid_grasps(pairs, topology);
 
-  // Limited should have fewer or equal candidates
   EXPECT_LE(grasps_limited.size(), grasps_unlimited.size());
 }
 
@@ -705,9 +699,7 @@ TEST_F(GraspOrientationFinderTest, MaxOrientationsPerPairLimitsResults)
   auto grasps_unlimited = finder_unlimited.find_valid_grasps(pairs, topology);
   auto grasps_limited = finder_limited.find_valid_grasps(pairs, topology);
 
-  // Cap must be respected
   EXPECT_LE(grasps_limited.size(), 2u);
-  // Limited must not exceed unlimited
   EXPECT_LE(grasps_limited.size(), grasps_unlimited.size());
 }
 

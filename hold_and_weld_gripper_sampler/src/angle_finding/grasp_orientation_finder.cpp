@@ -32,6 +32,7 @@
 #include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/collision/jaw_clearance_check.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
+#include "hold_and_weld_gripper_sampler/constraints/ground_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/kissing_surface_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/core/grasp.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
@@ -145,6 +146,12 @@ void GraspOrientationFinder::set_jaw_clearance_check(
   std::shared_ptr<const geometry::JawClearanceCheck> jaw_clearance_check)
 {
   jaw_clearance_check_ = jaw_clearance_check;
+}
+
+void GraspOrientationFinder::set_ground_constraint(
+  std::shared_ptr<const constraints::GroundConstraint> ground_constraint)
+{
+  ground_constraint_ = ground_constraint;
 }
 
 void GraspOrientationFinder::set_fcl_checker(
@@ -465,6 +472,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   size_t rejected_by_jaw_clearance = 0;
   size_t rejected_by_primary = 0;
   size_t rejected_by_exclusion = 0;
+  size_t rejected_by_ground = 0;
   size_t rejected_by_secondary = 0;
   size_t pairs_skipped_flat = 0;
   size_t pairs_no_seeds = 0;
@@ -647,6 +655,13 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
           continue;
         }
 
+        if (ground_constraint_ &&
+          ground_constraint_->intersects_ground(transform, pair.grip_distance))
+        {
+          rejected_by_ground++;
+          continue;
+        }
+
         if (kissing_constraint_ &&
           kissing_constraint_->intersects_secondary(pair.grip_distance, transform))
         {
@@ -697,10 +712,11 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   RCLCPP_INFO(logger_,
     "Orientation finding complete: %zu valid grasps from %zu pairs "
     "(%zu flat-skipped, %zu no-seeds, %zu tested, "
-    "rejected: %zu jaw-clearance / %zu primary / %zu exclusion / %zu secondary)",
+    "rejected: %zu jaw-clearance / %zu primary / %zu exclusion / %zu ground / %zu secondary)",
     valid_grasps.size(), total_pairs,
     pairs_skipped_flat, pairs_no_seeds, total_orientations_tested,
-    rejected_by_jaw_clearance, rejected_by_primary, rejected_by_exclusion, rejected_by_secondary);
+    rejected_by_jaw_clearance, rejected_by_primary, rejected_by_exclusion, rejected_by_ground,
+    rejected_by_secondary);
 
   RCLCPP_DEBUG(logger_,
     "[Radial pipeline] flat=%.1f%%  merged_empty=%.1f%%  "

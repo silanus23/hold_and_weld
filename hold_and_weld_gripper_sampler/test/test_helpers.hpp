@@ -19,11 +19,15 @@
 
 #include <memory>
 
+#include <BRep_Tool.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
+#include <TopExp.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <TopoDS_Wire.hxx>
 
 #include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
@@ -47,6 +51,17 @@ inline TopoDS_Shape create_box_at_helper(
   transform.SetTranslation(gp_Vec(x, y, z));
   TopoDS_Shape box = BRepPrimAPI_MakeBox(width, depth, height).Shape();
   return BRepBuilderAPI_Transform(box, transform, Standard_True).Shape();
+}
+
+// A wire is closed when its first and last vertex coincide. Relying on the
+// TopoDS_Shape Closed() flag is not safe here: BRepBuilderAPI_MakeWire only
+// sets it when it can prove closure, so an unset flag is not evidence either way.
+inline bool is_wire_closed(const TopoDS_Wire & wire)
+{
+  TopoDS_Vertex v_first, v_last;
+  TopExp::Vertices(wire, v_first, v_last);
+  if (v_first.IsNull() || v_last.IsNull()) {return false;}
+  return BRep_Tool::Pnt(v_first).Distance(BRep_Tool::Pnt(v_last)) < 1e-9;
 }
 
 }  // namespace
