@@ -4,13 +4,14 @@
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
   <!-- Include all macro files -->
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/welding_torch_prefix.xacro"/>
 
   <link name="world"/>
 
-  <!-- Robot 2: Welder System (standalone) -->
-  <xacro:ar2010_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
+  <!-- Robot 2: Welder System (standalone). Matches dual_robot.xacro, which uses
+       gp25 for both robots (see commit "Taking back to gp25"). -->
+  <xacro:gp25_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
     controller_config_file="${controller_config_file}"/>
   <xacro:welding_torch_macro prefix="robot2_"/>
 

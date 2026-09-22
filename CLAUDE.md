@@ -118,8 +118,10 @@ the SRDF planning groups, and the relevant action server's launch-time parameter
 (e.g. `arm_group_name` must match an SRDF group name exactly). See
 `ADDING_A_ROBOT.md` for the full name-flow walkthrough and a cheat sheet of what
 must be updated together when adding a robot, changing joint names, or adding a
-controller/planning group/action server. Note: the welder action server still has
-some hardcoded robot-specific names (not yet parameterized like the gripper server).
+controller/planning group/action server. The gripper and welder action servers
+hardcode their frame names to the `robot1_`/`robot2_` slot prefixes by design —
+those slots don't move, so swapping an arm model in place only requires a URDF
+change (see `ADDING_A_ROBOT.md`), never a code or YAML change.
 
 ## `hold_and_weld_gripper_sampler` internals
 

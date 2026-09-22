@@ -19,7 +19,7 @@ Every robot in this project is instantiated with a **prefix string** (e.g.
 prefix = "robot2_"
 -> joints:  robot2_joint_1 … robot2_joint_6
 -> links:   robot2_base_link, robot2_link_1 … robot2_link_6, robot2_tool0
--> ros2_control block name: robot2_ar2010_system
+-> ros2_control block name: robot2_gp25_system
 ```
 
 All downstream config files must use these exact prefixed names.
@@ -106,7 +106,15 @@ Node(
 
 **This parameter defines robot name groups for action servers.** Change it and the server plans for a different robot.
 
-> **Note:** The welder action server currently has some hardcoded robot-specific values such as link names and tool frame references. This is a temporary compromise and will be parameterised in the same way as the gripper server. Adding a second welder before that work is done will require matching those hardcoded values to your robot.
+> **Note:** The welder action server's kinematic-chain endpoints
+> (`robot2_base_link`, `robot2_wire_tip`) and the gripper server's touch/attach
+> links (`robot1_...`) are hardcoded to the `robot2_`/`robot1_` prefixes. This is
+> intentional, not a gap: those prefixes are fixed per-slot in this system (there
+> is exactly one gripper slot and one welder slot), so swapping which arm model
+> occupies a slot — e.g. gp25 for ar2010 — only requires changing which macro
+> `dual_robot.xacro` / `robot2_welder.xacro` calls for that prefix. Because every
+> arm macro emits identical joint/link names for a given prefix (see below), no
+> C++ or YAML change is needed for a model swap.
 
 ### 6. Coordinator — connects to action servers by topic name
 
@@ -214,29 +222,21 @@ This section covers what changes if you want a second robot that uses the same
 
 ### What is different from a plain robot3
 
-The gripper server has several hardcoded robot1-specific names that must be
-parameterised or overridden:
+`GripperActionServer`'s `touch_links_`/`attach_link_` are hardcoded to the
+`robot1_` prefix (`robot1_tool0`, `robot1_link_6`, `robot1_flange`,
+`robot1_gripper_base`, `robot1_left_finger`, `robot1_right_finger`). There is
+only one gripper slot in this system, so this is not meant to be reconfigured —
+a genuinely new, second, independently-controlled gripper robot needs its own
+action server instance (a copy of `GripperActionServer` with its own hardcoded
+prefix and its own node name/topic), not a parameter change.
 
-| Currently hardcoded in `gripper_action_server.hpp` | What it needs to become |
-|---|---|
-| `robot1_left_finger_joint`, `robot1_right_finger_joint` | param `gripper_joint_names` |
-| `robot1_tool0`, `robot1_link_6_t`, `robot1_gripper_base` … | param `touch_links` |
-| `robot1_link_6_t` (attach link) | param `attach_link` |
-| `/robot1_gripper_controller/follow_joint_trajectory` | param `gripper_controller_topic` |
-
-`gripper_controller_topic` is a launch argument of `app_gripper_server.launch.py` and
-`app_coordinator.launch.py` (default `/robot1_gripper_controller/follow_joint_trajectory`).
-Override the launch argument; no C++ change needed.
-The finger joint names and touch links are currently compiled in. You would need to
-either:
-
-- **Parameterise them** — expose `gripper_joint_names` and `touch_links` as
-  `std::vector<std::string>` parameters in `GripperActionServer`, then read them
-  in `on_configure` instead of using the hardcoded defaults.
-- **Subclass or duplicate** — create `gripper_action_server2` that replicates the
-  logic with robot2-prefixed names.
-
-The parameterised approach is recommended.
+If you're instead just swapping which arm model sits in the existing `robot1_`
+slot (e.g. gp25 for ar2010), no action-server change is needed at all — see the
+note in the previous section. That only works because every arm macro emits
+identical joint/link names for a given prefix; verify your new macro does the
+same (`<prefix>tool0`, `<prefix>link_6`, `<prefix>flange`, plus
+`<prefix>gripper_base`, `<prefix>left_finger`, `<prefix>right_finger` from
+`gripper_prefix.xacro`) before swapping it in.
 
 ### Additional URDF changes
 
@@ -289,16 +289,16 @@ robot3_gripper_controller:
 
 ### Launch file additions
 
-In `app_robot3_gripper_server.launch.py`:
+A second, independently-controlled gripper is a copy of `GripperActionServer`
+(new class/executable, e.g. `GripperActionServer3`) with `touch_links_`/
+`attach_link_` hardcoded to the `robot3_` prefix, advertised under its own
+action topic (e.g. `trigger_gripper3`). In `app_robot3_gripper_server.launch.py`:
 
 ```python
 parameters=[{
     'arm_group_name':          'robot3_arm',
     'gripper_controller_topic': '/robot3_gripper_controller/follow_joint_trajectory',
     'gripper_joint_names':     ['robot3_left_finger_joint', 'robot3_right_finger_joint'],
-    'touch_links':             ['robot3_tool0', 'robot3_link_6_t', 'robot3_flange',
-                                'robot3_gripper_base', 'robot3_left_finger', 'robot3_right_finger'],
-    'attach_link':             'robot3_link_6_t',
 }]
 ```
 

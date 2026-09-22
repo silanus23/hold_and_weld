@@ -33,22 +33,22 @@
     <gazebo reference="${prefix}base_link">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_1_s">
+    <gazebo reference="${prefix}link_1">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_2_l">
+    <gazebo reference="${prefix}link_2">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_3_u">
+    <gazebo reference="${prefix}link_3">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_4_r">
+    <gazebo reference="${prefix}link_4">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_5_b">
+    <gazebo reference="${prefix}link_5">
       <material>Gazebo/Blue</material>
     </gazebo>
-    <gazebo reference="${prefix}link_6_t">
+    <gazebo reference="${prefix}link_6">
       <material>Gazebo/Blue</material>
     </gazebo>
   </xacro:macro>

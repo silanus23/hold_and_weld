@@ -238,16 +238,13 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
       }
 
-      std::string base_link = "robot2_base_link";
-      std::string tip_link = "robot2_wire_tip";
-
-      RCLCPP_INFO(logger_, "Kinematic chain: %s -> %s",
-                  base_link.c_str(), tip_link.c_str());
+      RCLCPP_INFO(logger_, "Kinematic chain: robot2_base_link -> robot2_wire_tip");
 
       auto urdf_parser = std::make_unique<hold_and_weld::kinematics::URDFParser>();
 
       hold_and_weld::kinematics::ParsedChain parsed_chain;
-      parsed_chain = urdf_parser->extract_joint_chain_from_string(urdf_string, base_link, tip_link);
+      parsed_chain = urdf_parser->extract_joint_chain_from_string(
+        urdf_string, "robot2_base_link", "robot2_wire_tip");
 
       RCLCPP_DEBUG(logger_, "Parsed kinematic chain with %zu actuated joints",
                   parsed_chain.actuated_joints.size());
