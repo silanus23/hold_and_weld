@@ -22,6 +22,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
@@ -159,6 +160,39 @@ gp_Pnt extract_surface_center(const TopoDS_Face & face)
     throw std::runtime_error(
       std::string("Failed to extract surface center: ") + e.GetMessageString());
   }
+}
+
+void validate_shape_or_throw(const TopoDS_Shape & shape, const std::string & context)
+{
+  BRepCheck_Analyzer analyzer(shape);
+  if (analyzer.IsValid()) {
+    return;
+  }
+
+  int invalid_faces = 0;
+  int invalid_wires = 0;
+  int invalid_edges = 0;
+  int invalid_vertices = 0;
+
+  for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
+    if (!analyzer.IsValid(exp.Current())) {++invalid_faces;}
+  }
+  for (TopExp_Explorer exp(shape, TopAbs_WIRE); exp.More(); exp.Next()) {
+    if (!analyzer.IsValid(exp.Current())) {++invalid_wires;}
+  }
+  for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
+    if (!analyzer.IsValid(exp.Current())) {++invalid_edges;}
+  }
+  for (TopExp_Explorer exp(shape, TopAbs_VERTEX); exp.More(); exp.Next()) {
+    if (!analyzer.IsValid(exp.Current())) {++invalid_vertices;}
+  }
+
+  throw std::runtime_error(
+    context + ": shape failed BRep validity check (" +
+    std::to_string(invalid_faces) + " invalid face(s), " +
+    std::to_string(invalid_wires) + " invalid wire(s), " +
+    std::to_string(invalid_edges) + " invalid edge(s), " +
+    std::to_string(invalid_vertices) + " invalid vertex/vertices)");
 }
 
 bool has_inner_holes(const TopoDS_Face & face)

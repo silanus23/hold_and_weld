@@ -19,6 +19,7 @@
 #include <Eigen/Geometry>
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <BRepBuilderAPI_Transform.hxx>
@@ -81,6 +82,21 @@ gp_Vec extract_surface_normal(const TopoDS_Face & face);
 
 /** @brief Extract surface centroid */
 gp_Pnt extract_surface_center(const TopoDS_Face & face);
+
+/**
+ * @brief Validate a shape's BRep topology, throwing with a defect summary if invalid.
+ *
+ * Every geometry entry point (STEP import today) should call this right after
+ * the shape leaves the reader/transform and before it reaches topology
+ * extraction or sampling: a malformed import (self-intersecting wire,
+ * unorientable face) otherwise surfaces much later, as an opaque OCCT
+ * exception or a silently wrong result, far from the file that caused it.
+ *
+ * @param shape Shape to validate
+ * @param context Label identifying the source in the error message (e.g. the
+ *   file path being loaded)
+ */
+void validate_shape_or_throw(const TopoDS_Shape & shape, const std::string & context);
 
 
 /**
