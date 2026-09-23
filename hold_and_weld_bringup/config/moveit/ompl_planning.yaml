@@ -1,49 +1,49 @@
 /**:
   ros__parameters:
-    move_group:
-      planning_plugins:
-        - ompl_interface/OMPLPlanner
-      request_adapters:
-        - default_planning_request_adapters/ResolveConstraintFrames
-        - default_planning_request_adapters/ValidateWorkspaceBounds
-        - default_planning_request_adapters/CheckStartStateBounds
-        - default_planning_request_adapters/CheckStartStateCollision
-      response_adapters:
-        - default_planning_response_adapters/AddTimeOptimalParameterization
-        - default_planning_response_adapters/ValidateSolution
-        - default_planning_response_adapters/DisplayMotionPath
-    ompl:
+    # Pipeline-scoped: moveit_move_group.launch.py nests this whole block under
+    # the 'ompl' pipeline id, giving ompl.planning_plugins, ompl.planner_configs, ...
+    planning_plugins:
+      - ompl_interface/OMPLPlanner
+    request_adapters:
+      - default_planning_request_adapters/ResolveConstraintFrames
+      - default_planning_request_adapters/ValidateWorkspaceBounds
+      - default_planning_request_adapters/CheckStartStateBounds
+      - default_planning_request_adapters/CheckStartStateCollision
+    response_adapters:
+      - default_planning_response_adapters/AddTimeOptimalParameterization
+      - default_planning_response_adapters/ValidateSolution
+      - default_planning_response_adapters/DisplayMotionPath
+    planner_configs:
+      RRTConnect:
+        type: geometric::RRTConnect
+        range: 0.0
+      RRT:
+        type: geometric::RRT
+        range: 0.0
+        goal_bias: 0.05
+      EST:
+        type: geometric::EST
+        range: 0.0
+        goal_bias: 0.05
+    robot1_arm:
       planner_configs:
-        RRTConnect:
-          type: geometric::RRTConnect
-          range: 0.0
-        RRT:
-          type: geometric::RRT
-          range: 0.0
-          goal_bias: 0.05
-        EST:
-          type: geometric::EST
-          range: 0.0
-          goal_bias: 0.05
-      robot1_arm:
-        planner_configs:
-          - RRTConnect
-          - RRT
-          - EST
-        projection_evaluator: joints(robot1_joint_1,robot1_joint_2,robot1_joint_3)
-        longest_valid_segment_fraction: 0.005
-      robot1_gripper:
-        planner_configs:
-          - RRTConnect
-          - RRT
-        projection_evaluator: joints(robot1_left_finger_joint,robot1_right_finger_joint)
-        longest_valid_segment_fraction: 0.005
-      robot2_welder_arm:
-        planner_configs:
-          - RRTConnect
-          - RRT
-          - EST
-        projection_evaluator: joints(robot2_joint_1,robot2_joint_2,robot2_joint_3)
-        longest_valid_segment_fraction: 0.005
-        default_planner_config: RRTConnect
-        enforce_constrained_state_space: true
+        - RRTConnect
+        - RRT
+        - EST
+      projection_evaluator: joints(robot1_joint_1,robot1_joint_2,robot1_joint_3)
+      longest_valid_segment_fraction: 0.005
+    robot1_gripper:
+      planner_configs:
+        - RRTConnect
+        - RRT
+      projection_evaluator: joints(robot1_left_finger_joint,robot1_right_finger_joint)
+      longest_valid_segment_fraction: 0.005
+    robot2_welder_arm:
+      planner_configs:
+        - RRTConnect
+        - RRT
+        - EST
+      projection_evaluator: joints(robot2_joint_1,robot2_joint_2,robot2_joint_3)
+      longest_valid_segment_fraction: 0.005
+      default_planner_config: RRTConnect
+      enforce_constrained_state_space: true

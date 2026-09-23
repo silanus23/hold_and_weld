@@ -31,6 +31,7 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
+#include <moveit_msgs/msg/constraints.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -221,20 +222,42 @@ private:
     const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose);
 
   /**
-   * @brief Execute a cartesian path along the weld seam.
-   * @param waypoints Sequence of poses to follow along the seam.
+   * @brief Execute the weld motion along a seam, dispatching on segment type.
+   *
+   * "line" and "arc" seams are driven through the Pilz industrial motion
+   * planner (LIN / CIRC respectively) for deterministic constant-velocity /
+   * true-circular motion, after a LIN plunge from the approach standoff onto
+   * the seam start. CIRC uses the middle seam pose as its interim point. "ptp"/unknown/legacy seams fall back to the
+   * existing dense-waypoint `computeCartesianPath()` behavior.
+   *
+   * @param seam The weld seam to execute (poses, segment_type, and — for
+   *             arcs — center/radius).
    * @param goal_handle Handle to the goal for sending feedback and results.
    * @param feedback Feedback message to update with progress.
    * @param points_before_seam Number of waypoints in approach phase.
    * @param total_waypoints Total number of waypoints in the complete path.
-   * @return true if cartesian path execution was successful, false otherwise.
+   * @return true if the weld motion was successful, false otherwise.
    */
   bool execute_cartesian_path(
-    const std::vector<geometry_msgs::msg::Pose> & waypoints,
+    const WeldSeam & seam,
     const std::shared_ptr<GoalHandleTriggerWelder> & goal_handle,
     std::shared_ptr<TriggerWelder::Feedback> & feedback,
     int32_t points_before_seam,
     int32_t total_waypoints);
+
+  /**
+   * @brief Plan and execute one Pilz motion from the current state to a pose.
+   * @param planner_id Pilz planner ("LIN" or "CIRC").
+   * @param target Goal pose for the end effector.
+   * @param path_constraints CIRC auxiliary point constraint, or nullptr for none.
+   * @param seam_id Seam id, for log messages.
+   * @return true if planning and execution both succeeded, false otherwise.
+   */
+  bool plan_and_execute_pilz(
+    const std::string & planner_id,
+    const geometry_msgs::msg::Pose & target,
+    const moveit_msgs::msg::Constraints * path_constraints,
+    const std::string & seam_id);
 
   /**
    * @brief Convert a JSON pose object to a geometry_msgs::msg::Pose message.

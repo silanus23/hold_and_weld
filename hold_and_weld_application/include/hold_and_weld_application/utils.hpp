@@ -39,6 +39,10 @@ struct WeldSeam
   std::array<double, 3> end = {0.0, 0.0, 0.0};
   std::vector<geometry_msgs::msg::Pose> poses;
   size_t num_poses = 0;
+  std::string segment_type;  // "line", "arc", "ptp", or "" if absent (legacy JSON)
+  std::array<double, 3> center = {0.0, 0.0, 0.0};
+  double radius = 0.0;
+  bool has_arc_geometry = false;  // true only when center/radius were present in JSON
 };
 
 /**

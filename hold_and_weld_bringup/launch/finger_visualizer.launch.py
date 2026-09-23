@@ -138,8 +138,11 @@ def generate_launch_description():
         'publish_transforms_updates': True,
     }
 
+    # ompl_planning.yaml is pipeline-scoped, so it nests under the 'ompl' id.
     planning_pipeline_config = {
-        'move_group': {'planning_plugins': ['ompl_interface/OMPLPlanner']}
+        'planning_pipelines': ['ompl'],
+        'default_planning_pipeline': 'ompl',
+        'ompl': ompl_planning_config,
     }
 
     robot_state_publisher = Node(
@@ -167,7 +170,6 @@ def generate_launch_description():
             robot_description_semantic,
             kinematics_config,
             joint_limits_config,
-            ompl_planning_config,
             planning_scene_monitor_parameters,
             planning_pipeline_config,
             {'use_sim_time': False},

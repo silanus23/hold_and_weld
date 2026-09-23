@@ -24,6 +24,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <lifecycle_msgs/msg/state.hpp>
+#include <moveit_msgs/msg/constraints.hpp>
+#include <moveit_msgs/msg/position_constraint.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <nlohmann/json.hpp>
 #include <rclcpp/parameter_client.hpp>
@@ -724,6 +726,17 @@ std::vector<WeldSeam> WelderActionServer::load_seams_from_json(const std::string
       }
 
       seam.length_m = seam_data.value("length_m", 0.0);
+      seam.segment_type = seam_data.value("segment_type", "");
+
+      if (seam.segment_type == "arc" &&
+        seam_data.contains("center") && seam_data["center"].size() == 3 &&
+        seam_data.contains("radius"))
+      {
+        auto c = seam_data["center"];
+        seam.center = {c[0], c[1], c[2]};
+        seam.radius = seam_data["radius"];
+        seam.has_arc_geometry = true;
+      }
 
       seam.poses.reserve(seam_data["poses"].size());
       for (const auto & pose_data : seam_data["poses"]) {
@@ -889,7 +902,7 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     for (int attempt = 0; attempt < config_.max_cartesian_retries; ++attempt) {
       publish_progress("welding_seam_" + seam.seam_id, points_processed);
 
-      if (execute_cartesian_path(waypoints, goal_handle, feedback,
+      if (execute_cartesian_path(seam, goal_handle, feedback,
             points_processed, total_waypoints))
       {
         path_success = true;
@@ -958,6 +971,11 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
 bool WelderActionServer::move_to_seam_boundary(
   const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose)
 {
+  // Self-resetting: execute_cartesian_path() may have left the Pilz pipeline/planner
+  move_group_->setPlanningPipelineId("ompl");
+  move_group_->setPlannerId("");
+  move_group_->clearPathConstraints();
+
   Eigen::Quaterniond q(
     ref_pose.orientation.w,
     ref_pose.orientation.x,
@@ -1115,30 +1133,118 @@ bool WelderActionServer::move_to_seam_boundary(
   return false;
 }
 
+bool WelderActionServer::plan_and_execute_pilz(
+  const std::string & planner_id,
+  const geometry_msgs::msg::Pose & target,
+  const moveit_msgs::msg::Constraints * path_constraints,
+  const std::string & seam_id)
+{
+  move_group_->setPlanningPipelineId("pilz_industrial_motion_planner");
+  move_group_->setPlannerId(planner_id);
+  move_group_->setStartStateToCurrentState();
+  move_group_->setPoseTarget(target);
+  if (path_constraints) {
+    move_group_->setPathConstraints(*path_constraints);
+  } else {
+    move_group_->clearPathConstraints();
+  }
+
+  bool success = false;
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+  auto plan_result = move_group_->plan(plan);
+  if (plan_result == moveit::core::MoveItErrorCode::SUCCESS) {
+    auto execute_result = move_group_->execute(plan);
+    success = (execute_result == moveit::core::MoveItErrorCode::SUCCESS);
+    if (!success) {
+      RCLCPP_ERROR(logger_, "Seam %s: %s execution failed", seam_id.c_str(), planner_id.c_str());
+    }
+  } else {
+    RCLCPP_ERROR(logger_, "Seam %s: %s planning failed", seam_id.c_str(), planner_id.c_str());
+  }
+
+  // Must clear on every exit path — a leftover CIRC constraint must not leak
+  // into the retract move that immediately follows.
+  move_group_->clearPathConstraints();
+  return success;
+}
+
 bool WelderActionServer::execute_cartesian_path(
-  const std::vector<geometry_msgs::msg::Pose> & waypoints,
+  const WeldSeam & seam,
   const std::shared_ptr<GoalHandleTriggerWelder> & goal_handle,
   std::shared_ptr<TriggerWelder::Feedback> & feedback,
   int32_t points_before_seam,
   int32_t total_waypoints)
 {
-  RCLCPP_INFO(logger_, "Planning cartesian path with %zu waypoints", waypoints.size());
+  const auto & waypoints = seam.poses;
+  bool success = false;
 
-  moveit_msgs::msg::RobotTrajectory trajectory;
-  double fraction = move_group_->computeCartesianPath(
-        waypoints, config_.cartesian_step_size, trajectory);
+  if (seam.segment_type == "line" || seam.segment_type == "arc") {
+    const bool is_arc = (seam.segment_type == "arc");
+    if (is_arc && !seam.has_arc_geometry) {
+      RCLCPP_ERROR(logger_,
+        "Seam %s: segment_type is 'arc' but center/radius are missing — failing seam "
+        "rather than falling back silently", seam.seam_id.c_str());
+      return false;
+    }
+    if (is_arc && waypoints.size() < 3) {
+      RCLCPP_ERROR(logger_, "Seam %s: arc needs >= 3 poses for a CIRC interim point, got %zu",
+        seam.seam_id.c_str(), waypoints.size());
+      return false;
+    }
 
-  RCLCPP_INFO(logger_, "Cartesian path: %.2f%% achieved", fraction * 100.0);
+    // move_to_seam_boundary() leaves the torch backed off by approach_offset_z,
+    // so plunge onto the seam start first; LIN/CIRC must start exactly on the seam.
+    RCLCPP_INFO(logger_, "Seam %s: LIN plunge to seam start via Pilz", seam.seam_id.c_str());
+    success = plan_and_execute_pilz("LIN", waypoints.front(), nullptr, seam.seam_id);
 
-  if (fraction < config_.cartesian_path_threshold) {
-    RCLCPP_ERROR(logger_, "Cartesian path below threshold (%.2f%% < %.2f%%)",
-                  fraction * 100.0, config_.cartesian_path_threshold * 100.0);
-    return false;
+    if (success && !is_arc) {
+      RCLCPP_INFO(logger_, "Seam %s: executing LIN weld motion via Pilz", seam.seam_id.c_str());
+      success = plan_and_execute_pilz("LIN", waypoints.back(), nullptr, seam.seam_id);
+    } else if (success) {
+      // "interim" rather than "center": a center point is ambiguous for arcs >= 180 deg
+      // (Pilz takes the short way round, and at exactly 180 deg the points are colinear).
+      const auto & interim_pose = waypoints[waypoints.size() / 2];
+
+      moveit_msgs::msg::PositionConstraint interim_constraint;
+      interim_constraint.header.frame_id = move_group_->getPlanningFrame();
+      interim_constraint.link_name = move_group_->getEndEffectorLink();
+      interim_constraint.constraint_region.primitive_poses.push_back(interim_pose);
+
+      moveit_msgs::msg::Constraints path_constraints;
+      path_constraints.name = "interim";
+      path_constraints.position_constraints.push_back(interim_constraint);
+
+      RCLCPP_INFO(logger_, "Seam %s: executing CIRC weld motion via Pilz", seam.seam_id.c_str());
+      success = plan_and_execute_pilz("CIRC", waypoints.back(), &path_constraints,
+          seam.seam_id);
+    }
+  } else {
+    // "ptp" / unknown / legacy: Pilz PTP is a single joint-space point-to-point,
+    // not a match for the discrete multi-point path a PTP segment actually
+    // represents, so this keeps the pre-Pilz computeCartesianPath() behavior.
+    RCLCPP_INFO(logger_, "Seam %s: segment_type '%s' — using computeCartesianPath fallback",
+      seam.seam_id.c_str(), seam.segment_type.c_str());
+
+    moveit_msgs::msg::RobotTrajectory trajectory;
+    double fraction = move_group_->computeCartesianPath(
+          waypoints, config_.cartesian_step_size, trajectory);
+
+    RCLCPP_INFO(logger_, "Cartesian path: %.2f%% achieved", fraction * 100.0);
+
+    if (fraction < config_.cartesian_path_threshold) {
+      RCLCPP_ERROR(logger_, "Cartesian path below threshold (%.2f%% < %.2f%%)",
+                    fraction * 100.0, config_.cartesian_path_threshold * 100.0);
+      return false;
+    }
+
+    auto execute_result = move_group_->execute(trajectory);
+    success = (execute_result == moveit::core::MoveItErrorCode::SUCCESS);
+    if (!success) {
+      RCLCPP_ERROR(logger_, "Execution failed");
+    }
   }
 
-  auto execute_result = move_group_->execute(trajectory);
-  if (execute_result != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_ERROR(logger_, "Execution failed");
+  if (!success) {
     return false;
   }
 

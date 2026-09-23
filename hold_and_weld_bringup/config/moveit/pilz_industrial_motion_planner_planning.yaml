@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    # Pipeline-scoped: nested under the 'pilz_industrial_motion_planner' pipeline id
+    # by moveit_move_group.launch.py.
+    planning_plugins:
+      - pilz_industrial_motion_planner/CommandPlanner
+    request_adapters:
+      - default_planning_request_adapters/ValidateWorkspaceBounds
+      - default_planning_request_adapters/CheckStartStateBounds
+      - default_planning_request_adapters/CheckStartStateCollision
+    # No time parameterization: Pilz already returns a timed trajectory.
+    response_adapters:
+      - default_planning_response_adapters/ValidateSolution
+      - default_planning_response_adapters/DisplayMotionPath
+    default_planner_config: LIN
