@@ -13,6 +13,11 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+
+#include <cmath>
+#include <functional>
+#include <string>
+
 #include <rclcpp/rclcpp.hpp>
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
@@ -22,6 +27,39 @@ namespace
 {
 constexpr double WIRE_TIP_OFFSET_MIN = 0.05;  // meters
 constexpr double WIRE_TIP_OFFSET_MAX = 0.5;   // meters
+
+/// Minimal 6-joint serial chain base -> l1 ... l6 -> tip (fixed). The fourth joint
+/// gets type `j4_type` and `j4_body` as its <axis>/<limit> children.
+std::string six_joint_urdf(const std::string & j4_type, const std::string & j4_body)
+{
+  const std::string revolute_body =
+    "<axis xyz=\"0 0 1\"/>"
+    "<limit lower=\"-3\" upper=\"3\" effort=\"1\" velocity=\"1\"/>";
+  std::string xml = "<robot name=\"test\"><link name=\"base\"/>";
+  for (int i = 1; i <= 6; ++i) {
+    const std::string parent = (i == 1) ? "base" : "l" + std::to_string(i - 1);
+    const std::string child = "l" + std::to_string(i);
+    xml += "<link name=\"" + child + "\"/>";
+    xml += "<joint name=\"j" + std::to_string(i) + "\" type=\"" +
+      (i == 4 ? j4_type : "revolute") + "\">";
+    xml += "<parent link=\"" + parent + "\"/><child link=\"" + child + "\"/>";
+    xml += "<origin xyz=\"0 0 0.1\" rpy=\"0 0 0\"/>";
+    xml += (i == 4 ? j4_body : revolute_body) + "</joint>";
+  }
+  xml += "<link name=\"tip\"/><joint name=\"tool\" type=\"fixed\">"
+    "<parent link=\"l6\"/><child link=\"tip\"/><origin xyz=\"0 0 0.2\"/></joint>";
+  return xml + "</robot>";
+}
+
+std::string runtime_error_message(const std::function<void()> & fn)
+{
+  try {
+    fn();
+  } catch (const std::runtime_error & e) {
+    return e.what();
+  }
+  return "";
+}
 }  // namespace
 
 class URDFParserTest : public ::testing::Test
@@ -197,6 +235,51 @@ TEST_F(URDFParserTest, ParsesDeterministically)
   }
 
   EXPECT_TRUE(chain1.tool_transform.isApprox(chain2.tool_transform, 1e-9));
+}
+
+TEST_F(URDFParserTest, ParsesChainFromString)
+{
+  URDFParser parser;
+  const auto chain = parser.extract_joint_chain_from_string(
+    six_joint_urdf("revolute", "<axis xyz=\"0 0 2\"/>"
+    "<limit lower=\"-1\" upper=\"1\" effort=\"1\" velocity=\"1\"/>"),
+    "base", "tip");
+  EXPECT_EQ(chain.dof(), 6u);
+  EXPECT_NEAR(chain.actuated_joints[3].axis.norm(), 1.0, 1e-12);
+  EXPECT_NEAR(chain.tool_transform.translation().z(), 0.2, 1e-12);
+}
+
+// urdfdom gives a continuous joint with an effort/velocity-only <limit> lower = upper = 0.
+// A continuous joint has no position limits, so it must get the default range.
+TEST_F(URDFParserTest, ContinuousJointWithEffortOnlyLimitGetsDefaultRange)
+{
+  URDFParser parser;
+  const auto chain = parser.extract_joint_chain_from_string(
+    six_joint_urdf("continuous", "<axis xyz=\"0 0 1\"/><limit effort=\"1\" velocity=\"1\"/>"),
+    "base", "tip");
+  EXPECT_DOUBLE_EQ(chain.actuated_joints[3].q_min, -M_PI);
+  EXPECT_DOUBLE_EQ(chain.actuated_joints[3].q_max, M_PI);
+}
+
+TEST_F(URDFParserTest, FloatingJointReportedAsUnsupportedType)
+{
+  URDFParser parser;
+  const std::string msg = runtime_error_message([&] {
+        parser.extract_joint_chain_from_string(six_joint_urdf("floating", ""), "base", "tip");
+      });
+  EXPECT_NE(msg.find("unsupported type"), std::string::npos) << msg;
+}
+
+TEST_F(URDFParserTest, BaseNotAncestorOfTipGivesClearError)
+{
+  URDFParser parser;
+  const std::string urdf = six_joint_urdf(
+    "revolute", "<axis xyz=\"0 0 1\"/>"
+    "<limit lower=\"-3\" upper=\"3\" effort=\"1\" velocity=\"1\"/>");
+  const std::string msg = runtime_error_message([&] {
+        parser.extract_joint_chain_from_string(urdf, "l3", "l1");
+      });
+  EXPECT_NE(msg.find("not an ancestor"), std::string::npos) << msg;
 }
 
 int main(int argc, char ** argv)

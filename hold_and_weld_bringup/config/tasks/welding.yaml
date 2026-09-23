@@ -27,6 +27,38 @@ max_approach_validation_retries: 3
 max_cartesian_retries: 2
 use_approach_validation: false
 
+# Approach validator (used when use_approach_validation is true and the configuration
+# finder is off). Tolerances bound how far each IK solution may land from its seam
+# point. Defaults are the historical values and are loose for welding.
+approach_validator:
+  first_point_tol_pos: 0.20    # first seam point, solved from the OMPL approach config [m]
+  first_point_tol_rot: 0.10    # [rad]
+  seam_tol_pos: 0.03           # remaining seam points, warm-started [m]
+  seam_tol_rot: 0.02           # [rad]
+
+# Pilz start-configuration finder (roadmap §5). Before OMPL runs, simulate the
+# Pilz plunge + LIN/CIRC from every IK solution at the approach standoff (wrist
+# flips and J4/J6 2*pi copies included) and hand OMPL the best one as a joint
+# goal, so the same seam always welds from the same configuration.
+# Retract is always a plain OMPL pose goal. When enabled this replaces the
+# approach validator on the approach move.
+use_configuration_finder: true
+# home_configuration:          # joint map; defaults to safety_pose.joint_positions
+#   robot2_joint_1: 0.0
+finder:
+  path_step: 0.005             # max Cartesian spacing of simulated Pilz samples [m]
+  path_step_rot: 0.02          # max orientation change between samples [rad]
+  max_joint_step: 0.3          # max |dq_i| between samples; stand-in for Pilz's velocity check [rad]
+  branch_seed_weight: 0.0      # Ceres seed weight when enumerating IK branches
+  walk_seed_weight: 0.01       # Ceres seed weight when walking the path
+  tol_pos: 1.0e-4              # IK position tolerance [m]
+  tol_rot: 1.0e-3              # IK orientation tolerance [rad]
+  w_limit_margin: 3.0          # score weights; terms normalised 0..1 across candidates
+  w_manipulability: 2.0
+  w_home: 1.0                  # penalises distance from home_configuration
+  dedupe_epsilon: 1.0e-3       # candidates closer than this (max |dq_i|) are merged [rad]
+  max_ompl_candidates: 5       # feasible configs tried with OMPL before failing the seam
+
 # JSON file path (optional)
 # If not specified, will auto-load latest JSON from hold_and_weld_planning/generated/
 # json_file: "/path/to/specific/seams.json"

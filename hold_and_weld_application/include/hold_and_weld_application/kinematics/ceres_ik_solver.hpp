@@ -32,15 +32,10 @@ namespace kinematics
 {
 
 /**
- * @brief Ceres cost functor for IK optimization
- *
- * Computes residuals for inverse kinematics optimization:
- * - Residuals 0-2: Position error (x, y, z)
- * - Residuals 3-5: Weighted orientation error (axis-angle representation)
- * - Residuals 6-11: Seed penalty to prevent configuration flips
- *
- * The seed penalty acts as a "restoring force" keeping the solution
- * near the initial guess, which is critical for trajectory continuity.
+ * @brief Ceres cost functor for IK optimization. Residuals 0-2: position error (x, y, z)
+ * [m]. Residuals 3-5: weighted orientation error, the vector part of the shortest-path
+ * error quaternion (axis * sin(theta/2)). Residuals 6-11: seed penalty, a restoring force
+ * that keeps the solution near the initial guess for trajectory continuity.
  */
 class IKCostFunctor
 {
@@ -82,17 +77,11 @@ private:
 };
 
 /**
- * @brief Fast inverse kinematics solver using Ceres optimization
- *
- * Uses numerical optimization to find joint angles that achieve a target pose.
- * Features:
- * - Warm-starting for fast convergence (1-5ms with good seed)
- * - Hard joint limits enforced via parameter bounds
- * - Seed penalty for configuration continuity (prevents flips)
- * - Configurable position and orientation tolerances
- *
- * Designed for validation pipelines where IK is called sequentially
- * along a trajectory, with each solution seeding the next.
+ * @brief Fast inverse kinematics solver using Ceres optimization. Warm-starts for fast
+ * convergence (1-5ms with good seed), enforces hard joint limits via parameter bounds,
+ * and applies a seed penalty for configuration continuity. Designed for validation
+ * pipelines where IK is called sequentially along a trajectory, each solution seeding
+ * the next.
  */
 class CeresIKSolver
 {
@@ -101,7 +90,7 @@ public:
 
   /**
    * @brief Construct IK solver
-   * @param fk_solver Forward kinematics solver (must outlive this object)
+   * @param fk_solver Forward kinematics solver (shared; must not be null)
    * @param rotation_weight Weight for orientation error vs position error (default 1.0)
    */
   explicit CeresIKSolver(
@@ -109,38 +98,38 @@ public:
     double rotation_weight = 1.0);
 
   /**
-   * @brief Solve inverse kinematics with warm start
-   *
-   * Solves IK using numerical optimization with:
-   * - Position + orientation error minimization
-   * - Seed penalty to maintain configuration continuity
-   * - Hard joint limits via parameter bounds
-   *
+   * @brief Solve inverse kinematics with warm start, minimizing position + orientation
+   * error plus a seed penalty for configuration continuity, subject to hard joint limits.
    * @param target_pose Desired TCP pose in base frame
-   * @param q_seed Initial guess for joint angles (warm start, Eigen vector)
-   * @param q_solution Output: joint angles achieving target pose (Eigen vector)
+   * @param q_seed Initial guess for joint angles (warm start, Eigen vector). May lie
+   *               slightly outside the joint limits; the solution never does.
+   * @param q_solution Output: joint angles achieving target pose (Eigen vector). Written
+   *                   even on failure (best effort), unless the inputs are non-finite.
    * @param position_tolerance Position convergence tolerance [m] (default 0.1mm)
    * @param orientation_tolerance Orientation convergence tolerance [rad] (default ~0.057°)
-   * @return true if IK converged and meets tolerances
+   * @param seed_weight Seed penalty weight; ~0 lets the solver leave the seed's branch,
+   *                    the default keeps it near the seed for warm-started walks
+   * @return true if IK converged and meets tolerances; false on non-finite seed/pose
    */
   bool solve(
     const Eigen::Isometry3d & target_pose,
     const Vector6d & q_seed,
     Vector6d & q_solution,
     double position_tolerance = 1e-4,
-    double orientation_tolerance = 1e-3);
+    double orientation_tolerance = 1e-3,
+    double seed_weight = 0.01);
 
   /**
    * @brief Set maximum number of optimization iterations
    * @param max_iterations Maximum iterations (default 100)
    */
-  void set_max_iterations(int max_iterations) {max_iterations_ = max_iterations;}
+  void set_max_iterations(int max_iterations);
 
   /**
    * @brief Set rotation weight (balance position vs orientation errors)
    * @param weight Weight multiplier for rotation error (default 1.0)
    */
-  void set_rotation_weight(double weight) {rotation_weight_ = weight;}
+  void set_rotation_weight(double weight);
 
 private:
   std::shared_ptr<KinematicsSolver> fk_solver_;

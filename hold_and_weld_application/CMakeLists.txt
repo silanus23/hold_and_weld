@@ -52,6 +52,7 @@ add_library(hold_and_weld_kinematics SHARED
   src/kinematics/kinematics_solver.cpp
   src/kinematics/ceres_ik_solver.cpp
   src/kinematics/approach_validator.cpp
+  src/kinematics/configuration_finder.cpp
 )
 
 ament_target_dependencies(hold_and_weld_kinematics
@@ -201,6 +202,31 @@ if(BUILD_TESTING)
   ament_target_dependencies(ceres_ik_solver_test
     rclcpp
     ament_index_cpp
+    hold_and_weld_description
+  )
+
+  ament_add_gtest(configuration_finder_test
+    test/configuration_finder_test.cpp
+    TIMEOUT 300
+  )
+  target_link_libraries(configuration_finder_test
+    hold_and_weld_kinematics
+  )
+  ament_target_dependencies(configuration_finder_test
+    rclcpp
+    ament_index_cpp
+    hold_and_weld_description
+  )
+
+  ament_add_gtest(approach_validator_test
+    test/approach_validator_test.cpp
+  )
+  target_link_libraries(approach_validator_test
+    hold_and_weld_kinematics
+  )
+  ament_target_dependencies(approach_validator_test
+    rclcpp
+    geometry_msgs
     hold_and_weld_description
   )
 

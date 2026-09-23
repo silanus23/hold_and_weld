@@ -35,17 +35,24 @@ namespace kinematics
 {
 
 /**
- * @brief Validates approach configurations for welding seams
- *
- * This class performs "static walk" validation through a seam trajectory.
- * Starting from an OMPL-generated approach configuration, it incrementally
- * solves IK for each seam waypoint while checking for:
- * - Reachability (IK convergence)
- * - Singularities (manipulability index)
- * - Joint limit violations (handled by IK solver)
- *
- * The validation uses warm-starting where each solved configuration
- * becomes the seed for the next waypoint, ensuring configuration continuity.
+ * @brief Tunables for ApproachValidator, read from the approach_validator section of
+ * welding.yaml. Tolerances bound how far each IK solution's pose may be from its seam
+ * point; defaults are the historical hard-coded values, loose for welding.
+ */
+struct ApproachValidatorParams
+{
+  double manipulability_threshold = 1e-6;
+  double first_point_tol_pos = 0.20;
+  double first_point_tol_rot = 0.10;
+  double seam_tol_pos = 0.03;
+  double seam_tol_rot = 0.02;
+};
+
+/**
+ * @brief Validates approach configurations for welding seams by "static walking" a seam
+ * trajectory from an OMPL-generated approach configuration, warm-starting IK from each
+ * solved waypoint to the next and checking reachability and manipulability. Does not
+ * check the joint step between waypoints (ConfigurationFinder does).
  */
 class ApproachValidator
 {
@@ -56,12 +63,12 @@ public:
    * @brief Construct approach validator
    * @param kin_solver Forward kinematics solver for Jacobian computation
    * @param ik_solver Inverse kinematics solver for trajectory following
-   * @param manipulability_threshold Minimum manipulability index (singularity threshold)
+   * @param params Tolerances and manipulability threshold (see ApproachValidatorParams)
    */
-  explicit ApproachValidator(
+  ApproachValidator(
     std::shared_ptr<KinematicsSolver> kin_solver,
     std::shared_ptr<CeresIKSolver> ik_solver,
-    double manipulability_threshold);
+    const ApproachValidatorParams & params);
 
   ~ApproachValidator() = default;
 
@@ -72,33 +79,20 @@ public:
   void set_weld_seam(const hold_and_weld::WeldSeam & seam) {seam_ = seam;}
 
   /**
-   * @brief Validate approach configuration through entire seam
-   *
-   * Performs "static walk" validation:
-   * 1. Start at the approach configuration (anchor point)
-   * 2. For each seam waypoint:
-   *    - Solve IK using previous solution as seed
-   *    - Check manipulability index
-   *    - Update anchor for next step
-   * 3. Return true if all waypoints are reachable without singularities
-   *
+   * @brief Validate approach configuration through entire seam by warm-started IK per
+   * waypoint, checking manipulability at each step. Seam quaternions are normalised
+   * before use.
    * @param q_approach Joint configuration to validate (OMPL result)
-   * @return true if approach is valid for entire seam
+   * @return true if approach is valid for entire seam; false if no seam is set, the seam
+   *         is empty, or a seam pose is non-finite or has a zero quaternion
    */
   bool is_approach_valid(const Vector6d & q_approach);
 
 private:
-  /**
-   * @brief Compute manipulability index (Yoshikawa)
-   * @param q Joint configuration
-   * @return Manipulability index (sqrt(det(J*J^T)))
-   */
-  double compute_manipulability(const Vector6d & q) const;
-
   std::shared_ptr<KinematicsSolver> kinematics_solver_;
   std::shared_ptr<CeresIKSolver> ceres_ik_solver_;
 
-  double manipulability_threshold_;
+  ApproachValidatorParams params_;
   std::optional<hold_and_weld::WeldSeam> seam_;
 };
 

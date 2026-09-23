@@ -14,6 +14,9 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <vector>
+
 #include <rclcpp/rclcpp.hpp>
 
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
@@ -346,6 +349,45 @@ TEST_F(KinematicsSolverTest, Jacobian_WristSingularity_DetectsRankDeficiency)
   // Verify the singularity detector works
   EXPECT_TRUE(solver_->is_near_singularity(q_singular, 0.01))
     << "is_near_singularity() should detect this configuration as singular";
+}
+
+TEST_F(KinematicsSolverTest, JointLimits_RejectsNonFiniteJoint)
+{
+  std::vector<double> q = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  q[2] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(solver_->check_joint_limits(q, 0.0));
+
+  q[2] = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(solver_->check_joint_limits(q, 0.0));
+}
+
+TEST_F(KinematicsSolverTest, SingularityCheck_RejectsNegativeThreshold)
+{
+  std::vector<double> q = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  EXPECT_THROW(solver_->is_near_singularity(q, -0.01), std::invalid_argument);
+}
+
+TEST_F(KinematicsSolverTest, Constructor_RejectsNonUnitAxis)
+{
+  URDFParser parser;
+  auto chain = parser.extract_joint_chain(
+    "package://hold_and_weld_description/urdf/dual_robot.xacro",
+    "robot2_base_link", "robot2_wire_tip");
+  chain.actuated_joints[1].axis *= 2.0;
+  EXPECT_THROW(KinematicsSolver bad(chain), std::invalid_argument);
+}
+
+TEST_F(KinematicsSolverTest, Constructor_RejectsInvalidLimits)
+{
+  URDFParser parser;
+  auto chain = parser.extract_joint_chain(
+    "package://hold_and_weld_description/urdf/dual_robot.xacro",
+    "robot2_base_link", "robot2_wire_tip");
+  chain.actuated_joints[3].q_max = chain.actuated_joints[3].q_min;
+  EXPECT_THROW(KinematicsSolver bad(chain), std::invalid_argument);
+
+  chain.actuated_joints[3].q_max = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(KinematicsSolver bad(chain), std::invalid_argument);
 }
 
 int main(int argc, char ** argv)

@@ -29,7 +29,7 @@ and needs no build step.
 ## Tests
 
 C++ packages use `ament_add_gtest` (gripper_sampler test targets are auto-registered
-from every `.cpp` file in `test/`; application lists its three targets explicitly in
+from every `.cpp` file in `test/`; application lists its five targets explicitly in
 `CMakeLists.txt`):
 
 ```bash
@@ -108,7 +108,10 @@ as live action servers (tracked in ROADMAP.md).
   starting/seed penalty to avoid joint flips) → `ApproachValidator` (walks a
   candidate approach configuration along a full weld seam, checking IK
   convergence and manipulability at each waypoint; rejects and lets OMPL replan
-  on failure).
+  on failure). `ConfigurationFinder` (welder approach, `use_configuration_finder`)
+  replaces that loop: it enumerates IK branches + J4/J6 2π copies at the approach
+  standoff, simulates the Pilz plunge + LIN/CIRC from each, and hands OMPL the
+  best-ranked one as a joint goal so Pilz always starts from the same config.
 
 ## Robot/prefix naming convention
 

@@ -14,6 +14,9 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <vector>
+
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -248,6 +251,60 @@ TEST_F(CeresIKSolverTest, HandlesInvalidSeedSize)
   // This test is no longer applicable since we use fixed-size Eigen vectors
   // The compiler enforces correct size at compile time
   SUCCEED() << "Test skipped: Eigen fixed-size vectors enforce correct dimensions at compile time";
+}
+
+TEST_F(CeresIKSolverTest, RejectsNullKinematicsSolver)
+{
+  EXPECT_THROW(CeresIKSolver bad(nullptr), std::invalid_argument);
+}
+
+TEST_F(CeresIKSolverTest, RejectsInvalidSettings)
+{
+  EXPECT_THROW(CeresIKSolver bad(fk_solver_, -1.0), std::invalid_argument);
+  EXPECT_THROW(ik_solver_->set_max_iterations(0), std::invalid_argument);
+  EXPECT_THROW(ik_solver_->set_rotation_weight(0.0), std::invalid_argument);
+  EXPECT_THROW(
+    ik_solver_->set_rotation_weight(std::numeric_limits<double>::quiet_NaN()),
+    std::invalid_argument);
+
+  const Eigen::Isometry3d target = fk_solver_->compute_fk({0.1, 0.4, 0.3, 0.2, -1.0, 0.5});
+  Eigen::Matrix<double, 6, 1> q_seed = Eigen::Matrix<double, 6, 1>::Zero();
+  Eigen::Matrix<double, 6, 1> q_solution;
+  EXPECT_THROW(ik_solver_->solve(target, q_seed, q_solution, 0.0, 1e-3), std::invalid_argument);
+  EXPECT_THROW(ik_solver_->solve(target, q_seed, q_solution, 1e-4, -1.0), std::invalid_argument);
+  EXPECT_THROW(
+    ik_solver_->solve(target, q_seed, q_solution, 1e-4, 1e-3, -0.1), std::invalid_argument);
+}
+
+// The seed is only a starting guess: one slightly outside a joint limit (e.g. an OMPL
+// state at the limit plus rounding) must not make an easy, in-limit target unsolvable.
+TEST_F(CeresIKSolverTest, SolvesWhenSeedIsSlightlyOutsideLimits)
+{
+  const auto & limits = fk_solver_->joint_limits();
+  std::vector<double> q_target = {0.1, 0.4, 0.3, 0.2, -1.0, 0.5};
+  q_target[2] = limits[2].second - 0.02;
+  const Eigen::Isometry3d target = fk_solver_->compute_fk(q_target);
+
+  Eigen::Matrix<double, 6, 1> q_seed;
+  q_seed << q_target[0], q_target[1], limits[2].second + 0.01, q_target[3], q_target[4],
+    q_target[5];
+  Eigen::Matrix<double, 6, 1> q_solution;
+  EXPECT_TRUE(ik_solver_->solve(target, q_seed, q_solution));
+}
+
+TEST_F(CeresIKSolverTest, FailsCleanlyOnNonFiniteInputs)
+{
+  const Eigen::Isometry3d target = fk_solver_->compute_fk({0.1, 0.4, 0.3, 0.2, -1.0, 0.5});
+  Eigen::Matrix<double, 6, 1> q_seed = Eigen::Matrix<double, 6, 1>::Zero();
+  Eigen::Matrix<double, 6, 1> q_solution;
+
+  q_seed(1) = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(ik_solver_->solve(target, q_seed, q_solution));
+
+  q_seed(1) = 0.0;
+  Eigen::Isometry3d bad_target = target;
+  bad_target.translation().x() = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(ik_solver_->solve(bad_target, q_seed, q_solution));
 }
 
 TEST_F(CeresIKSolverTest, HandlesPoorSeed)

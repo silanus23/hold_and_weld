@@ -42,7 +42,6 @@ public:
   /**
    * @brief Construct kinematics solver from parsed URDF chain
    * @param chain ParsedChain from URDFParser containing robot geometry
-   * @throws std::runtime_error if chain is not 6-DOF
    */
   explicit KinematicsSolver(const ParsedChain & chain);
 
@@ -50,7 +49,6 @@ public:
    * @brief Compute forward kinematics (joint angles -> TCP pose)
    * @param q Joint angles [rad] (size must equal DOF)
    * @return TCP pose in base frame
-   * @throws std::invalid_argument if q.size() != DOF
    */
   Eigen::Isometry3d compute_fk(const std::vector<double> & q) const;
 
@@ -58,15 +56,24 @@ public:
    * @brief Compute geometric Jacobian (relates joint velocities to TCP velocity)
    * @param q Joint angles [rad]
    * @return 6×DOF Jacobian matrix [linear_velocity; angular_velocity]
-   * @throws std::invalid_argument if q.size() != DOF
    */
   Eigen::MatrixXd compute_jacobian(const std::vector<double> & q) const;
+
+  /**
+   * @brief Compute each actuated joint's origin and axis in the base frame
+   * @param q Joint angles [rad]
+   * @param origins Output: joint origin positions (size DOF)
+   * @param axes Output: unit joint axes; positive q rotates positively about them (size DOF)
+   */
+  void compute_joint_axes(
+    const std::vector<double> & q,
+    std::vector<Eigen::Vector3d> & origins,
+    std::vector<Eigen::Vector3d> & axes) const;
 
   /**
    * @brief Compute Yoshikawa manipulability index
    * @param q Joint angles [rad]
    * @return Manipulability index (≥0, larger is better)
-   * @throws std::invalid_argument if q.size() != DOF
    */
   double compute_yoshikawa_index(const std::vector<double> & q) const;
 
@@ -74,7 +81,6 @@ public:
    * @brief Compute condition number of Jacobian
    * @param q Joint angles [rad]
    * @return Condition number (≥1, closer to 1 is better)
-   * @throws std::invalid_argument if q.size() != DOF
    */
   double compute_condition_number(const std::vector<double> & q) const;
 
@@ -91,8 +97,9 @@ public:
   /**
    * @brief Check if joint angles are within limits (with margin)
    * @param q Joint angles [rad]
-   * @param margin Safety margin from limits [rad] (default 0.05 = ~3°)
-   * @return true if all joints within limits
+   * @param margin Safety margin from limits [rad] (default 0.05 = ~3°). A margin wider
+   *        than half a joint's range leaves no valid value, so the check returns false.
+   * @return true if all joints are finite and within limits
    */
   bool check_joint_limits(
     const std::vector<double> & q,
@@ -125,7 +132,6 @@ private:
 
   /**
    * @brief Validate joint angle vector size
-   * @throws std::invalid_argument if size mismatch
    */
   void validate_joint_vector(const std::vector<double> & q) const;
 };

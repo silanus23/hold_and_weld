@@ -20,7 +20,9 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -39,9 +41,7 @@ URDFParser::URDFParser()
   RCLCPP_DEBUG(rclcpp::get_logger("urdf_parser"), "URDFParser constructed");
 }
 
-URDFParser::~URDFParser()
-{
-}
+URDFParser::~URDFParser() = default;
 
 ParsedChain URDFParser::extract_joint_chain(
   const std::string & urdf_path,
@@ -57,6 +57,14 @@ ParsedChain URDFParser::extract_joint_chain(
     RCLCPP_ERROR(logger, "URDF path cannot be empty");
     throw std::invalid_argument("URDF path cannot be empty");
   }
+  validate_link_names(base_link, tip_link);
+
+  return chain_from_model(load_urdf(urdf_path), base_link, tip_link);
+}
+
+void URDFParser::validate_link_names(const std::string & base_link, const std::string & tip_link)
+{
+  auto logger = rclcpp::get_logger("urdf_parser");
   if (base_link.empty()) {
     RCLCPP_ERROR(logger, "Base link name cannot be empty");
     throw std::invalid_argument("Base link name cannot be empty");
@@ -65,15 +73,21 @@ ParsedChain URDFParser::extract_joint_chain(
     RCLCPP_ERROR(logger, "Tip link name cannot be empty");
     throw std::invalid_argument("Tip link name cannot be empty");
   }
+}
 
-  auto model = load_urdf(urdf_path);
-
+ParsedChain URDFParser::chain_from_model(
+  const urdf::ModelInterfaceSharedPtr & model,
+  const std::string & base_link,
+  const std::string & tip_link)
+{
   auto link_chain = build_link_chain(model, base_link, tip_link);
   auto joints = extract_joints_from_chain(link_chain);
   auto tool_transform = extract_tool_transform(link_chain, joints);
   validate_chain(joints);
 
-  RCLCPP_INFO(logger, "Successfully extracted chain with %zu actuated joints", joints.size());
+  RCLCPP_INFO(
+    rclcpp::get_logger("urdf_parser"), "Successfully extracted chain with %zu actuated joints",
+    joints.size());
 
   ParsedChain result;
   result.actuated_joints = joints;
@@ -126,8 +140,20 @@ urdf::ModelInterfaceSharedPtr URDFParser::load_urdf(const std::string & urdf_pat
 
   std::string urdf_string;
 
-  if (resolved_path.substr(resolved_path.find_last_of(".") + 1) == "xacro") {
+  const std::string xacro_ext = ".xacro";
+  const bool is_xacro = resolved_path.size() > xacro_ext.size() &&
+    resolved_path.compare(resolved_path.size() - xacro_ext.size(), xacro_ext.size(),
+        xacro_ext) == 0;
+
+  if (is_xacro) {
     RCLCPP_INFO(logger, "Processing xacro file: %s", resolved_path.c_str());
+
+    // Build the argument list before fork(): the child of a multithreaded process may
+    // only call async-signal-safe functions, so it must not allocate.
+    char arg0[] = "xacro";
+    std::vector<char> path_buf(resolved_path.begin(), resolved_path.end());
+    path_buf.push_back('\0');
+    char * argv_exec[] = {arg0, path_buf.data(), nullptr};
 
     // Run xacro without invoking a shell to avoid injection risks.
     // pipe_fds[0] = read end, pipe_fds[1] = write end
@@ -150,30 +176,43 @@ urdf::ModelInterfaceSharedPtr URDFParser::load_urdf(const std::string & urdf_pat
       ::close(pipe_fds[0]);
       if (::dup2(pipe_fds[1], STDOUT_FILENO) < 0) {::_exit(127);}
       ::close(pipe_fds[1]);
-      // Build null-terminated arg list; resolved_path must be mutable for execvp
-      char arg0[] = "xacro";
-      std::vector<char> path_buf(resolved_path.begin(), resolved_path.end());
-      path_buf.push_back('\0');
-      char * argv_exec[] = {arg0, path_buf.data(), nullptr};
       ::execvp("xacro", argv_exec);
       ::_exit(127);  // execvp failed
     }
 
-    // Parent: close write end and read from read end
+    // Parent: close write end and read from read end. Retry on EINTR so a signal
+    // cannot silently truncate the URDF.
     ::close(pipe_fds[1]);
+    bool read_failed = false;
     {
       std::stringstream result;
       char buffer[256];
-      ssize_t n;
-      while ((n = ::read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
-        result.write(buffer, n);
+      while (true) {
+        const ssize_t n = ::read(pipe_fds[0], buffer, sizeof(buffer));
+        if (n > 0) {
+          result.write(buffer, n);
+        } else if (n < 0 && errno == EINTR) {
+          continue;
+        } else {
+          read_failed = (n < 0);
+          break;
+        }
       }
       ::close(pipe_fds[0]);
       urdf_string = result.str();
     }
 
     int status = 0;
-    ::waitpid(pid, &status, 0);
+    while (::waitpid(pid, &status, 0) < 0) {
+      if (errno != EINTR) {
+        RCLCPP_ERROR(logger, "waitpid failed for xacro: %s", std::strerror(errno));
+        throw std::runtime_error("waitpid failed for xacro: " + resolved_path);
+      }
+    }
+    if (read_failed) {
+      RCLCPP_ERROR(logger, "Failed to read xacro output for: %s", resolved_path.c_str());
+      throw std::runtime_error("Failed to read xacro output for: " + resolved_path);
+    }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
       RCLCPP_ERROR(logger, "xacro failed (exit code %d) for: %s",
                    WIFEXITED(status) ? WEXITSTATUS(status) : -1, resolved_path.c_str());
@@ -241,12 +280,14 @@ std::vector<urdf::LinkConstSharedPtr> URDFParser::build_link_chain(
   while (current && current->name != base_link) {
     reverse_chain.push_back(current);
 
+    // Walked up to the root without meeting base_link: base is on another branch.
     if (!current->parent_joint) {
       RCLCPP_ERROR(
-        logger, "Cannot build chain: link '%s' has no parent joint — URDF topology may be broken",
-        current->name.c_str());
+        logger, "Cannot build chain: base link '%s' is not an ancestor of tip link '%s'",
+        base_link.c_str(), tip_link.c_str());
       throw std::runtime_error(
-                "Cannot build chain: link '" + current->name + "' has no parent joint");
+                "Cannot build chain: base link '" + base_link +
+                "' is not an ancestor of tip link '" + tip_link + "'");
     }
 
     std::string parent_name = current->parent_joint->parent_link_name;
@@ -310,43 +351,49 @@ std::vector<JointInfo> URDFParser::extract_joints_from_chain(
     info.origin_transform = accumulated_fixed * joint_transform;
     accumulated_fixed = Eigen::Isometry3d::Identity();
 
+    // Type first: FLOATING/PLANAR joints carry no axis, so checking the axis first
+    // would report them as "zero-length axis" instead of the real problem.
+    // PRISMATIC is accepted here (KinematicsSolver supports it); validate_chain()
+    // then rejects it for the welder, which must be all-revolute.
+    info.is_revolute = (joint->type == urdf::Joint::REVOLUTE ||
+      joint->type == urdf::Joint::CONTINUOUS);
+
+    if (!info.is_revolute && joint->type != urdf::Joint::PRISMATIC) {
+      RCLCPP_ERROR(logger, "Joint '%s' has unsupported type %d", joint->name.c_str(), joint->type);
+      throw std::runtime_error(
+                "Joint '" + joint->name + "' has unsupported type. "
+                "Only REVOLUTE, CONTINUOUS, or PRISMATIC joints can be actuated.");
+    }
+
     info.axis = Eigen::Vector3d(joint->axis.x, joint->axis.y, joint->axis.z);
     double axis_norm = info.axis.norm();
 
     if (axis_norm < 1e-6) {
+      RCLCPP_ERROR(logger, "Joint '%s' has zero-length axis", joint->name.c_str());
       throw std::runtime_error(
                 "Joint '" + joint->name + "' has zero-length axis");
     }
 
     info.axis /= axis_norm;
 
-    info.is_revolute = (joint->type == urdf::Joint::REVOLUTE ||
-      joint->type == urdf::Joint::CONTINUOUS);
-
-    if (!info.is_revolute && joint->type != urdf::Joint::PRISMATIC) {
-      throw std::runtime_error(
-                "Joint '" + joint->name + "' has unsupported type. "
-                "Welder robots must use REVOLUTE, CONTINUOUS, or PRISMATIC joints.");
-    }
-
-    if (joint->limits) {
+    if (joint->type == urdf::Joint::CONTINUOUS) {
+      // A continuous joint has no position limits. urdfdom still creates a limits
+      // object (lower = upper = 0) when the joint has an effort/velocity <limit>,
+      // so ignore it and use one full turn.
+      info.q_min = -M_PI;
+      info.q_max = M_PI;
+      RCLCPP_WARN(logger, "Joint '%s' is continuous, using default limits [-π, π]",
+                  joint->name.c_str());
+    } else if (joint->limits) {
       info.q_min = joint->limits->lower;
       info.q_max = joint->limits->upper;
       RCLCPP_DEBUG(logger, "Joint '%s' limits: [%.3f, %.3f]",
                         joint->name.c_str(), info.q_min, info.q_max);
     } else {
-      if (info.is_revolute) {
-        info.q_min = -M_PI;
-        info.q_max = M_PI;
-        RCLCPP_WARN(logger, "Joint '%s' is continuous, using default limits [-π, π]",
-                           joint->name.c_str());
-      } else {
-        RCLCPP_ERROR(logger, "Prismatic joint '%s' must have limits defined in URDF",
-                            joint->name.c_str());
-        throw std::runtime_error(
-                    "Prismatic joint '" + joint->name +
-                    "' must have limits defined in URDF");
-      }
+      // urdfdom refuses REVOLUTE/PRISMATIC joints without <limit>; guard anyway.
+      RCLCPP_ERROR(logger, "Joint '%s' must have limits defined in URDF", joint->name.c_str());
+      throw std::runtime_error(
+                "Joint '" + joint->name + "' must have limits defined in URDF");
     }
 
     actuated_joints.push_back(info);
@@ -397,6 +444,8 @@ Eigen::Isometry3d URDFParser::extract_tool_transform(
       tool_transform = tool_transform * T;
       num_tool_transforms++;
     } else {
+      // Unreachable while last_actuated_idx is computed above; guards the invariant
+      // that everything after the last actuated joint is fixed.
       RCLCPP_ERROR(logger, "Found actuated joint '%s' after expected end of actuated chain",
                         joint->name.c_str());
       throw std::runtime_error(
@@ -462,7 +511,7 @@ void URDFParser::validate_chain(const std::vector<JointInfo> & joints)
                 std::to_string(axis_norm));
     }
 
-    if (joint.q_min >= joint.q_max) {
+    if (!std::isfinite(joint.q_min) || !std::isfinite(joint.q_max) || joint.q_min >= joint.q_max) {
       RCLCPP_ERROR(logger, "Joint '%s' has invalid limits: [%.3f, %.3f]",
                         joint.name.c_str(), joint.q_min, joint.q_max);
       throw std::runtime_error(
@@ -472,6 +521,8 @@ void URDFParser::validate_chain(const std::vector<JointInfo> & joints)
     }
 
     if (std::abs(joint.q_max - joint.q_min) > 2.1 * M_PI) {
+      // Not an error, but ConfigurationFinder enumerates one J4/J6 candidate per 2*pi
+      // of range, so very wide limits multiply its work.
       RCLCPP_WARN(logger, "Joint '%s' has very large range: [%.3f, %.3f] (%.3f rad)",
                        joint.name.c_str(), joint.q_min, joint.q_max,
                        joint.q_max - joint.q_min);
@@ -506,30 +557,12 @@ ParsedChain URDFParser::extract_joint_chain_from_string(
   RCLCPP_DEBUG(logger, "Base link: %s, Tip link: %s", base_link.c_str(), tip_link.c_str());
 
   if (urdf_string.empty()) {
+    RCLCPP_ERROR(logger, "URDF string cannot be empty");
     throw std::invalid_argument("URDF string cannot be empty");
   }
+  validate_link_names(base_link, tip_link);
 
-  if (base_link.empty()) {
-    throw std::invalid_argument("Base link name cannot be empty");
-  }
-
-  if (tip_link.empty()) {
-    throw std::invalid_argument("Tip link name cannot be empty");
-  }
-
-  auto model = load_urdf_from_string(urdf_string);
-  auto link_chain = build_link_chain(model, base_link, tip_link);
-  auto joints = extract_joints_from_chain(link_chain);
-  auto tool_transform = extract_tool_transform(link_chain, joints);
-  validate_chain(joints);
-
-  ParsedChain result;
-  result.actuated_joints = joints;
-  result.tool_transform = tool_transform;
-  result.base_link = base_link;
-  result.tip_link = tip_link;
-
-  return result;
+  return chain_from_model(load_urdf_from_string(urdf_string), base_link, tip_link);
 }
 
 }  // namespace kinematics

@@ -16,6 +16,11 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
@@ -26,15 +31,58 @@ namespace hold_and_weld
 namespace kinematics
 {
 
+namespace
+{
+std::vector<double> to_std_vector(const ApproachValidator::Vector6d & q)
+{
+  return std::vector<double>(q.data(), q.data() + q.size());
+}
+
+// Pose message -> isometry with a normalised quaternion. Returns nullopt for a
+// non-finite pose or a quaternion too close to zero to define a rotation.
+std::optional<Eigen::Isometry3d> to_isometry(const geometry_msgs::msg::Pose & pose)
+{
+  Eigen::Quaterniond q(
+    pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z);
+  const Eigen::Vector3d p(pose.position.x, pose.position.y, pose.position.z);
+  if (!q.coeffs().allFinite() || !p.allFinite() || q.norm() < 1e-9) {
+    return std::nullopt;
+  }
+  Eigen::Isometry3d out = Eigen::Isometry3d::Identity();
+  out.translation() = p;
+  out.linear() = q.normalized().toRotationMatrix();
+  return out;
+}
+}  // namespace
+
 ApproachValidator::ApproachValidator(
   std::shared_ptr<KinematicsSolver> kin_solver,
   std::shared_ptr<CeresIKSolver> ik_solver,
-  double manipulability_threshold)
+  const ApproachValidatorParams & params)
 : kinematics_solver_(std::move(kin_solver)),
   ceres_ik_solver_(std::move(ik_solver)),
-  manipulability_threshold_(manipulability_threshold),
+  params_(params),
   seam_(std::nullopt)
 {
+  if (!kinematics_solver_ || !ceres_ik_solver_) {
+    throw std::invalid_argument("ApproachValidator: kin_solver and ik_solver must not be null");
+  }
+  auto require_positive = [](double value, const char * name) {
+      if (!std::isfinite(value) || value <= 0.0) {
+        throw std::invalid_argument(
+          std::string("ApproachValidatorParams.") + name + " must be positive, got " +
+          std::to_string(value));
+      }
+    };
+  require_positive(params_.first_point_tol_pos, "first_point_tol_pos");
+  require_positive(params_.first_point_tol_rot, "first_point_tol_rot");
+  require_positive(params_.seam_tol_pos, "seam_tol_pos");
+  require_positive(params_.seam_tol_rot, "seam_tol_rot");
+  if (!std::isfinite(params_.manipulability_threshold) || params_.manipulability_threshold < 0.0) {
+    throw std::invalid_argument(
+      "ApproachValidatorParams.manipulability_threshold must be non-negative, got " +
+      std::to_string(params_.manipulability_threshold));
+  }
 }
 
 bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
@@ -48,70 +96,57 @@ bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
 
   RCLCPP_INFO(logger, "Validating approach: %zu waypoints", seam_->poses.size());
 
-  Eigen::Isometry3d first_pose = Eigen::Isometry3d::Identity();
-  first_pose.translation() << seam_->poses[0].position.x,
-    seam_->poses[0].position.y,
-    seam_->poses[0].position.z;
-
-  Eigen::Quaterniond q_first(
-    seam_->poses[0].orientation.w,
-    seam_->poses[0].orientation.x,
-    seam_->poses[0].orientation.y,
-    seam_->poses[0].orientation.z);
-  first_pose.linear() = q_first.toRotationMatrix();
+  const auto first_pose = to_isometry(seam_->poses[0]);
+  if (!first_pose) {
+    RCLCPP_ERROR(logger, "Validation failed: seam pose 1 is non-finite or has a zero quaternion");
+    return false;
+  }
 
   Vector6d q_first_point;
 
-  // Relaxed tolerances (20cm / 0.10 rad) for Phase 1: the approach configuration
-  // is OMPL-generated and may be far from the first seam point in joint space.
-  // Tight tolerances here cause spurious failures on valid approach poses.
-  // Phase 2 uses tight tolerances (3cm / 0.02 rad) since it warm-starts from the previous solution.
+  // Phase 1: first seam point, seeded from the approach configuration. The
+  // tolerances are how far the solved pose may be from the seam point, not how far
+  // the seed may be in joint space (Ceres copes with a distant seed on its own).
   bool success = ceres_ik_solver_->solve(
-    first_pose,
+    *first_pose,
     q_approach,
     q_first_point,
-    0.20,
-    0.10);
+    params_.first_point_tol_pos,
+    params_.first_point_tol_rot);
 
   if (!success) {
     RCLCPP_WARN(logger, "Phase 1 FAILED: Cannot reach first seam point from approach");
     return false;
   }
-  double m_index_first = compute_manipulability(q_first_point);
+  double m_index_first = kinematics_solver_->compute_yoshikawa_index(to_std_vector(q_first_point));
   RCLCPP_DEBUG(logger, "First point manipulability: %.6f", m_index_first);
 
-  if (m_index_first < manipulability_threshold_) {
+  if (m_index_first < params_.manipulability_threshold) {
     RCLCPP_WARN(logger, "Phase 1 FAILED: Low manipulability at first point: %.6f < %.6f",
-                m_index_first, manipulability_threshold_);
+                m_index_first, params_.manipulability_threshold);
     return false;
   }
 
-
+  // Phase 2: walk the rest of the seam, each solution seeding the next.
   Vector6d current_q = q_first_point;
-  size_t waypoint_idx = 1;
 
-  for (; waypoint_idx < seam_->poses.size(); ++waypoint_idx) {
-    const auto & target_pose_msg = seam_->poses[waypoint_idx];
-    Eigen::Isometry3d target_pose = Eigen::Isometry3d::Identity();
-    target_pose.translation() << target_pose_msg.position.x,
-      target_pose_msg.position.y,
-      target_pose_msg.position.z;
-
-    Eigen::Quaterniond q(
-      target_pose_msg.orientation.w,
-      target_pose_msg.orientation.x,
-      target_pose_msg.orientation.y,
-      target_pose_msg.orientation.z);
-    target_pose.linear() = q.toRotationMatrix();
+  for (size_t waypoint_idx = 1; waypoint_idx < seam_->poses.size(); ++waypoint_idx) {
+    const auto target_pose = to_isometry(seam_->poses[waypoint_idx]);
+    if (!target_pose) {
+      RCLCPP_ERROR(
+        logger, "Phase 2 FAILED: seam pose %zu/%zu is non-finite or has a zero quaternion",
+        waypoint_idx + 1, seam_->poses.size());
+      return false;
+    }
 
     Vector6d next_q;
 
     success = ceres_ik_solver_->solve(
-      target_pose,
+      *target_pose,
       current_q,
       next_q,
-      0.03,
-      0.02);
+      params_.seam_tol_pos,
+      params_.seam_tol_rot);
 
     if (!success) {
       RCLCPP_WARN(logger, "Phase 2 FAILED: IK failed at waypoint %zu/%zu",
@@ -119,14 +154,15 @@ bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
       return false;
     }
 
-    double m_index = compute_manipulability(next_q);
+    double m_index = kinematics_solver_->compute_yoshikawa_index(to_std_vector(next_q));
 
     RCLCPP_DEBUG(logger, "Waypoint %zu/%zu: Manipulability = %.6f",
                  waypoint_idx + 1, seam_->poses.size(), m_index);
 
-    if (m_index < manipulability_threshold_) {
+    if (m_index < params_.manipulability_threshold) {
       RCLCPP_WARN(logger, "Phase 2 FAILED: Low manipulability at waypoint %zu/%zu: %.6f < %.6f",
-                  waypoint_idx + 1, seam_->poses.size(), m_index, manipulability_threshold_);
+                  waypoint_idx + 1, seam_->poses.size(), m_index,
+                  params_.manipulability_threshold);
       return false;
     }
 
@@ -135,39 +171,6 @@ bool ApproachValidator::is_approach_valid(const Vector6d & q_approach)
 
   RCLCPP_INFO(logger, "Approach validation passed (%zu waypoints)", seam_->poses.size());
   return true;
-}
-
-double ApproachValidator::compute_manipulability(const Vector6d & q) const
-{
-  auto logger = rclcpp::get_logger("kinematics");
-
-  std::vector<double> q_vec(6);
-  for (size_t i = 0; i < 6; ++i) {
-    q_vec[i] = q(i);
-  }
-
-  Eigen::MatrixXd J = kinematics_solver_->compute_jacobian(q_vec);
-
-  Eigen::MatrixXd JJT = J * J.transpose();
-  double det_JJT = JJT.determinant();
-
-  if (det_JJT < 0.0) {
-    RCLCPP_WARN(logger,
-          "Negative determinant in JJ^T (%.9f) — numerical noise near singularity, returning 0.0",
-          det_JJT);
-    return 0.0;
-  }
-
-  double yoshikawa_index = std::sqrt(det_JJT);
-
-  Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
-  double cond_number = svd.singularValues()(0) /
-    svd.singularValues()(svd.singularValues().size() - 1);
-
-  RCLCPP_DEBUG(logger, "Manipulability: %.6f, condition: %.2f%s",
-    yoshikawa_index, cond_number, cond_number > 100.0 ? " (near singularity)" : "");
-
-  return yoshikawa_index;
 }
 
 }  // namespace kinematics

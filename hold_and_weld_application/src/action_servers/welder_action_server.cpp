@@ -18,6 +18,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <filesystem>
 
@@ -152,8 +153,11 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   load_config_from_yaml();
 
+  const bool needs_kinematics =
+    config_.use_approach_validator || config_.use_configuration_finder;
+
   std::string urdf_string;
-  if (config_.use_approach_validator) {
+  if (needs_kinematics) {
     RCLCPP_DEBUG(logger_, "Fetching robot_description from robot_state_publisher");
 
     auto param_client = std::make_shared<rclcpp::SyncParametersClient>(temp_node,
@@ -224,7 +228,7 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
-  if (config_.use_approach_validator) {
+  if (needs_kinematics) {
     try {
       RCLCPP_INFO(logger_, "Initializing kinematics solvers");
 
@@ -257,11 +261,44 @@ WelderActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
       ceres_solver_ = std::make_shared<hold_and_weld::kinematics::CeresIKSolver>(
         kinematics_solver_, 1.0);
 
+      auto validator_params = config_.approach_validator;
+      validator_params.manipulability_threshold = config_.manipulability_threshold;
       approach_validator_ =
         std::make_unique<hold_and_weld::kinematics::ApproachValidator>(
         kinematics_solver_,
         ceres_solver_,
-        config_.manipulability_threshold);
+        validator_params);
+
+      if (config_.use_configuration_finder) {
+        // The finder simulates Pilz on the Ceres chain, so both must model the same point.
+        const std::string ee_link = move_group_->getEndEffectorLink();
+        if (ee_link != "robot2_wire_tip") {
+          throw std::runtime_error(
+                  "configuration finder models robot2_wire_tip but Pilz targets '" + ee_link +
+                  "'; fix the SRDF or set use_configuration_finder: false");
+        }
+
+        const auto & joint_names = joint_model_group->getVariableNames();
+        if (joint_names.size() != 6) {
+          throw std::runtime_error(
+                  "configuration finder expects 6 joints in " + config_.welder_group_name +
+                  ", got " + std::to_string(joint_names.size()));
+        }
+        for (size_t i = 0; i < 6; ++i) {
+          auto it = config_.home_configuration.find(joint_names[i]);
+          if (it == config_.home_configuration.end()) {
+            throw std::runtime_error(
+                    "home_configuration (or safety_pose.joint_positions) is missing joint '" +
+                    joint_names[i] + "'");
+          }
+          q_home_(i) = it->second;
+        }
+
+        auto finder_params = config_.finder;
+        finder_params.manipulability_threshold = config_.manipulability_threshold;
+        configuration_finder_ = std::make_unique<hold_and_weld::kinematics::ConfigurationFinder>(
+          kinematics_solver_, ceres_solver_, finder_params);
+      }
 
       RCLCPP_INFO(logger_, "Kinematics solvers initialized");
     } catch (const std::exception & e) {
@@ -455,6 +492,7 @@ WelderActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
     RCLCPP_ERROR(logger_, "Failed to cleanup MoveIt executor: %s", e.what());
   }
 
+  configuration_finder_.reset();
   approach_validator_.reset();
   kinematics_solver_.reset();
   ceres_solver_.reset();
@@ -512,6 +550,7 @@ WelderActionServer::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
     RCLCPP_ERROR(logger_, "Failed to cleanup MoveIt executor: %s", e.what());
   }
 
+  configuration_finder_.reset();
   approach_validator_.reset();
   kinematics_solver_.reset();
   ceres_solver_.reset();
@@ -573,6 +612,46 @@ void WelderActionServer::load_config_from_yaml()
     }
     if (yaml["manipulability_threshold"]) {
       config_.manipulability_threshold = yaml["manipulability_threshold"].as<double>();
+    }
+    if (yaml["use_configuration_finder"]) {
+      config_.use_configuration_finder = yaml["use_configuration_finder"].as<bool>();
+    }
+    if (yaml["home_configuration"]) {
+      config_.home_configuration =
+        yaml["home_configuration"].as<std::map<std::string, double>>();
+    } else if (yaml["safety_pose"] && yaml["safety_pose"]["joint_positions"]) {
+      config_.home_configuration =
+        yaml["safety_pose"]["joint_positions"].as<std::map<std::string, double>>();
+    }
+    if (const YAML::Node finder = yaml["finder"]) {
+      auto read = [&finder](const char * key, double & value) {
+          if (finder[key]) {value = finder[key].as<double>();}
+        };
+      auto & f = config_.finder;
+      read("path_step", f.path_step);
+      read("path_step_rot", f.path_step_rot);
+      read("max_joint_step", f.max_joint_step);
+      read("branch_seed_weight", f.branch_seed_weight);
+      read("walk_seed_weight", f.walk_seed_weight);
+      read("tol_pos", f.tol_pos);
+      read("tol_rot", f.tol_rot);
+      read("w_limit_margin", f.w_limit_margin);
+      read("w_manipulability", f.w_manipulability);
+      read("w_home", f.w_home);
+      read("dedupe_epsilon", f.dedupe_epsilon);
+      if (finder["max_ompl_candidates"]) {
+        config_.finder_max_ompl_candidates = finder["max_ompl_candidates"].as<int>();
+      }
+    }
+    if (const YAML::Node validator = yaml["approach_validator"]) {
+      auto read = [&validator](const char * key, double & value) {
+          if (validator[key]) {value = validator[key].as<double>();}
+        };
+      auto & v = config_.approach_validator;
+      read("first_point_tol_pos", v.first_point_tol_pos);
+      read("first_point_tol_rot", v.first_point_tol_rot);
+      read("seam_tol_pos", v.seam_tol_pos);
+      read("seam_tol_rot", v.seam_tol_rot);
     }
     RCLCPP_INFO(logger_, "Configuration loaded successfully");
   } catch (const YAML::Exception & e) {
@@ -885,7 +964,7 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     }
 
     publish_progress("approaching_seam_" + seam.seam_id, points_processed);
-    if (!move_to_seam_boundary(seam, waypoints.front())) {
+    if (!move_to_seam_boundary(seam, waypoints.front(), true)) {
       RCLCPP_ERROR(logger_, "Failed to approach seam %s", seam.seam_id.c_str());
       failed_seams.push_back(seam.seam_id);
       continue;
@@ -930,7 +1009,7 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     }
 
     publish_progress("retracting_from_seam_" + seam.seam_id, points_processed);
-    if (!move_to_seam_boundary(seam, waypoints.back())) {
+    if (!move_to_seam_boundary(seam, waypoints.back(), false)) {
       RCLCPP_ERROR(logger_, "Failed to retract from seam %s", seam.seam_id.c_str());
       failed_seams.push_back(seam.seam_id);
       continue;
@@ -969,25 +1048,21 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
 }
 
 bool WelderActionServer::move_to_seam_boundary(
-  const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose)
+  const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose, bool is_approach)
 {
   // Self-resetting: execute_cartesian_path() may have left the Pilz pipeline/planner
   move_group_->setPlanningPipelineId("ompl");
   move_group_->setPlannerId("");
   move_group_->clearPathConstraints();
 
-  Eigen::Quaterniond q(
-    ref_pose.orientation.w,
-    ref_pose.orientation.x,
-    ref_pose.orientation.y,
-    ref_pose.orientation.z
-  );
-
-  // Back up along the torch local -Z axis (away from the workpiece surface)
-  Eigen::Vector3d torch_direction = q * Eigen::Vector3d(0, 0, -1);
-
-  Eigen::Vector3d ref_pos(ref_pose.position.x, ref_pose.position.y, ref_pose.position.z);
-  Eigen::Vector3d target_pos = ref_pos - torch_direction * config_.approach_offset_z;
+  // Same standoff maths as the configuration finder, so its approach pose is this one.
+  Eigen::Isometry3d ref = Eigen::Isometry3d::Identity();
+  ref.translation() << ref_pose.position.x, ref_pose.position.y, ref_pose.position.z;
+  ref.linear() = Eigen::Quaterniond(
+    ref_pose.orientation.w, ref_pose.orientation.x,
+    ref_pose.orientation.y, ref_pose.orientation.z).toRotationMatrix();
+  const Eigen::Vector3d target_pos =
+    hold_and_weld::kinematics::standoff_pose(ref, config_.approach_offset_z).translation();
 
   geometry_msgs::msg::Pose target_pose;
   target_pose.position.x = target_pos.x();
@@ -1016,6 +1091,13 @@ bool WelderActionServer::move_to_seam_boundary(
   );
   RCLCPP_DEBUG(logger_, "Distance to approach target: %.3f m", distance);
 
+  if (is_approach && configuration_finder_) {
+    return approach_via_configuration_finder(seam, current_state);
+  }
+
+  // The validator checks the weld from the approach; it means nothing for a retract.
+  const bool validate = is_approach && config_.use_approach_validator;
+
   move_group_->setPoseTarget(target_pose);
   move_group_->setGoalPositionTolerance(0.001);
   move_group_->setGoalOrientationTolerance(0.01);
@@ -1029,7 +1111,7 @@ bool WelderActionServer::move_to_seam_boundary(
     pose = transform_pose_to_base_frame(pose, base_to_world);
   }
 
-  if (config_.use_approach_validator) {
+  if (validate) {
     approach_validator_->set_weld_seam(local_seam);
   }
 
@@ -1093,7 +1175,7 @@ bool WelderActionServer::move_to_seam_boundary(
       continue;
     }
 
-    if (config_.use_approach_validator) {
+    if (validate) {
       for (int val_attempt = 1; val_attempt <= config_.max_approach_validation_retries;
         ++val_attempt)
       {
@@ -1130,6 +1212,103 @@ bool WelderActionServer::move_to_seam_boundary(
 
   RCLCPP_ERROR(logger_, "Failed to find valid boundary pose after %d OMPL attempts",
                config_.max_ompl_planning_attempts);
+  return false;
+}
+
+bool WelderActionServer::approach_via_configuration_finder(
+  const WeldSeam & seam, const moveit::core::RobotStatePtr & current_state)
+{
+  const Eigen::Isometry3d base_to_world =
+    current_state->getGlobalLinkTransform("robot2_base_link").inverse();
+
+  std::vector<Eigen::Isometry3d> seam_base;
+  seam_base.reserve(seam.poses.size());
+  for (const auto & pose : seam.poses) {
+    const auto p = transform_pose_to_base_frame(pose, base_to_world);
+    Eigen::Isometry3d iso = Eigen::Isometry3d::Identity();
+    iso.translation() << p.position.x, p.position.y, p.position.z;
+    iso.linear() = Eigen::Quaterniond(
+      p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z).toRotationMatrix();
+    seam_base.push_back(iso);
+  }
+
+  const auto ranked = configuration_finder_->find(
+    seam_base, seam.segment_type, config_.approach_offset_z, q_home_);
+
+  auto describe = [](const hold_and_weld::kinematics::Candidate & c) {
+      char buf[256];
+      std::snprintf(
+        buf, sizeof(buf), "#%zu [%.3f %.3f %.3f %.3f %.3f %.3f]", c.index,
+        c.q_start(0), c.q_start(1), c.q_start(2), c.q_start(3), c.q_start(4), c.q_start(5));
+      std::string out = buf;
+      if (c.walk.feasible) {
+        std::snprintf(
+          buf, sizeof(buf), " score %.3f (margin %.3f rad, manip %.4f, home %.3f rad)",
+          c.score, c.walk.min_limit_margin, c.walk.min_manipulability, c.home_distance);
+      } else {
+        std::snprintf(
+          buf, sizeof(buf), " infeasible: %s at path sample %zu",
+          hold_and_weld::kinematics::to_string(c.walk.failure).c_str(), c.walk.fail_index);
+      }
+      return out + buf;
+    };
+
+  size_t feasible = 0;
+  for (const auto & c : ranked) {
+    feasible += c.walk.feasible ? 1 : 0;
+    RCLCPP_DEBUG(logger_, "Seam %s candidate %s", seam.seam_id.c_str(), describe(c).c_str());
+  }
+
+  if (feasible == 0) {
+    std::string reasons;
+    for (const auto & c : ranked) {
+      reasons += "\n  " + describe(c);
+    }
+    RCLCPP_ERROR(
+      logger_, "No configuration can weld seam %s (%zu candidates):%s",
+      seam.seam_id.c_str(), ranked.size(), ranked.empty() ? " IK found no solution" :
+      reasons.c_str());
+    return false;
+  }
+
+  const size_t to_try = std::min(
+    feasible, static_cast<size_t>(std::max(config_.finder_max_ompl_candidates, 1)));
+  for (size_t rank = 0; rank < to_try; ++rank) {
+    const auto & candidate = ranked[rank];
+    RCLCPP_INFO(
+      logger_, "Seam %s: start config rank %zu/%zu %s", seam.seam_id.c_str(), rank + 1,
+      feasible, describe(candidate).c_str());
+
+    const std::vector<double> joint_goal(
+      candidate.q_start.data(), candidate.q_start.data() + candidate.q_start.size());
+    move_group_->setStartStateToCurrentState();
+    if (!move_group_->setJointValueTarget(joint_goal)) {
+      RCLCPP_WARN(logger_, "Seam %s: joint goal rejected by MoveIt", seam.seam_id.c_str());
+      continue;
+    }
+
+    for (int attempt = 1; attempt <= config_.max_ompl_planning_attempts; ++attempt) {
+      moveit::planning_interface::MoveGroupInterface::Plan plan;
+      if (move_group_->plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+        RCLCPP_WARN(
+          logger_, "Seam %s: OMPL attempt %d/%d to rank %zu failed", seam.seam_id.c_str(),
+          attempt, config_.max_ompl_planning_attempts, rank + 1);
+        continue;
+      }
+      // The arm may have moved, so a failed execution ends the approach.
+      if (move_group_->execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+        RCLCPP_ERROR(logger_, "Seam %s: approach execution failed", seam.seam_id.c_str());
+        return false;
+      }
+      RCLCPP_INFO(logger_, "Seam %s: approach complete at rank %zu", seam.seam_id.c_str(),
+        rank + 1);
+      return true;
+    }
+  }
+
+  RCLCPP_ERROR(
+    logger_, "Seam %s: %zu feasible configs, OMPL could not reach any (tried top %zu)",
+    seam.seam_id.c_str(), feasible, to_try);
   return false;
 }
 

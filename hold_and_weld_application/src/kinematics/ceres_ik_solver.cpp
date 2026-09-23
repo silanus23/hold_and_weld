@@ -16,6 +16,10 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -92,10 +96,33 @@ bool IKCostFunctor::operator()(const T * const q_array, T * residuals) const
 CeresIKSolver::CeresIKSolver(
   std::shared_ptr<KinematicsSolver> fk_solver,
   double rotation_weight)
-: fk_solver_(fk_solver),
-  rotation_weight_(rotation_weight),
+: fk_solver_(std::move(fk_solver)),
   max_iterations_(100)
 {
+  if (!fk_solver_) {
+    throw std::invalid_argument("CeresIKSolver: fk_solver must not be null");
+  }
+  set_rotation_weight(rotation_weight);
+}
+
+void CeresIKSolver::set_max_iterations(int max_iterations)
+{
+  if (max_iterations <= 0) {
+    throw std::invalid_argument(
+      "CeresIKSolver: max_iterations must be positive, got " + std::to_string(max_iterations));
+  }
+  max_iterations_ = max_iterations;
+}
+
+void CeresIKSolver::set_rotation_weight(double weight)
+{
+  // Zero would drop orientation from the cost while solve() still checks it.
+  if (!std::isfinite(weight) || weight <= 0.0) {
+    throw std::invalid_argument(
+      "CeresIKSolver: rotation_weight must be positive and finite, got " +
+      std::to_string(weight));
+  }
+  rotation_weight_ = weight;
 }
 
 bool CeresIKSolver::solve(
@@ -103,9 +130,28 @@ bool CeresIKSolver::solve(
   const CeresIKSolver::Vector6d & q_seed,
   CeresIKSolver::Vector6d & q_solution,
   double position_tolerance,
-  double orientation_tolerance)
+  double orientation_tolerance,
+  double seed_weight)
 {
   auto logger = rclcpp::get_logger("ceres_ik_solver");
+
+  if (!(position_tolerance > 0.0) || !(orientation_tolerance > 0.0)) {
+    throw std::invalid_argument(
+      "CeresIKSolver::solve: tolerances must be positive, got position " +
+      std::to_string(position_tolerance) + ", orientation " +
+      std::to_string(orientation_tolerance));
+  }
+  if (!std::isfinite(seed_weight) || seed_weight < 0.0) {
+    throw std::invalid_argument(
+      "CeresIKSolver::solve: seed_weight must be non-negative and finite, got " +
+      std::to_string(seed_weight));
+  }
+  // Bad data rather than a programming error (e.g. a NaN pose from upstream), so
+  // report it as an IK failure instead of throwing.
+  if (!q_seed.allFinite() || !target_pose.matrix().allFinite()) {
+    RCLCPP_WARN(logger, "IK rejected: seed or target pose contains NaN/Inf");
+    return false;
+  }
 
   double q_params[6];
   for (size_t i = 0; i < 6; ++i) {
@@ -114,7 +160,6 @@ bool CeresIKSolver::solve(
 
   ceres::Problem problem;
 
-  double seed_weight = 0.01;
   std::vector<double> seed_vec(6);
   for (size_t i = 0; i < 6; ++i) {
     seed_vec[i] = q_seed[i];

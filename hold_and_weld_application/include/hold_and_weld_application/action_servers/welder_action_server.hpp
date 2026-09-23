@@ -19,6 +19,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,6 +41,7 @@
 #include "hold_and_weld_application/action/trigger_welder.hpp"
 #include "hold_and_weld_application/kinematics/approach_validator.hpp"
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
+#include "hold_and_weld_application/kinematics/configuration_finder.hpp"
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
 
@@ -67,6 +69,14 @@ struct WelderConfig
   bool use_approach_validator = true;
   std::string json_file;
   double manipulability_threshold = 1e-6;
+  bool use_configuration_finder = true;
+  /// Joint name -> position. Empty in YAML means safety_pose.joint_positions.
+  std::map<std::string, double> home_configuration;
+  /// Feasible start configurations handed to OMPL before giving up on a seam.
+  int finder_max_ompl_candidates = 5;
+  hold_and_weld::kinematics::ConfigurationFinderParams finder;
+  /// manipulability_threshold is overwritten from the top-level key.
+  hold_and_weld::kinematics::ApproachValidatorParams approach_validator;
 };
 
 /**
@@ -210,16 +220,33 @@ private:
    * @brief Move the welder arm to the offset boundary pose relative to a seam pose.
    *
    * Used for both approach (ref_pose = poses.front()) and retract (ref_pose = poses.back()).
-   * The target is `approach_offset_z` metres back along the torch local -Z axis from
-   * ref_pose, with the same orientation. The full OMPL + ApproachValidator pipeline
-   * is used so retract benefits from the same replanning and validation as approach.
+   * The target is `approach_offset_z` metres from ref_pose along its local Z axis
+   * (kinematics::standoff_pose), with the same orientation.
    *
-   * @param seam      The weld seam (used for validator IK chain warm-start).
-   * @param ref_pose  Boundary pose to offset from (poses.front() or poses.back()).
+   * Approach with use_configuration_finder: OMPL gets the finder's chosen start
+   * configuration as a joint goal. Approach otherwise: OMPL pose goal, optionally
+   * checked by the ApproachValidator. Retract: always a plain OMPL pose goal.
+   *
+   * @param seam        The weld seam.
+   * @param ref_pose    Boundary pose to offset from (poses.front() or poses.back()).
+   * @param is_approach true before the weld, false for the retract after it.
    * @return true if the motion was planned, validated and executed successfully.
    */
   bool move_to_seam_boundary(
-    const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose);
+    const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose, bool is_approach);
+
+  /**
+   * @brief Approach a seam by choosing the Pilz start configuration first.
+   *
+   * Ranks start configurations with the ConfigurationFinder, then tries OMPL joint
+   * goals in rank order and executes the first plan found.
+   *
+   * @param seam The weld seam (world frame).
+   * @param current_state Current robot state, used for the world -> base transform.
+   * @return true if a ranked configuration was reached.
+   */
+  bool approach_via_configuration_finder(
+    const WeldSeam & seam, const moveit::core::RobotStatePtr & current_state);
 
   /**
    * @brief Execute the weld motion along a seam, dispatching on segment type.
@@ -332,6 +359,9 @@ private:
   std::shared_ptr<hold_and_weld::kinematics::CeresIKSolver> ceres_solver_;
   std::shared_ptr<hold_and_weld::kinematics::KinematicsSolver> kinematics_solver_;
   std::unique_ptr<hold_and_weld::kinematics::ApproachValidator> approach_validator_;
+  std::unique_ptr<hold_and_weld::kinematics::ConfigurationFinder> configuration_finder_;
+  hold_and_weld::kinematics::ConfigurationFinder::Vector6d q_home_ =
+    hold_and_weld::kinematics::ConfigurationFinder::Vector6d::Zero();
 
   WelderConfig config_;
   rclcpp::Logger logger_;

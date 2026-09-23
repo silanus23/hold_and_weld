@@ -14,7 +14,12 @@
 
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 
+#include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
+#include <vector>
+
 #include <rclcpp/rclcpp.hpp>
 
 namespace hold_and_weld
@@ -45,6 +50,21 @@ KinematicsSolver::KinematicsSolver(const ParsedChain & chain)
   joint_limits_.reserve(dof_);
 
   for (const auto & joint : chain.actuated_joints) {
+    // URDFParser guarantees these, but a hand-built ParsedChain may not. AngleAxisd
+    // needs a unit axis; a non-unit one silently scales the rotation.
+    if (std::abs(joint.axis.norm() - 1.0) > 1e-6) {
+      RCLCPP_ERROR(logger, "Joint '%s' axis is not unit length", joint.name.c_str());
+      throw std::invalid_argument("Joint '" + joint.name + "' axis is not unit length");
+    }
+    if (!std::isfinite(joint.q_min) || !std::isfinite(joint.q_max) ||
+      joint.q_min >= joint.q_max)
+    {
+      RCLCPP_ERROR(
+        logger, "Joint '%s' has invalid limits [%f, %f]", joint.name.c_str(), joint.q_min,
+        joint.q_max);
+      throw std::invalid_argument("Joint '" + joint.name + "' has invalid limits");
+    }
+
     joint_local_transforms_.push_back(joint.origin_transform);
     joint_axes_.push_back(joint.axis);
     is_revolute_.push_back(joint.is_revolute);
@@ -85,6 +105,30 @@ Eigen::Isometry3d KinematicsSolver::compute_fk(const std::vector<double> & q) co
   transform = transform * tool_transform_;
 
   return transform;
+}
+
+void KinematicsSolver::compute_joint_axes(
+  const std::vector<double> & q,
+  std::vector<Eigen::Vector3d> & origins,
+  std::vector<Eigen::Vector3d> & axes) const
+{
+  validate_joint_vector(q);
+
+  origins.resize(dof_);
+  axes.resize(dof_);
+
+  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+  for (size_t i = 0; i < dof_; ++i) {
+    transform = transform * joint_local_transforms_[i];
+    origins[i] = transform.translation();
+    axes[i] = transform.rotation() * joint_axes_[i];
+
+    if (is_revolute_[i]) {
+      transform.rotate(Eigen::AngleAxisd(q[i], joint_axes_[i]));
+    } else {
+      transform.translate(q[i] * joint_axes_[i]);
+    }
+  }
 }
 
 Eigen::MatrixXd KinematicsSolver::compute_jacobian(const std::vector<double> & q) const
@@ -163,6 +207,10 @@ bool KinematicsSolver::is_near_singularity(
   const std::vector<double> & q,
   double threshold) const
 {
+  if (!(threshold >= 0.0)) {
+    throw std::invalid_argument(
+      "is_near_singularity: threshold must be non-negative, got " + std::to_string(threshold));
+  }
   double manipulability = compute_yoshikawa_index(q);
   return manipulability < threshold;
 }
@@ -173,7 +221,7 @@ bool KinematicsSolver::check_joint_limits(
 {
   validate_joint_vector(q);
 
-  if (margin < 0.0) {
+  if (!(margin >= 0.0)) {
     throw std::invalid_argument(
       "check_joint_limits: margin must be non-negative, got " + std::to_string(margin));
   }
@@ -182,7 +230,8 @@ bool KinematicsSolver::check_joint_limits(
     double q_min_safe = joint_limits_[i].first + margin;
     double q_max_safe = joint_limits_[i].second - margin;
 
-    if (q[i] < q_min_safe || q[i] > q_max_safe) {
+    // Written as "not inside" so a NaN joint fails the check.
+    if (!(q_min_safe <= q[i] && q[i] <= q_max_safe)) {
       return false;
     }
   }
