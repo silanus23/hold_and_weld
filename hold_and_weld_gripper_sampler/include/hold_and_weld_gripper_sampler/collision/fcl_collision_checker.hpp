@@ -145,8 +145,8 @@ public:
    *
    * @param gripper_transform Transform placing gripper in world frame
    * @param grip_distance Distance between finger contact points
-   * @param tolerance Collision tolerance (penetration allowed)
-   * @return true if collision detected (distance < tolerance)
+   * @param tolerance Clearance required between gripper and shape [m]
+   * @return true if collision detected (distance < tolerance), or if the checker is invalid
    */
   bool collides_with_primary(
     const gp_Trsf & gripper_transform,
@@ -159,7 +159,7 @@ public:
    * @param gripper_transform Transform placing gripper in world frame
    * @param grip_distance Distance between finger contact points
    * @param tolerance Collision tolerance
-   * @return true if collision detected with any exclusion volume
+   * @return true if collision detected with any exclusion volume, or if the checker is invalid
    */
   bool collides_with_exclusions(
     const gp_Trsf & gripper_transform,
@@ -172,7 +172,7 @@ public:
    * @param gripper_transform Transform placing gripper in world frame
    * @param grip_distance Distance between finger contact points
    * @param tolerance Collision tolerance
-   * @return true if collision detected with the ground plane
+   * @return true if collision detected with the ground plane, or if the checker is invalid
    */
   bool collides_with_ground(
     const gp_Trsf & gripper_transform,
@@ -185,7 +185,7 @@ public:
    * @param gripper_transform Transform placing gripper in world frame
    * @param grip_distance Distance between finger contact points
    * @param tolerance Collision tolerance
-   * @return true if collision detected with any secondary shape
+   * @return true if collision detected with any secondary shape, or if the checker is invalid
    */
   bool collides_with_secondaries(
     const gp_Trsf & gripper_transform,
@@ -204,7 +204,7 @@ public:
    * with the cylinder axis along the transform's local Z
    * @param radius Cylinder radius
    * @param length Cylinder length along the axis
-   * @return true if the cylinder overlaps any obstacle
+   * @return true if the cylinder overlaps any obstacle, or if the checker is invalid
    */
   bool cylinder_collides_with_obstacles(
     const gp_Trsf & cylinder_pose,
@@ -242,7 +242,11 @@ private:
   Transform3 to_fcl_transform(const gp_Trsf & trsf) const;
 
   /**
-   * @brief Compute finger transforms for given grip distance
+   * @brief Finger poses, relative to the base, for the given jaw opening.
+   *
+   * @param grip_distance      Opening between the finger contact faces [m]
+   * @param finger_1_transform Receives finger 1's offset from its modelled (closed) pose
+   * @param finger_2_transform Receives finger 2's offset from its modelled (closed) pose
    */
   void compute_finger_transforms(
     double grip_distance,
@@ -253,6 +257,9 @@ private:
 
   /**
    * @brief Check collision between gripper components and a target BVH
+   *
+   * @param target_index For Exclusion and Secondary targets, the obstacle's index
+   *                     in the matching list; selects its stats and Embree scene
    */
   bool check_gripper_collision(
     const gp_Trsf & gripper_transform,
@@ -260,7 +267,7 @@ private:
     const std::shared_ptr<BVHModel> & target_bvh,
     double tolerance,
     TargetKind kind,
-    size_t secondary_index = 0) const;
+    size_t target_index = 0) const;
 
   /**
    * @brief Check collision between gripper components and the ground body
@@ -293,11 +300,16 @@ private:
   std::shared_ptr<BVHModel> primary_bvh_;
 
   // Embree query engines for watertight ray casting and point-in-solid checks.
-  // Indices are kept in sync with exclusion_bvhs_ / secondary_bvhs_.
-  // Each entry may be nullptr if Embree construction failed (falls back to FCL BVH).
+  // Index i of embree_exclusions_ / embree_secondaries_ and of exclusion_bvhs_ /
+  // secondary_bvhs_ is the same obstacle; any entry may be nullptr on failure.
   std::shared_ptr<EmbreeMeshQuery> embree_primary_;
   std::vector<std::shared_ptr<EmbreeMeshQuery>> embree_exclusions_;
   std::vector<std::shared_ptr<EmbreeMeshQuery>> embree_secondaries_;
+
+  // Gripper parts in their own (closed-pose) frames; nullptr if Embree failed.
+  std::shared_ptr<EmbreeMeshQuery> embree_finger_1_;
+  std::shared_ptr<EmbreeMeshQuery> embree_finger_2_;
+  std::shared_ptr<EmbreeMeshQuery> embree_base_;
 
   std::vector<std::shared_ptr<BVHModel>> exclusion_bvhs_;
   std::vector<std::shared_ptr<BVHModel>> secondary_bvhs_;

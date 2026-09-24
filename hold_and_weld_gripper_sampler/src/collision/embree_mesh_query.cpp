@@ -26,6 +26,7 @@
 #include <gp_Trsf.hxx>
 #include <IMeshTools_Parameters.hxx>
 #include <Poly_Triangulation.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
@@ -63,13 +64,23 @@ EmbreeMeshQuery::EmbreeMeshQuery(
   if (shape.IsNull()) {
     throw std::runtime_error("EmbreeMeshQuery: input shape is null");
   }
+  if (!(linear_deflection > 0.0)) {
+    throw std::runtime_error("EmbreeMeshQuery: linear_deflection must be > 0");
+  }
 
   IMeshTools_Parameters mesh_params;
   mesh_params.Deflection = linear_deflection;
   mesh_params.Angle = 0.5;
   mesh_params.DeflectionInterior = linear_deflection * 10.0;
-  mesh_params.InParallel = false;  // single-threaded to avoid OCCT mesh race
-  BRepMesh_IncrementalMesh mesher(shape, mesh_params);
+  mesh_params.InParallel = false;
+  // Standard_Failure is not a std::exception; rethrow as one so callers'
+  // std::exception handlers see OCCT meshing failures too.
+  try {
+    BRepMesh_IncrementalMesh mesher(shape, mesh_params);
+  } catch (const Standard_Failure & e) {
+    throw std::runtime_error(
+            std::string("EmbreeMeshQuery: meshing failed — ") + e.GetMessageString());
+  }
 
   for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
     TopoDS_Face face = TopoDS::Face(exp.Current());
@@ -124,9 +135,20 @@ EmbreeMeshQuery::EmbreeMeshQuery(
   if (vertex_buf_.empty() || index_buf_.empty()) {
     throw std::runtime_error("EmbreeMeshQuery: empty vertex or index array");
   }
+  for (const auto & triangle : index_buf_) {
+    for (const unsigned int index : triangle) {
+      if (index >= num_vertices_) {
+        throw std::runtime_error(
+                "EmbreeMeshQuery: triangle index " + std::to_string(index) +
+                " out of range for " + std::to_string(num_vertices_) + " vertices");
+      }
+    }
+  }
   commit_scene();
 }
 
+// Embree holds raw pointers into vertex_buf_ / index_buf_. Moving a std::vector
+// hands over its heap buffer unchanged, so those pointers stay valid.
 EmbreeMeshQuery::EmbreeMeshQuery(EmbreeMeshQuery && other) noexcept
 : device_(other.device_),
   scene_(other.scene_),
@@ -277,9 +299,15 @@ bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
 {
   if (!valid_) {return false;}
 
-  // +X shoot direction — any fixed direction works with Embree's watertight intersector.
-  constexpr float kEps = 1e-4f;   // advance past each hit by this amount (0.1 mm)
-  constexpr int   kMaxIter = 64;  // safety cap — no real mesh needs more
+  // Not axis-aligned: CAD faces usually are, and a ray lying in a face plane
+  // grazes it and miscounts no matter how watertight the intersector is.
+  constexpr float kDirX = 0.8017837f;
+  constexpr float kDirY = 0.5345225f;
+  constexpr float kDirZ = 0.2672612f;  // (3, 2, 1) / sqrt(14)
+  // Advance past each hit by this much. Walls thinner than it would be counted
+  // once instead of twice, so it stays far below any real wall thickness.
+  constexpr float kEps = 1e-6f;  // 1 µm
+  constexpr int kMaxIter = 256;
 
   float tnear = kEps;
   int hit_count = 0;
@@ -287,6 +315,7 @@ bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
   RTCIntersectArguments iargs;
   rtcInitIntersectArguments(&iargs);
 
+  bool exhausted = true;
   for (int iter = 0; iter < kMaxIter; ++iter) {
     RTCRayHit rayhit;
     std::memset(&rayhit, 0, sizeof(rayhit));
@@ -294,9 +323,9 @@ bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
     rayhit.ray.org_x = static_cast<float>(point.X());
     rayhit.ray.org_y = static_cast<float>(point.Y());
     rayhit.ray.org_z = static_cast<float>(point.Z());
-    rayhit.ray.dir_x = 1.0f;
-    rayhit.ray.dir_y = 0.0f;
-    rayhit.ray.dir_z = 0.0f;
+    rayhit.ray.dir_x = kDirX;
+    rayhit.ray.dir_y = kDirY;
+    rayhit.ray.dir_z = kDirZ;
     rayhit.ray.tnear = tnear;
     rayhit.ray.tfar = 1e30f;
     rayhit.ray.mask = 0xFFFFFFFF;
@@ -307,13 +336,17 @@ bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
     rtcIntersect1(scene_, &rayhit, &iargs);
 
     if (rayhit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-      break;  // no more hits — done
+      exhausted = false;  // no more hits — done
+      break;
     }
 
     ++hit_count;
     // Advance tnear just past this hit so the next call skips it.
     tnear = rayhit.ray.tfar + kEps;
   }
+
+  // Count unknown; report inside so a collision check errs toward rejecting.
+  if (exhausted) {return true;}
 
   // Odd intersection count -> point is inside the closed mesh (Jordan theorem).
   return (hit_count % 2) == 1;

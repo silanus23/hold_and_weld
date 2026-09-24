@@ -55,7 +55,8 @@ bool JawClearanceCheck::intrudes(
   }
 
   if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    RCLCPP_WARN(logger_, "FCL checker not available - rejecting grasp conservatively");
+    RCLCPP_WARN_ONCE(logger_,
+      "FCL checker not available - rejecting every grasp conservatively");
     return true;
   }
 

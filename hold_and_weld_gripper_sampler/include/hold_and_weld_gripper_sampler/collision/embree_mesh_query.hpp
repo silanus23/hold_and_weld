@@ -40,16 +40,11 @@ namespace geometry
  * Two primary operations are exposed:
  *
  *   ray_intersect — shoot a single ray and return the nearest hit point.
- *     Uses Embree's watertight Möller–Trumbore intersector, so flat faces
- *     represented by only 2 triangles are handled correctly regardless of
- *     grazing angles.  Replaces bvh_ray_cast inside FCLCollisionChecker.
+ *     Embree's watertight intersector neither misses nor double-counts hits
+ *     on shared triangle edges, so coarse flat faces are safe at any angle.
  *
- *   point_inside — parity test: shoot a ray in a fixed direction from the
- *     query point and count all forward intersections.  An odd count means
- *     the point is inside the closed mesh.  Embree's watertight intersector
- *     guarantees no missed or double-counted triangles on edges/vertices,
- *     so a single direction suffices (no majority-vote hack needed).
- *     Replaces the FCL containment blind-spot in check_gripper_collision.
+ *   point_inside — parity test: count forward intersections along one fixed
+ *     ray from the query point; odd means inside the closed mesh.
  *
  * Thread safety: after construction (i.e. after rtcCommitScene) the scene is
  * read-only and all query methods are safe to call concurrently.
@@ -81,7 +76,8 @@ public:
    *
    * @param vertices  Flat vertex array — each element is {x, y, z} in metres.
    * @param triangles Flat triangle index array — each element holds three
-   *                  zero-based indices into @p vertices.
+   *                  zero-based indices into @p vertices; each is checked
+   *                  against vertices.size().
    */
   EmbreeMeshQuery(
     const std::vector<std::array<float, 3>> & vertices,
@@ -100,11 +96,8 @@ public:
   /**
    * @brief Shoot a single ray and return the nearest intersection point.
    *
-   * Internally calls rtcIntersect1.  The direction need not be normalised;
-   * it is normalised internally before the query.
-   *
    * @param origin       Ray origin in world frame (metres).
-   * @param direction    Ray direction (any non-zero length).
+   * @param direction    Ray direction.
    * @param max_distance Maximum ray length to consider (metres).
    *
    * @return The nearest hit point on the mesh surface, or std::nullopt if the
@@ -118,22 +111,14 @@ public:
   /**
    * @brief Test whether a point lies inside the closed mesh (parity test).
    *
-   * Shoots a ray in the +X direction from @p point and counts all forward
-   * intersections using a custom intersection filter.  An odd count means
-   * the point is inside.
-   *
-   * Because Embree's watertight intersector guarantees no gaps at triangle
-   * edges or vertices, a single ray direction is sufficient — unlike the
-   * three-direction majority-vote required when using the hand-rolled FCL
-   * BVH traversal.
-   *
-   * The ray origin is offset by a small epsilon (1 µm) in the shoot direction
-   * to avoid self-intersection at the surface when the query point sits
-   * exactly on a triangle.
+   * Shoots one ray in a fixed, non-axis-aligned direction from @p point and
+   * counts every forward intersection; an odd count means inside. Hits closer
+   * than 1 µm are skipped, so a point on the surface does not count its own face.
    *
    * @param point Query point in world frame (metres).
    *
-   * @return true  if the point is strictly inside the mesh.
+   * @return true  if the point is strictly inside the mesh, or if the hit count
+   *               exceeded the internal cap and could not be finished.
    * @return false if the point is outside or on the surface.
    */
   bool point_inside(const gp_Pnt & point) const;
@@ -163,10 +148,7 @@ private:
   RTCDevice device_{nullptr};
   RTCScene  scene_{nullptr};
 
-  // Host-side copies kept alive because Embree may reference them (shared
-  // buffer mode).  In this implementation we use RTC_BUFFER_TYPE_VERTEX /
-  // RTC_BUFFER_TYPE_INDEX with rtcSetSharedGeometryBuffer so the data must
-  // remain valid for the lifetime of the scene.
+  // Shared with Embree via rtcSetSharedGeometryBuffer, so they must outlive the scene.
   std::vector<std::array<float, 3>> vertex_buf_;
   std::vector<std::array<unsigned int, 3>> index_buf_;
 

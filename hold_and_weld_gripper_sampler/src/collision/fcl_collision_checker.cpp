@@ -48,6 +48,24 @@ FCLCollisionChecker::FCLCollisionChecker(
   base_bvh_ = shape_to_bvh(gripper.base);
   primary_bvh_ = shape_to_bvh(primary_shape);
 
+  // Gripper parts in their own frames, for the reverse containment test: an
+  // obstacle small enough to sit wholly inside a finger or the base.
+  auto part_embree = [linear_deflection](const TopoDS_Shape & part, const char * name)
+    -> std::shared_ptr<EmbreeMeshQuery> {
+      if (part.IsNull()) {return nullptr;}
+      try {
+        return std::make_shared<EmbreeMeshQuery>(part, linear_deflection);
+      } catch (const std::exception & e) {
+        RCLCPP_WARN(logger_,
+          "EmbreeMeshQuery for gripper %s failed: %s — an obstacle wholly inside it "
+          "will not be detected", name, e.what());
+        return nullptr;
+      }
+    };
+  embree_finger_1_ = part_embree(gripper.finger_1, "finger_1");
+  embree_finger_2_ = part_embree(gripper.finger_2, "finger_2");
+  embree_base_ = part_embree(gripper.base, "base");
+
   if (!primary_shape.IsNull()) {
     try {
       embree_primary_ = std::make_shared<EmbreeMeshQuery>(primary_shape, linear_deflection);
@@ -118,16 +136,15 @@ void FCLCollisionChecker::add_exclusion_volumes(
   const std::vector<TopoDS_Shape> & exclusion_volumes)
 {
   for (size_t i = 0; i < exclusion_volumes.size(); ++i) {
+    // Both lists get an entry for every input, nullptr on failure, so index i
+    // names the same obstacle in each.
     auto bvh = shape_to_bvh(exclusion_volumes[i]);
-    if (bvh) {
-      exclusion_bvhs_.push_back(bvh);
-    } else {
+    if (!bvh) {
       RCLCPP_ERROR(logger_,
         "add_exclusion_volumes: failed to build BVH for exclusion volume [%zu] — "
         "this obstacle will NOT be checked for collisions", i);
     }
-    // Build Embree scene for Phase 0 point-in-solid containment (push nullptr on
-    // failure so indices stay in sync with exclusion_bvhs_).
+    exclusion_bvhs_.push_back(bvh);
     try {
       embree_exclusions_.push_back(
         std::make_shared<EmbreeMeshQuery>(exclusion_volumes[i], linear_deflection_));
@@ -151,16 +168,15 @@ void FCLCollisionChecker::add_secondary_shapes(
   const std::vector<TopoDS_Shape> & secondary_shapes)
 {
   for (size_t i = 0; i < secondary_shapes.size(); ++i) {
+    // Both lists get an entry for every input, nullptr on failure, so index i
+    // names the same obstacle in each.
     auto bvh = shape_to_bvh(secondary_shapes[i]);
-    if (bvh) {
-      secondary_bvhs_.push_back(bvh);
-    } else {
+    if (!bvh) {
       RCLCPP_ERROR(logger_,
         "add_secondary_shapes: failed to build BVH for secondary shape [%zu] — "
         "this obstacle will NOT be checked for collisions", i);
     }
-    // Build Embree scene for Phase 0 point-in-solid containment (push nullptr on
-    // failure so indices stay in sync with secondary_bvhs_).
+    secondary_bvhs_.push_back(bvh);
     try {
       embree_secondaries_.push_back(
         std::make_shared<EmbreeMeshQuery>(secondary_shapes[i], linear_deflection_));
@@ -202,7 +218,20 @@ void FCLCollisionChecker::add_ground_plane(
 
   Eigen::Vector3d unit_normal = normal / norm_mag;
   const bool level = unit_normal.z() > 1.0 - 1e-9;
-  const bool have_footprint = size_x > 0.0 && size_y > 0.0 && thickness > 0.0;
+  const bool footprint_requested = size_x > 0.0 && size_y > 0.0;
+  const bool have_footprint = footprint_requested && thickness > 0.0;
+
+  // The halfspace rejects poses reaching past the table edge that the box would
+  // accept, so falling back when a footprint was asked for changes the result.
+  if (footprint_requested && !have_footprint) {
+    RCLCPP_WARN(logger_,
+      "add_ground_plane: footprint given but thickness %.4f <= 0 — "
+      "using an infinite halfspace instead", thickness);
+  } else if (footprint_requested && !level) {
+    RCLCPP_WARN(logger_,
+      "add_ground_plane: footprint given but normal (%.6f, %.6f, %.6f) is not +Z — "
+      "using an infinite halfspace instead", unit_normal.x(), unit_normal.y(), unit_normal.z());
+  }
 
   if (level && have_footprint) {
     ground_box_ = std::make_shared<Box>(
@@ -244,7 +273,7 @@ bool FCLCollisionChecker::collides_with_primary(
   double grip_distance,
   double tolerance) const
 {
-  if (!valid_) {return false;}
+  if (!valid_) {return true;}
   return check_gripper_collision(
     gripper_transform, grip_distance, primary_bvh_, tolerance, TargetKind::Primary);
 }
@@ -254,7 +283,7 @@ bool FCLCollisionChecker::collides_with_exclusions(
   double grip_distance,
   double tolerance) const
 {
-  if (!valid_) {return false;}
+  if (!valid_) {return true;}
   for (size_t i = 0; i < exclusion_bvhs_.size(); ++i) {
     if (check_gripper_collision(
         gripper_transform, grip_distance, exclusion_bvhs_[i], tolerance,
@@ -271,7 +300,8 @@ bool FCLCollisionChecker::collides_with_ground(
   double grip_distance,
   double tolerance) const
 {
-  if (!valid_ || (!ground_halfspace_ && !ground_box_)) {return false;}
+  if (!valid_) {return true;}
+  if (!ground_halfspace_ && !ground_box_) {return false;}
   return check_gripper_collision_ground(gripper_transform, grip_distance, tolerance);
 }
 
@@ -280,7 +310,7 @@ bool FCLCollisionChecker::collides_with_secondaries(
   double grip_distance,
   double tolerance) const
 {
-  if (!valid_) {return false;}
+  if (!valid_) {return true;}
   for (size_t i = 0; i < secondary_bvhs_.size(); ++i) {
     if (check_gripper_collision(
         gripper_transform, grip_distance, secondary_bvhs_[i], tolerance,
@@ -297,7 +327,7 @@ bool FCLCollisionChecker::cylinder_collides_with_obstacles(
   double radius,
   double length) const
 {
-  if (!valid_) {return false;}
+  if (!valid_) {return true;}
   if (radius <= 0.0 || length <= 0.0) {
     RCLCPP_WARN(logger_,
       "cylinder_collides_with_obstacles: non-positive radius (%.4f) or length (%.4f) — "
@@ -633,7 +663,7 @@ bool FCLCollisionChecker::check_gripper_collision(
   const std::shared_ptr<BVHModel> & target_bvh,
   double tolerance,
   TargetKind kind,
-  size_t secondary_index) const
+  size_t target_index) const
 {
   if (!target_bvh) {return false;}
 
@@ -655,17 +685,17 @@ bool FCLCollisionChecker::check_gripper_collision(
       ctr_f2 = &stats_.ground_f2;
       break;
     case TargetKind::Secondary:
-      if (secondary_index < stats_.sec_base.size()) {
-        ctr_base = &stats_.sec_base[secondary_index];
-        ctr_f1 = &stats_.sec_f1[secondary_index];
-        ctr_f2 = &stats_.sec_f2[secondary_index];
+      if (target_index < stats_.sec_base.size()) {
+        ctr_base = &stats_.sec_base[target_index];
+        ctr_f1 = &stats_.sec_f1[target_index];
+        ctr_f2 = &stats_.sec_f2[target_index];
       }
       break;
     case TargetKind::Exclusion:
-      if (secondary_index < stats_.exc_base.size()) {
-        ctr_base = &stats_.exc_base[secondary_index];
-        ctr_f1 = &stats_.exc_f1[secondary_index];
-        ctr_f2 = &stats_.exc_f2[secondary_index];
+      if (target_index < stats_.exc_base.size()) {
+        ctr_base = &stats_.exc_base[target_index];
+        ctr_f1 = &stats_.exc_f1[target_index];
+        ctr_f2 = &stats_.exc_f2[target_index];
       }
       break;
   }
@@ -689,13 +719,13 @@ bool FCLCollisionChecker::check_gripper_collision(
       embree_for_check = embree_primary_;
       break;
     case TargetKind::Secondary:
-      if (secondary_index < embree_secondaries_.size()) {
-        embree_for_check = embree_secondaries_[secondary_index];
+      if (target_index < embree_secondaries_.size()) {
+        embree_for_check = embree_secondaries_[target_index];
       }
       break;
     case TargetKind::Exclusion:
-      if (secondary_index < embree_exclusions_.size()) {
-        embree_for_check = embree_exclusions_[secondary_index];
+      if (target_index < embree_exclusions_.size()) {
+        embree_for_check = embree_exclusions_[target_index];
       }
       break;
     default:
@@ -703,15 +733,32 @@ bool FCLCollisionChecker::check_gripper_collision(
   }
   const bool use_embree_containment = embree_for_check && embree_for_check->is_valid();
 
+  const bool target_has_vertex = target_bvh->num_vertices > 0;
+
   auto check_part = [&](
     const std::shared_ptr<BVHModel> & part_bvh,
+    const std::shared_ptr<EmbreeMeshQuery> & part_embree,
     const Transform3 & part_tf,
     uint64_t * ctr) -> bool
     {
       if (!part_bvh) {return false;}
 
-      // Phase 0: FCL misses containment when one mesh is fully inside
-      // another probe all vertices via Embree parity test.
+      // Phase 0: FCL misses containment when one mesh is fully inside the
+      // other, so probe with the Embree parity test in both directions. Every
+      // part vertex against the target; one target vertex against the part,
+      // which suffices because a target only partly inside crosses the part's
+      // surface and Phase 1 catches it.
+      if (part_embree && part_embree->is_valid() && target_has_vertex) {
+        const Eigen::Vector3d target_v(
+          target_bvh->vertices[0][0],
+          target_bvh->vertices[0][1],
+          target_bvh->vertices[0][2]);
+        const Eigen::Vector3d local_v = part_tf.inverse() * target_v;
+        if (part_embree->point_inside(gp_Pnt(local_v[0], local_v[1], local_v[2]))) {
+          if (ctr) {++(*ctr);}
+          return true;
+        }
+      }
       if (use_embree_containment) {
         for (int vi = 0; vi < part_bvh->num_vertices; ++vi) {
           Eigen::Vector3d local_v(
@@ -750,9 +797,9 @@ bool FCLCollisionChecker::check_gripper_collision(
       return false;
     };
 
-  if (check_part(base_bvh_, base_tf, ctr_base)) {return true;}
-  if (check_part(finger_1_bvh_, f1_tf, ctr_f1)) {return true;}
-  if (check_part(finger_2_bvh_, f2_tf, ctr_f2)) {return true;}
+  if (check_part(base_bvh_, embree_base_, base_tf, ctr_base)) {return true;}
+  if (check_part(finger_1_bvh_, embree_finger_1_, f1_tf, ctr_f1)) {return true;}
+  if (check_part(finger_2_bvh_, embree_finger_2_, f2_tf, ctr_f2)) {return true;}
 
   return false;
 }
