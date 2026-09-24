@@ -3,23 +3,24 @@
   <xacro:arg name="controller_config_file" default=""/>
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
+  <!-- Slot models and poses; see config/workcell.yaml -->
+  <xacro:arg name="workcell_config" default="$(find hold_and_weld_description)/config/workcell.yaml"/>
+  <xacro:property name="workcell" value="${xacro.load_yaml('$(arg workcell_config)')}"/>
+
   <!-- Include all macro files -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/extra_axis/linear_rail_prefix.xacro"/>
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/robot_catalog.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_prefix.xacro"/>
 
   <link name="world"/>
 
   <!-- Robot 1: Gripper System with Rail -->
-  <xacro:linear_rail_macro parent="world" prefix="robot1_"/>
-  <xacro:gp25_arm_macro parent="robot1_rail_carriage" prefix="robot1_" controller_config_file="${controller_config_file}"/>
-  <xacro:gripper_macro prefix="robot1_"/>
-
-  <joint name="robot1_tool0_to_gripper" type="fixed">
-    <parent link="robot1_tool0"/>
-    <child link="robot1_gripper_base"/>
-    <origin xyz="0 0 0.025" rpy="3.14159 0 0"/>
-  </joint>
+  <xacro:property name="robot1" value="${workcell['robots']['robot1']}"/>
+  <xacro:linear_rail_macro parent="world" prefix="robot1_"
+    x="${robot1['x']}" y="${robot1['y']}" z="${robot1['z']}" yaw="${robot1['yaw']}"/>
+  <xacro:robot_arm_macro model="${robot1['model']}" parent="robot1_rail_carriage" prefix="robot1_"
+    controller_config_file="${controller_config_file}"/>
+  <xacro:gripper_macro prefix="robot1_" parent="robot1_tool0"/>
 
   <gazebo>
     <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">

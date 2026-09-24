@@ -111,10 +111,13 @@ Node(
 > links (`robot1_...`) are hardcoded to the `robot2_`/`robot1_` prefixes. This is
 > intentional, not a gap: those prefixes are fixed per-slot in this system (there
 > is exactly one gripper slot and one welder slot), so swapping which arm model
-> occupies a slot — e.g. gp25 for ar2010 — only requires changing which macro
-> `dual_robot.xacro` / `robot2_welder.xacro` calls for that prefix. Because every
-> arm macro emits identical joint/link names for a given prefix (see below), no
-> C++ or YAML change is needed for a model swap.
+> occupies a slot — e.g. gp25 for ar2010 — only requires setting that slot's
+> `model:` in `hold_and_weld_description/config/workcell.yaml` (by hand or with
+> the workcell configurator), provided the model is registered in
+> `urdf/robots/robot_catalog.xacro` (see "Registering a model in the robot
+> catalog" below). Because every arm macro emits identical joint/link names for
+> a given prefix (see below), no C++ change is needed for a model swap; only
+> `joint_limits.yaml` needs that model's velocity/acceleration limits.
 
 ### 6. Coordinator — connects to action servers by topic name
 
@@ -212,6 +215,22 @@ shared `robot_arm_ros2_control` macro:
 > the `<ros2_control>` block with `initial_value` injected into each
 > `<state_interface>`. You do not need to edit it.
 
+### Registering a model in the robot catalog
+
+The robot slots (`robot1`, `robot2`) don't call an arm macro directly: they call
+`robot_arm_macro` from `urdf/robots/robot_catalog.xacro`, which dispatches on the
+`model:` value in `config/workcell.yaml`. To make a new model selectable there
+and in the workcell configurator's menus, edit `robot_catalog.xacro`:
+
+1. `<xacro:include>` its `<model>_arm_prefix.xacro`.
+2. Add the name to the `robot_catalog` list.
+3. Add one `<xacro:if value="${model == '<model>'}">` branch calling
+   `<model>_arm_macro` with the same arguments as the existing branches.
+
+An unregistered `model:` fails at xacro time with the list of known models.
+The configurator lists every `*_arm_prefix.xacro` it finds and leaves out (with
+an error log) any that the catalog cannot render.
+
 ---
 
 
@@ -245,12 +264,8 @@ You need a second gripper hardware block. In `dual_robot.xacro`:
 ```xml
 <!-- Robot 3 is robot1-style: gp25 arm + gripper end effector -->
 <xacro:gp25_arm_macro parent="world" prefix="robot3_" x="..." y="..." .../>
-<xacro:gripper_macro  prefix="robot3_"/>
-<joint name="robot3_tool0_to_gripper" type="fixed">
-  <parent link="robot3_tool0"/>
-  <child  link="robot3_gripper_base"/>
-  <origin xyz="0 0 0.025" rpy="3.14159 0 0"/>
-</joint>
+<!-- gripper_macro emits its own mount joint (robot3_tool0_to_gripper) -->
+<xacro:gripper_macro  prefix="robot3_" parent="robot3_tool0"/>
 ```
 
 ### Additional controllers
@@ -330,4 +345,16 @@ Add a new action server    ->  New launch file (app_<name>_server.launch.py)
 Change spawn pose          ->  Task YAML (safety_pose.joint_positions)
                            ->  system_bringup.launch.py (xacro args build block)
                            ->  dual_robot.xacro (xacro:arg declarations)
+
+Move a robot base / rail,  ->  config/workcell.yaml (or the workcell configurator:
+or swap a slot's arm model     ros2 launch hold_and_weld_bringup
+                               workcell_configurator.launch.py)
+                           ->  joint_limits.yaml (new model's limits, on a swap)
+
+Add an arm model           ->  urdf/robots/robot_catalog.xacro (include, list, branch)
+
+Swap the gripper           ->  gripper_prefix.xacro only (geometry, limits, mount joint);
+                               the gripper server reads finger limits from the URDF.
+                               Set gripper.open_position in pick_place_targets.yaml
+                               within them, or remove it to open fully.
 ```

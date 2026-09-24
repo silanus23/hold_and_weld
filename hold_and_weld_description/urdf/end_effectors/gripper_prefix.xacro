@@ -10,8 +10,10 @@
     - base_link: The static palm/base of the gripper
     - finger elements: Each movable finger with its controlling joint
     - Joints must be prismatic type with axis and limits defined
+    - The mount joint to `parent` carries this gripper's coupling offset, so a
+      gripper swap stays inside this file
   -->
-  <xacro:macro name="gripper_macro" params="prefix">
+  <xacro:macro name="gripper_macro" params="prefix parent">
 
     <!-- This section is parsed by GripperParser to extract gripper kinematics -->
     <gripper_metadata>
@@ -31,6 +33,12 @@
       <!-- This is where the gripper "grasps" - typically between fingers -->
       <tcp_offset xyz="0 0 -0.12" rpy="0 0 0"/>
     </gripper_metadata>
+
+    <joint name="${prefix}tool0_to_gripper" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}gripper_base"/>
+      <origin xyz="0 0 0.025" rpy="3.14159 0 0"/>
+    </joint>
 
     <link name="${prefix}gripper_base">
       <visual>

@@ -29,7 +29,7 @@ and needs no build step.
 ## Tests
 
 C++ packages use `ament_add_gtest` (gripper_sampler test targets are auto-registered
-from every `.cpp` file in `test/`; application lists its five targets explicitly in
+from every `.cpp` file in `test/`; application lists its six targets explicitly in
 `CMakeLists.txt`):
 
 ```bash
@@ -123,8 +123,13 @@ the SRDF planning groups, and the relevant action server's launch-time parameter
 must be updated together when adding a robot, changing joint names, or adding a
 controller/planning group/action server. The gripper and welder action servers
 hardcode their frame names to the `robot1_`/`robot2_` slot prefixes by design —
-those slots don't move, so swapping an arm model in place only requires a URDF
-change (see `ADDING_A_ROBOT.md`), never a code or YAML change.
+those slots don't move, so swapping an arm model in place only requires setting
+the slot's `model:` in `hold_and_weld_description/config/workcell.yaml` (plus the
+model's `joint_limits.yaml` entries), never a code change. `workcell.yaml` also
+holds each slot's base pose (robot1's is its rail's); every top-level xacro reads
+it, and the models it may name are the branches of `urdf/robots/robot_catalog.xacro`.
+The workcell configurator (`hold_and_weld_bringup/scripts/workcell_configurator.py`)
+edits it and the bringup `objects.yaml` from RViz2; changes apply on the next launch.
 
 ## `hold_and_weld_gripper_sampler` internals
 

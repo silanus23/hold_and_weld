@@ -21,6 +21,7 @@
 #include <lifecycle_msgs/msg/state.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
 
+#include "hold_and_weld_application/action_servers/gripper_aperture.hpp"
 #include "hold_and_weld_application/utils.hpp"
 
 namespace hold_and_weld
@@ -189,6 +190,14 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   load_object_config();
   load_job_from_yaml(yaml_path_);
+
+  if (!resolve_finger_apertures()) {
+    moveit_executor_->cancel();
+    if (moveit_thread_.joinable()) {
+      moveit_thread_.join();
+    }
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
 
   {
     std::lock_guard<std::mutex> lock(config_mutex_);
@@ -738,9 +747,18 @@ void GripperActionServer::load_job_from_yaml(const std::string & yaml_path)
 {
   std::lock_guard<std::mutex> lock(config_mutex_);
   RCLCPP_INFO(logger_, "Loading job from: %s", yaml_path.c_str());
+  requested_open_position_.reset();
+  requested_close_position_.reset();
 
   try {
     YAML::Node config = YAML::LoadFile(yaml_path);
+
+    if (config["gripper"] && config["gripper"]["open_position"]) {
+      requested_open_position_ = config["gripper"]["open_position"].as<double>();
+    }
+    if (config["gripper"] && config["gripper"]["close_position"]) {
+      requested_close_position_ = config["gripper"]["close_position"].as<double>();
+    }
 
     auto load_pose = [this](
       const YAML::Node & pose_node, geometry_msgs::msg::Pose & pose) -> bool {
@@ -792,6 +810,37 @@ void GripperActionServer::load_job_from_yaml(const std::string & yaml_path)
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Error loading YAML: %s", e.what());
   }
+}
+
+bool GripperActionServer::resolve_finger_apertures()
+{
+  const auto robot_model = move_group_->getRobotModel();
+  std::vector<hold_and_weld::FingerJointBounds> fingers;
+  for (const auto & joint_name : gripper_joint_names_) {
+    const auto * joint = robot_model->getJointModel(joint_name);
+    if (!joint || joint->getVariableCount() != 1) {
+      RCLCPP_ERROR(logger_, "Gripper joint '%s' is not a single-variable joint in the robot model",
+        joint_name.c_str());
+      return false;
+    }
+    const auto & bounds = joint->getVariableBounds().front();
+    fingers.push_back({joint_name, bounds.min_position_, bounds.max_position_});
+  }
+
+  std::lock_guard<std::mutex> lock(config_mutex_);
+  try {
+    const auto apertures = hold_and_weld::resolve_gripper_apertures(
+      fingers, requested_open_position_, requested_close_position_);
+    open_position_ = apertures.open;
+    close_position_ = apertures.close;
+  } catch (const std::invalid_argument & e) {
+    RCLCPP_ERROR(logger_, "Invalid gripper aperture: %s", e.what());
+    return false;
+  }
+  RCLCPP_INFO(logger_, "Gripper apertures: open %.3f m (%s), close %.3f m (%s)",
+    open_position_, requested_open_position_ ? "from positions YAML" : "from joint limit",
+    close_position_, requested_close_position_ ? "from positions YAML" : "from joint limit");
+  return true;
 }
 
 bool GripperActionServer::set_finger_aperture(double position)

@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="robot_catalog">
+  <!--
+    Arm models a workcell slot (config/workcell.yaml) can hold.
+    Every model must follow the prefix convention in ADDING_A_ROBOT.md, so any of
+    them can occupy any slot without controller/SRDF/code changes.
+
+    Adding a model: include its <model>_arm_prefix.xacro, add it to robot_catalog,
+    and add one xacro:if branch below.
+  -->
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_arm_prefix.xacro"/>
+
+  <xacro:property name="robot_catalog" value="${['gp25', 'ar2010']}"/>
+
+  <xacro:macro name="robot_arm_macro"
+               params="model parent prefix x:=0 y:=0 z:=0 yaw:=0
+                       initial_pos_j1:=0 initial_pos_j2:=0 initial_pos_j3:=0
+                       initial_pos_j4:=0 initial_pos_j5:=0 initial_pos_j6:=0
+                       controller_config_file">
+    <xacro:unless value="${model in robot_catalog}">
+      ${xacro.fatal('Unknown robot model', python.repr(model), 'for', prefix, '- robot_catalog.xacro has', robot_catalog)}
+    </xacro:unless>
+
+    <xacro:if value="${model == 'gp25'}">
+      <xacro:gp25_arm_macro parent="${parent}" prefix="${prefix}" x="${x}" y="${y}" z="${z}" yaw="${yaw}"
+        initial_pos_j1="${initial_pos_j1}" initial_pos_j2="${initial_pos_j2}"
+        initial_pos_j3="${initial_pos_j3}" initial_pos_j4="${initial_pos_j4}"
+        initial_pos_j5="${initial_pos_j5}" initial_pos_j6="${initial_pos_j6}"
+        controller_config_file="${controller_config_file}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'ar2010'}">
+      <xacro:ar2010_arm_macro parent="${parent}" prefix="${prefix}" x="${x}" y="${y}" z="${z}" yaw="${yaw}"
+        initial_pos_j1="${initial_pos_j1}" initial_pos_j2="${initial_pos_j2}"
+        initial_pos_j3="${initial_pos_j3}" initial_pos_j4="${initial_pos_j4}"
+        initial_pos_j5="${initial_pos_j5}" initial_pos_j6="${initial_pos_j6}"
+        controller_config_file="${controller_config_file}"/>
+    </xacro:if>
+  </xacro:macro>
+</robot>

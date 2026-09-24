@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro" name="linear_rail">
-  <xacro:macro name="linear_rail_macro" params="parent prefix">
+  <xacro:macro name="linear_rail_macro" params="parent prefix x:=0 y:=0 z:=0 yaw:=0">
     <xacro:property name="rail_height" value="0.2"/>
     <xacro:property name="rail_length" value="4.0"/>
     <xacro:property name="carriage_height" value="0.05"/>
@@ -31,7 +31,7 @@
     <joint name="${prefix}rail_base_joint" type="fixed">
       <parent link="${parent}"/>
       <child link="${prefix}rail_base"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 ${yaw}"/>
     </joint>
 
     <link name="${prefix}rail_carriage">

@@ -22,6 +22,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -227,8 +228,16 @@ private:
   void load_object_config();
 
   /**
+   * @brief Resolve open_position_/close_position_ from the gripper joints' limits in
+   * the robot model and the optional open_position configured in the positions YAML.
+   * @return false (with the reason logged) if a finger joint is missing from the model
+   *         or the configured open_position is outside its limits.
+   */
+  bool resolve_finger_apertures();
+
+  /**
    * @brief Set the gripper to a specific position.
-   * @param position Target position for the gripper (0.0 = closed, 0.15 = open).
+   * @param position Target finger position [m], within the finger joint limits.
    * @return true if position was successfully set, false otherwise.
    */
   bool set_finger_aperture(double position);
@@ -300,7 +309,9 @@ private:
   GripperJob job_;
   bool job_loaded_ = false;
   std::string base_link_id_ = "base_link";
-  double open_position_ = 0.15;
+  std::optional<double> requested_open_position_;
+  std::optional<double> requested_close_position_;
+  double open_position_ = 0.0;
   double close_position_ = 0.0;
   std::vector<std::string> gripper_joint_names_ = {
     "robot1_left_finger_joint", "robot1_right_finger_joint"};

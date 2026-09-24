@@ -3,15 +3,20 @@
   <xacro:arg name="controller_config_file" default=""/>
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
+  <!-- Slot models and poses; see config/workcell.yaml -->
+  <xacro:arg name="workcell_config" default="$(find hold_and_weld_description)/config/workcell.yaml"/>
+  <xacro:property name="workcell" value="${xacro.load_yaml('$(arg workcell_config)')}"/>
+
   <!-- Include all macro files -->
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/robot_catalog.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/welding_torch_prefix.xacro"/>
 
   <link name="world"/>
 
-  <!-- Robot 2: Welder System (standalone). Matches dual_robot.xacro, which uses
-       gp25 for both robots (see commit "Taking back to gp25"). -->
-  <xacro:gp25_arm_macro parent="world" prefix="robot2_" x="2.2" y="-0.5" z="0" yaw='3.14159'
+  <!-- Robot 2: Welder System (standalone). Same slot as in dual_robot.xacro. -->
+  <xacro:property name="robot2" value="${workcell['robots']['robot2']}"/>
+  <xacro:robot_arm_macro model="${robot2['model']}" parent="world" prefix="robot2_"
+    x="${robot2['x']}" y="${robot2['y']}" z="${robot2['z']}" yaw="${robot2['yaw']}"
     controller_config_file="${controller_config_file}"/>
   <xacro:welding_torch_macro prefix="robot2_"/>
 

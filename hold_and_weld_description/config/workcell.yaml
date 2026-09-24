@@ -1,0 +1,22 @@
+# Workcell layout: which arm model occupies each robot slot and where it stands.
+#
+# Read at launch by dual_robot.xacro, robot1_gripper.xacro and robot2_welder.xacro
+# (override with the xacro arg workcell_config:=<path>). Written by the workcell
+# configurator (hold_and_weld_bringup workcell_configurator.launch.py); changes apply
+# on the next launch, never live.
+#
+# Poses are in the world frame [m, rad]. robot1's pose is its linear rail's; the
+# arm rides on the rail carriage. model must be an entry of urdf/robots/robot_catalog.xacro.
+robots:
+  robot1:
+    model: gp25
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+  robot2:
+    model: gp25
+    x: 2.2
+    y: -0.5
+    z: 0.0
+    yaw: 3.14159
