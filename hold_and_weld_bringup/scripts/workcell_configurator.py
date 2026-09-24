@@ -19,14 +19,18 @@ Place robots and objects in RViz2 and save the workcell layout to YAML.
 Four slots: robot1 (gripper arm on its rail), robot2 (welder arm), base_link
 (workpiece), child_link (picked part). Right-click the palette, pick
 "Place <slot> > <type>", then click-drag with the 2D Goal Pose tool to set
-position and heading; drag a slot's own handles to fine-tune it.
+position and heading; drag a slot's own handles to fine-tune it. robot1's
+gripper is swapped from its own menu or the palette ("Change gripper").
 
 Saving ("Save layout", ~/save, or on exit) writes robot/object slots to
-<workcell_file>/<objects_file>.configurator.yaml, never the live files
-directly. Robot meshes are previews only; copy a staged layout in yourself
-to apply it.
+hold_and_weld_bringup/config/configurator_output/{workcell,objects}.yaml
+(kept in git as a folder, contents git-ignored), never the live files
+directly. Every launch reloads workcell_file/objects_file fresh - there is no
+resume from a previous session's save. Robot meshes are previews only; copy
+a staged layout in yourself to apply it.
 """
 
+import ast
 import copy
 from dataclasses import dataclass
 import glob
@@ -57,6 +61,9 @@ OBJECT_SLOTS = ('base_link', 'child_link')
 OBJECT_URDF_DIR = 'urdf/environment'
 OBJECT_URDF_SUFFIX = '.urdf.xacro'
 ARM_MACRO_SUFFIX = '_arm_prefix.xacro'
+GRIPPER_SLOT = 'robot1'   # the robot slot that carries workcell.yaml's gripper_model
+GRIPPER_CATALOG = 'urdf/end_effectors/gripper_catalog.xacro'
+OUTPUT_DIR = 'config/configurator_output'   # in hold_and_weld_bringup
 
 DEFAULT_RGBA = (0.6, 0.6, 0.65, 1.0)
 
@@ -80,6 +87,7 @@ class PreviewVisual:
     transform: np.ndarray   # 4x4
     rgba: tuple
 
+
 def rpy_to_matrix(roll, pitch, yaw):
     """Return the 3x3 rotation of URDF fixed-axis roll/pitch/yaw."""
     cr, sr = math.cos(roll), math.sin(roll)
@@ -89,6 +97,7 @@ def rpy_to_matrix(roll, pitch, yaw):
         [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
         [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
         [-sp, cp * sr, cp * cr]])
+
 
 def matrix_to_quaternion(rotation):
     """Return the [x, y, z, w] quaternion of a 3x3 rotation matrix."""
@@ -108,14 +117,17 @@ def matrix_to_quaternion(rotation):
         q = [(m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, s / 4, (m[1, 0] - m[0, 1]) / s]
     return q
 
+
 def yaw_to_quaternion(yaw):
     """Return the [x, y, z, w] quaternion of a rotation about +Z."""
     return [0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)]
+
 
 def quaternion_to_yaw(q):
     """Return the heading (rotation about +Z) of an [x, y, z, w] quaternion."""
     x, y, z, w = q
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
 
 def origin_transform(origin):
     """Return the 4x4 transform of a URDF <origin> element (identity when absent)."""
@@ -127,6 +139,7 @@ def origin_transform(origin):
     transform[:3, :3] = rpy_to_matrix(*rpy)
     transform[:3, 3] = xyz
     return transform
+
 
 def zero_pose_visuals(urdf_xml):
     """
@@ -178,6 +191,7 @@ def zero_pose_visuals(urdf_xml):
                 rgba))
     return visuals
 
+
 def visual_to_marker(visual):
     """Convert a PreviewVisual to a Marker, or None for unsupported geometry."""
     marker = Marker()
@@ -212,6 +226,7 @@ def visual_to_marker(visual):
     marker.pose = transform_to_pose(visual.transform)
     return marker
 
+
 def transform_to_pose(transform):
     """Convert a 4x4 transform to a Pose."""
     pose = Pose()
@@ -220,14 +235,30 @@ def transform_to_pose(transform):
      pose.orientation.z, pose.orientation.w) = matrix_to_quaternion(transform[:3, :3])
     return pose
 
+
 def expand_xacro(path, mappings):
     """Run xacro on a file and return the URDF string."""
     return xacro.process_file(path, mappings=mappings).toxml()
+
 
 def discover_robot_models(description_dir):
     """Return arm model names that have a <model>_arm_prefix.xacro."""
     pattern = os.path.join(description_dir, 'urdf', 'robots', '*' + ARM_MACRO_SUFFIX)
     return sorted(os.path.basename(p)[:-len(ARM_MACRO_SUFFIX)] for p in glob.glob(pattern))
+
+
+def discover_gripper_models(description_dir):
+    """Return the gripper model names listed in gripper_catalog.xacro's gripper_catalog."""
+    path = os.path.join(description_dir, GRIPPER_CATALOG)
+    for prop in ET.parse(path).getroot().iter('{http://ros.org/wiki/xacro}property'):
+        if prop.get('name') == 'gripper_catalog':
+            value = prop.get('value').strip()
+            if not (value.startswith('${[') and value.endswith(']}')):
+                raise RuntimeError(
+                    f"{path}: gripper_catalog must be a list expression like \"${{['a', 'b']}}\", "
+                    f'got {value!r}')
+            return list(ast.literal_eval(value[2:-1]))   # strip the ${ }
+    raise RuntimeError(f'{path} has no gripper_catalog property')
 
 
 def discover_object_types(description_dir):
@@ -236,10 +267,20 @@ def discover_object_types(description_dir):
     return sorted(os.path.basename(p)[:-len(OBJECT_URDF_SUFFIX)] for p in glob.glob(pattern))
 
 
-def staged_output_path(path):
+def output_directory(bringup_share_dir):
+    """
+    Return the configurator_output folder saves go to.
+
+    Under --symlink-install the installed .gitignore links back to src/, so this
+    is the source folder; otherwise it is the installed copy.
+    """
+    marker = os.path.join(bringup_share_dir, OUTPUT_DIR, '.gitignore')
+    return os.path.dirname(os.path.realpath(marker))
+
+
+def staged_output_path(output_dir, live_path):
     """Return the default staging file a live config's edits are written to."""
-    root, ext = os.path.splitext(path)
-    return f'{root}.configurator{ext}'
+    return os.path.join(output_dir, os.path.basename(live_path))
 
 
 def object_type_to_urdf_path(type_name):
@@ -252,9 +293,11 @@ def urdf_path_to_object_type(urdf_path):
     name = os.path.basename(urdf_path)
     return name[:-len(OBJECT_URDF_SUFFIX)] if name.endswith(OBJECT_URDF_SUFFIX) else name
 
+
 def objects_parameters(objects_doc):
     """Return the ros__parameters block of an objects.yaml document."""
     return objects_doc.setdefault('/**', {}).setdefault('ros__parameters', {})
+
 
 def robot_slots_from_workcell(workcell_doc):
     """Read the robot slots of a workcell.yaml document."""
@@ -269,6 +312,7 @@ def robot_slots_from_workcell(workcell_doc):
             [float(entry.get(k, 0.0)) for k in ('x', 'y', 'z')],
             yaw_to_quaternion(float(entry.get('yaw', 0.0)))))
     return slots
+
 
 def object_slots_from_objects(objects_doc):
     """
@@ -297,9 +341,25 @@ def object_slots_from_objects(objects_doc):
             quaternion))
     return slots
 
-def updated_workcell(workcell_doc, slots):
-    """Return a copy of a workcell.yaml document with the robot slots written in."""
+
+def gripper_model_from_workcell(workcell_doc):
+    """Read the gripper model of a workcell.yaml document."""
+    if 'gripper_model' not in workcell_doc:
+        raise RuntimeError('workcell.yaml has no gripper_model entry')
+    return str(workcell_doc['gripper_model'])
+
+
+def robot_preview_layout(slot_name, model, gripper_model):
+    """Return a workcell.yaml document placing one robot slot's model at the origin."""
+    return {'robots': {slot_name: {'model': model, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                                   'yaw': 0.0}},
+            'gripper_model': gripper_model}
+
+
+def updated_workcell(workcell_doc, slots, gripper_model):
+    """Return a copy of a workcell.yaml document with the robot slots and gripper written in."""
     doc = copy.deepcopy(workcell_doc)
+    doc['gripper_model'] = gripper_model
     robots = doc.setdefault('robots', {})
     for slot in slots:
         if slot.is_robot:
@@ -311,6 +371,7 @@ def updated_workcell(workcell_doc, slots):
                 'yaw': round(quaternion_to_yaw(slot.orientation), 6),
             }
     return doc
+
 
 def updated_objects(objects_doc, slots):
     """
@@ -339,6 +400,7 @@ def updated_objects(objects_doc, slots):
     params.setdefault('frame_id', 'world')
     return doc
 
+
 def leading_comments(path):
     """Return the comment/blank lines at the top of a file, to carry over on rewrite."""
     lines = []
@@ -349,6 +411,7 @@ def leading_comments(path):
             lines.append(line)
     return ''.join(lines)
 
+
 def write_yaml(path, doc):
     """
     Write a YAML document, keeping the file's leading comment block.
@@ -357,6 +420,7 @@ def write_yaml(path, doc):
     """
     target = os.path.realpath(path)
     header = leading_comments(target) if os.path.exists(target) else ''
+    os.makedirs(os.path.dirname(target), exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(target), suffix='.tmp')
     try:
         with os.fdopen(fd, 'w') as file:
@@ -369,6 +433,7 @@ def write_yaml(path, doc):
         raise
     return target
 
+
 def load_yaml(path):
     """Load a YAML file, raising RuntimeError naming the path on failure."""
     try:
@@ -379,6 +444,7 @@ def load_yaml(path):
     if not isinstance(data, dict):
         raise RuntimeError(f"'{path}' is empty or not a mapping")
     return data
+
 
 def axis_control(name, mode, axis):
     """Return a move/rotate control along world-frame axis 'x', 'y' or 'z'."""
@@ -396,6 +462,14 @@ def axis_control(name, mode, axis):
         control.orientation.y = half
     return control
 
+
+def set_check_states(menu, entries, selected):
+    """Check the menu entry (handle -> name) whose name is `selected`, uncheck the rest."""
+    for handle, name in entries.items():
+        menu.setCheckState(
+            handle, MenuHandler.CHECKED if name == selected else MenuHandler.UNCHECKED)
+
+
 class WorkcellConfigurator(Node):
     """Interactive marker server for placing workcell robots and objects."""
 
@@ -411,15 +485,13 @@ class WorkcellConfigurator(Node):
         self.objects_file = self.declare_parameter(
             'objects_file',
             os.path.join(bringup_dir, 'config', 'objects', 'objects.yaml')).value
-        # realpath first: workcell_file/objects_file are share-dir paths that are
-        # usually symlinks back to src/ under --symlink-install, and the staged
-        # filename has no symlink of its own to follow one there for free.
+        output_dir = output_directory(bringup_dir)
         self.workcell_output_file = self.declare_parameter(
             'workcell_output_file', '').value or staged_output_path(
-            os.path.realpath(self.workcell_file))
+            output_dir, self.workcell_file)
         self.objects_output_file = self.declare_parameter(
             'objects_output_file', '').value or staged_output_path(
-            os.path.realpath(self.objects_file))
+            output_dir, self.objects_file)
         self.frame_id = self.declare_parameter('frame_id', 'world').value
         self.save_on_exit = self.declare_parameter('save_on_exit', True).value
         self.palette_position = self.declare_parameter(
@@ -430,15 +502,17 @@ class WorkcellConfigurator(Node):
         self.slots = {slot.name: slot for slot in
                       robot_slots_from_workcell(self.workcell_doc)
                       + object_slots_from_objects(self.objects_doc)}
+        self.gripper_model = gripper_model_from_workcell(self.workcell_doc)
 
         self.previews = {}
-        self.robot_models = self.build_robot_previews()
+        self.robot_models, self.gripper_models = self.build_robot_previews()
         self.object_types = self.build_object_previews()
         self.pending = None   # (slot name, type name) placed by the next click
         self.changed_slots = set()
 
         self.server = InteractiveMarkerServer(self, 'workcell_configurator')
-        self.slot_menus = {}          # slot name -> (MenuHandler, {entry handle: type name})
+        # slot name -> (MenuHandler, {entry handle: type name}, {entry handle: gripper model})
+        self.slot_menus = {}
         self.palette_menu = self.build_palette_menu()
         for slot in self.slots.values():
             self.insert_slot(slot)
@@ -452,30 +526,52 @@ class WorkcellConfigurator(Node):
             f'Robots  {os.path.realpath(self.workcell_file)} -> {self.workcell_output_file}\n'
             f'Objects {os.path.realpath(self.objects_file)} -> {self.objects_output_file}\n'
             'Right-click the palette, choose "Place <slot>", then click-drag with the '
-            '2D Goal Pose tool. Saving writes to the staging files above; copy their '
-            'contents into the live config yourself to apply a layout.')
+            '2D Goal Pose tool; "Change gripper" swaps robot1\'s gripper. Saving writes '
+            'to the staging files above; copy their contents into the live config '
+            'yourself to apply a layout.')
+
+    def robot_preview_key(self, slot_name, model):
+        """Return the previews key of a robot slot's model; robot1's includes its gripper."""
+        return (slot_name, model, self.gripper_model if slot_name == GRIPPER_SLOT else None)
 
     def build_robot_previews(self):
-        """Render every discovered arm model in every robot slot; return the models that work."""
-        working = []
-        for model in discover_robot_models(self.description_dir):
-            ok = True
-            for slot_name, xacro_file in ROBOT_SLOT_XACROS.items():
-                markers = self.render_robot(slot_name, xacro_file, model)
-                if markers is None:
-                    ok = False
-                    break
-                self.previews[(slot_name, model)] = markers
-            if ok:
-                working.append(model)
-        if not working:
-            raise RuntimeError('No arm model could be rendered; see errors above')
-        return working
+        """
+        Render every arm model in every robot slot, and robot1 with every gripper.
 
-    def render_robot(self, slot_name, xacro_file, model):
+        Returns the arm models that render in every slot with the configured
+        gripper, and the gripper models that render on every one of those arms.
+        """
+        arms = []
+        for model in discover_robot_models(self.description_dir):
+            rendered = {
+                self.robot_preview_key(slot_name, model): self.render_robot(
+                    slot_name, xacro_file, model, self.gripper_model)
+                for slot_name, xacro_file in ROBOT_SLOT_XACROS.items()}
+            if None not in rendered.values():
+                self.previews.update(rendered)
+                arms.append(model)
+        if not arms:
+            raise RuntimeError(
+                f"No arm model could be rendered with gripper '{self.gripper_model}'; "
+                'see errors above')
+
+        grippers = []
+        for gripper in discover_gripper_models(self.description_dir):
+            if gripper == self.gripper_model:
+                grippers.append(gripper)
+                continue
+            rendered = {
+                (GRIPPER_SLOT, model, gripper): self.render_robot(
+                    GRIPPER_SLOT, ROBOT_SLOT_XACROS[GRIPPER_SLOT], model, gripper)
+                for model in arms}
+            if None not in rendered.values():
+                self.previews.update(rendered)
+                grippers.append(gripper)
+        return arms, grippers
+
+    def render_robot(self, slot_name, xacro_file, model, gripper_model):
         """Expand a robot slot's xacro with the model at the origin; None on failure."""
-        layout = {'robots': {slot_name: {'model': model, 'x': 0.0, 'y': 0.0, 'z': 0.0,
-                                         'yaw': 0.0}}}
+        layout = robot_preview_layout(slot_name, model, gripper_model)
         fd, layout_path = tempfile.mkstemp(suffix='.yaml')
         try:
             with os.fdopen(fd, 'w') as file:
@@ -485,7 +581,8 @@ class WorkcellConfigurator(Node):
                 {'workcell_config': layout_path, 'controller_config_file': ''})
         except Exception as exc:  # xacro raises its own exception types
             self.get_logger().error(
-                f"Arm model '{model}' left out: {xacro_file} failed with it: {exc}")
+                f"Arm model '{model}' / gripper '{gripper_model}' left out: "
+                f'{xacro_file} failed with them: {exc}')
             return None
         finally:
             os.remove(layout_path)
@@ -517,7 +614,8 @@ class WorkcellConfigurator(Node):
 
     def preview_for(self, slot):
         """Return the preview markers of a slot's current type (empty if unknown)."""
-        key = (slot.name, slot.type_name) if slot.is_robot else (None, slot.type_name)
+        key = (self.robot_preview_key(slot.name, slot.type_name) if slot.is_robot
+               else (None, slot.type_name))
         if key not in self.previews:
             self.get_logger().warn(
                 f"{slot.name}: no preview for type '{slot.type_name}'; showing handles only")
@@ -528,9 +626,11 @@ class WorkcellConfigurator(Node):
         marker = InteractiveMarker()
         marker.header.frame_id = self.frame_id
         marker.name = slot.name
+        type_label = (f'{slot.type_name} + {self.gripper_model} gripper'
+                      if slot.name == GRIPPER_SLOT else slot.type_name)
         marker.description = (
-            f'{slot.name}: {slot.type_name} (preview - applies on next launch)'
-            if slot.is_robot else f'{slot.name}: {slot.type_name}')
+            f'{slot.name}: {type_label} (preview - applies on next launch)'
+            if slot.is_robot else f'{slot.name}: {type_label}')
         marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = slot.position
         (marker.pose.orientation.x, marker.pose.orientation.y,
          marker.pose.orientation.z, marker.pose.orientation.w) = slot.orientation
@@ -562,15 +662,13 @@ class WorkcellConfigurator(Node):
         self.server.insert(marker, feedback_callback=self.on_feedback)
         if slot.name not in self.slot_menus:
             self.slot_menus[slot.name] = self.build_slot_menu(slot)
-        menu, type_entries = self.slot_menus[slot.name]
-        for handle, type_name in type_entries.items():
-            menu.setCheckState(
-                handle, MenuHandler.CHECKED if type_name == slot.type_name
-                else MenuHandler.UNCHECKED)
+        menu, type_entries, gripper_entries = self.slot_menus[slot.name]
+        set_check_states(menu, type_entries, slot.type_name)
+        set_check_states(menu, gripper_entries, self.gripper_model)
         menu.apply(self.server, slot.name)
 
     def build_slot_menu(self, slot):
-        """Build a slot's right-click menu; return it with its type entry handles."""
+        """Build a slot's right-click menu; return it with its type and gripper entry handles."""
         menu = MenuHandler()
         type_entries = {}
         parent = menu.insert('Change model' if slot.is_robot else 'Change object')
@@ -579,10 +677,19 @@ class WorkcellConfigurator(Node):
                 type_name, parent=parent,
                 callback=lambda feedback, t=type_name, s=slot.name: self.set_type(s, t))
             type_entries[handle] = type_name
-        return menu, type_entries
+        gripper_entries = (self.insert_gripper_menu(menu) if slot.name == GRIPPER_SLOT
+                           else {})
+        return menu, type_entries, gripper_entries
+
+    def insert_gripper_menu(self, menu):
+        """Add a "Change gripper" submenu to a menu; return its entry handles."""
+        parent = menu.insert('Change gripper')
+        return {menu.insert(gripper, parent=parent,
+                            callback=lambda feedback, g=gripper: self.set_gripper(g)): gripper
+                for gripper in self.gripper_models}
 
     def build_palette_menu(self):
-        """Build the palette's menu: one "Place <slot>" submenu per slot, plus Save."""
+        """Build the palette's menu: "Place <slot>" submenus, "Change gripper", and Save."""
         menu = MenuHandler()
         for slot_name in list(ROBOT_SLOT_XACROS) + list(OBJECT_SLOTS):
             is_robot = slot_name in ROBOT_SLOT_XACROS
@@ -591,6 +698,7 @@ class WorkcellConfigurator(Node):
                 menu.insert(
                     type_name, parent=parent,
                     callback=lambda feedback, s=slot_name, t=type_name: self.arm_click(s, t))
+        self.palette_gripper_entries = self.insert_gripper_menu(menu)
         menu.insert('Save layout', callback=lambda feedback: self.save())
         return menu
 
@@ -626,6 +734,7 @@ class WorkcellConfigurator(Node):
         marker.controls.append(control)
 
         self.server.insert(marker)
+        set_check_states(self.palette_menu, self.palette_gripper_entries, self.gripper_model)
         self.palette_menu.apply(self.server, 'palette')
 
     def arm_click(self, slot_name, type_name):
@@ -674,6 +783,15 @@ class WorkcellConfigurator(Node):
         self.insert_slot(slot)
         self.server.applyChanges()
 
+    def set_gripper(self, gripper_model):
+        """Switch robot1's gripper; saved with robot1's slot."""
+        self.gripper_model = gripper_model
+        self.changed_slots.add(GRIPPER_SLOT)
+        self.insert_slot(self.slots[GRIPPER_SLOT])
+        self.insert_palette()
+        self.server.applyChanges()
+        self.get_logger().info(f'{GRIPPER_SLOT} gripper: {gripper_model}')
+
     def on_feedback(self, feedback):
         """Track slot poses as their handles are dragged."""
         if feedback.event_type != InteractiveMarkerFeedback.POSE_UPDATE:
@@ -710,7 +828,7 @@ class WorkcellConfigurator(Node):
         changed = [self.slots[name] for name in sorted(self.changed_slots)]
         written = []
         if any(slot.is_robot for slot in changed):
-            self.workcell_doc = updated_workcell(self.workcell_doc, changed)
+            self.workcell_doc = updated_workcell(self.workcell_doc, changed, self.gripper_model)
             written.append(write_yaml(self.workcell_output_file, self.workcell_doc))
         if any(not slot.is_robot for slot in changed):
             self.objects_doc = updated_objects(self.objects_doc, changed)

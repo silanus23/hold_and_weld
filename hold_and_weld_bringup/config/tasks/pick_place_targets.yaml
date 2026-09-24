@@ -1,6 +1,9 @@
 gripper:
-  open_position: 0.15
-  close_position: 0.125
+  # robotiq_2f_140 travel is [0, 0.064267] per finger; pad gap is 2*position,
+  # so fully open clears the 0.10m cube by 14mm per side and contact is at 0.05;
+  # close 1mm per side past contact to squeeze it.
+  open_position: 0.064267
+  close_position: 0.049
   attach_link: robot1_gripper_base
   touch_links:
     - robot1_tool0
@@ -15,7 +18,7 @@ targets:
       position:
         x: 1.2
         y: 0.3
-        z: 0.625
+        z: 0.55
       orientation:
         x: 0.0
         y: 0.7071068
@@ -25,7 +28,7 @@ targets:
       position:
         x: 1.2
         y: 0.3
-        z: 0.400
+        z: 0.3282
       orientation:
         x: 0.0
         y: 0.7071068
@@ -35,7 +38,7 @@ targets:
       position:
         x: 1.2
         y: -0.5
-        z: 1.400
+        z: 1.325
       orientation:
         x: 0.0
         y: 0.7071068
@@ -45,7 +48,7 @@ targets:
       position:
         x: 1.2
         y: -0.5
-        z: 1.210
+        z: 1.1382
       orientation:
         x: 0.0
         y: 0.7071068

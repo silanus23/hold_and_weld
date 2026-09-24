@@ -1,0 +1,221 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="robotiq_2f_140_gripper">
+  <!--
+    Robotiq 2F-140 parallel gripper, ~0.14 m max opening - the biggest stroke in
+    gripper_catalog.xacro. Source: ros-industrial/robotiq
+    robotiq_2f_140_gripper_visualization (BSD, original in
+    vendor/robotiq_2f_140_gripper_visualization), meshes under meshes/robotiq_2f_140.
+
+    Vendor mechanism is an underactuated 4-bar linkage (one actuated revolute
+    "finger_joint" driving four more revolute joints per side via <mimic>), not a
+    linear slide, so it can't be reused as-is under the canonical interface's
+    "prismatic joint, no mimic" rule. Normalised by forward-kinematics of the full
+    vendor chain (knuckle, outer finger, inner finger, pad) over finger_joint's
+    [0, 0.7] range, mapped through the same "rotate by pi about y" frame flip used by
+    schunk_pg70/rethink_electric (vendor +z, the fingers' extension direction,
+    becomes canonical -z; vendor's "right_*" chain sits at vendor +y already, so it
+    becomes canonical left, and "left_*" becomes canonical right):
+    - The 4-bar keeps the inner finger and pad at a constant orientation, so they
+      ride rigidly on the prismatic finger link. Its frame is the vendor pad frame
+      origin (the fingertip), z = -0.200660, origin rotation identity so the axis
+      is exactly canonical y.
+    - Closed, the vendor pads (0.0075 m thick, centred on that frame at
+      y = +-0.003662) overlap by 0.18 mm, which the convention forbids. The closed
+      frame sits at y = +-0.00375 instead, so the pad faces just touch at 0.
+    - Pad y at finger_joint=0 (open) is +-0.068017, so travel is
+      0.068017 - 0.00375 = 0.064267 m per side and the pad faces open to
+      2 * travel = 0.1285 m.
+    - The real pad also rises 0.024 m while opening (z = -0.176963 open); the
+      prismatic finger keeps the closed depth throughout.
+    - Vendor pad box is 0.065 m long centred on the fingertip, half of it past the
+      finger mesh; here it spans the inner finger's inner face instead.
+    - Knuckles and outer finger rotate with finger_joint, so they cannot ride on a
+      prismatic link and are dropped. In their place a slide rail under the base and
+      a carrier bar on each finger (plain boxes, not vendor geometry) keep the
+      fingers drawn and colliding as attached to the base across the whole stroke.
+    - Vendor URDF is visualization-only (no <dynamics>); finger mass is the
+      vendor chain's ~0.07 kg.
+    - Mimic joints, transmission and the coupling mesh are dropped.
+  -->
+  <xacro:property name="robotiq_2f_140_travel" value="0.064267"/>
+  <xacro:property name="robotiq_2f_140_spawn_position" value="${robotiq_2f_140_travel / 2}"/>
+
+  <!-- side: 1 for the left (+y) finger, -1 for the right. Frame at the fingertip. -->
+  <xacro:macro name="robotiq_2f_140_finger_link" params="name side">
+    <link name="${name}">
+      <!-- inner_finger mesh at its closed pose relative to the fingertip -->
+      <visual>
+        <origin xyz="0 ${side * 0.0272203} 0.0457554"
+          rpy="-1.5707963 0 ${0.0 if side == 1 else pi}"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/robotiq_2f_140/visual/robotiq_arg2f_140_inner_finger.stl"/>
+        </geometry>
+        <material name="robotiq_dark">
+          <color rgba="0.1 0.1 0.1 1"/>
+        </material>
+      </visual>
+      <!-- Pad on the inner finger's inner face -->
+      <visual>
+        <origin xyz="0 0 0.0265" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.027 0.0075 0.05"/>
+        </geometry>
+        <material name="robotiq_pad">
+          <color rgba="0.03 0.03 0.03 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.0265" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.027 0.0075 0.05"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0 ${side * 0.01825} 0.02645" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.015 0.0299 0.0505"/>
+        </geometry>
+      </collision>
+      <!-- Carrier bar from the inner finger up to just under the base's slide rail -->
+      <visual>
+        <origin xyz="0 ${side * 0.018} 0.07235" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.015 0.015 0.0547"/>
+        </geometry>
+        <material name="robotiq_dark">
+          <color rgba="0.1 0.1 0.1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 ${side * 0.018} 0.07235" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.015 0.015 0.0547"/>
+        </geometry>
+      </collision>
+      <!-- Mass of one vendor finger chain (knuckles, outer and inner finger) -->
+      <inertial>
+        <mass value="0.07"/>
+        <origin xyz="0 ${side * 0.018} 0.045" rpy="0 0 0"/>
+        <inertia ixx="6.4e-05" ixy="0.0" ixz="0.0" iyy="6.0e-05" iyz="0.0" izz="6.6e-06"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="robotiq_2f_140_gripper_macro" params="prefix parent">
+
+    <!-- This section is parsed by GripperParser to extract gripper kinematics -->
+    <gripper_metadata>
+      <base_link name="${prefix}gripper_base"/>
+      <finger finger_id="1" link="${prefix}left_finger" joint="${prefix}left_finger_joint"/>
+      <finger finger_id="2" link="${prefix}right_finger" joint="${prefix}right_finger_joint"/>
+      <gripper_type>parallel</gripper_type>
+      <!-- Centre of the pads -->
+      <tcp_offset xyz="0 0 -0.17416" rpy="0 0 0"/>
+    </gripper_metadata>
+
+    <!-- Base mounting face sits on the flange -->
+    <joint name="${prefix}tool0_to_gripper" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}gripper_base"/>
+      <origin xyz="0 0 0.004" rpy="${pi} 0 0"/>
+    </joint>
+
+    <link name="${prefix}gripper_base">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 ${pi} 0"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/robotiq_2f_140/visual/robotiq_arg2f_base_link.stl"/>
+        </geometry>
+        <material name="robotiq_dark">
+          <color rgba="0.1 0.1 0.1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.04365" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.075 0.085 0.0927"/>
+        </geometry>
+      </collision>
+      <!-- Slide rail the finger carriers hang from, wide enough for full travel -->
+      <visual>
+        <origin xyz="0 0 -0.095" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.21 0.01"/>
+        </geometry>
+        <material name="robotiq_dark">
+          <color rgba="0.1 0.1 0.1 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.095" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.21 0.01"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="1.0"/>
+        <origin xyz="0 0 -0.03145" rpy="0 0 0"/>
+        <inertia ixx="2.0e-03" ixy="0.0" ixz="0.0" iyy="1.7e-03" iyz="0.0" izz="1.6e-03"/>
+      </inertial>
+    </link>
+
+    <xacro:robotiq_2f_140_finger_link name="${prefix}left_finger" side="1"/>
+    <xacro:robotiq_2f_140_finger_link name="${prefix}right_finger" side="-1"/>
+
+    <joint name="${prefix}left_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}left_finger"/>
+      <origin xyz="0 0.00375 -0.200660" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="${robotiq_2f_140_travel}" effort="150" velocity="0.15"/>
+      <dynamics damping="1.0" friction="0.0"/>
+    </joint>
+    <joint name="${prefix}right_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}right_finger"/>
+      <origin xyz="0 -0.00375 -0.200660" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="${robotiq_2f_140_travel}" effort="150" velocity="0.15"/>
+      <dynamics damping="1.0" friction="0.0"/>
+    </joint>
+
+    <gazebo reference="${prefix}gripper_base">
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}left_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}right_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+
+    <ros2_control name="${prefix}gripper_system" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+      <joint name="${prefix}left_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${robotiq_2f_140_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${robotiq_2f_140_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}right_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${robotiq_2f_140_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${robotiq_2f_140_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>

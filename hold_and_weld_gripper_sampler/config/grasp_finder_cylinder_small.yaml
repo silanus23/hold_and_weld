@@ -18,7 +18,6 @@
 
     gripper:
       urdf_path: 'config/test_gripper.urdf'
-      max_opening: 0.36
 
     secondaries:
       - id: 'ground_plane'

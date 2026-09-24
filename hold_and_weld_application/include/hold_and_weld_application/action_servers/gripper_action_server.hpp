@@ -58,6 +58,7 @@ namespace timing
 constexpr double GRIPPER_MOTION_DURATION_SEC = 2.0;
 constexpr int ACTION_SERVER_TIMEOUT_SEC = 5;
 constexpr int GRIPPER_RESULT_TIMEOUT_SEC = 10;
+constexpr int GRIPPER_CONTROLLER_TIMEOUT_SEC = 60;
 constexpr int ATTACH_SETTLE_TIME_MS = 500;
 constexpr int DETACH_SETTLE_TIME_MS = 250;
 constexpr int MOTION_SETTLE_TIME_MS = 250;
@@ -236,6 +237,16 @@ private:
   bool resolve_finger_apertures();
 
   /**
+   * @brief Block until the gripper controller is active in the controller_manager.
+   *
+   * The gripper spawner can still be loading when a job starts, and a configured
+   * but inactive controller reports goals succeeded without moving the fingers.
+   * @return false (with the reason logged) if it is not active within
+   *         timing::GRIPPER_CONTROLLER_TIMEOUT_SEC.
+   */
+  bool wait_for_gripper_controller();
+
+  /**
    * @brief Set the gripper to a specific position.
    * @param position Target finger position [m], within the finger joint limits.
    * @return true if position was successfully set, false otherwise.
@@ -293,6 +304,9 @@ private:
   rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
   rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr get_planning_scene_client_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_action_client_;
+  rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedPtr
+    list_controllers_client_;
+  std::string gripper_controller_name_;
   rclcpp_lifecycle::LifecyclePublisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr
     attached_collision_pub_;
 

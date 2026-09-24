@@ -10,7 +10,7 @@
   <!-- Include all macro files -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/extra_axis/linear_rail_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/robot_catalog.xacro"/>
-  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_catalog.xacro"/>
 
   <link name="world"/>
 
@@ -20,7 +20,7 @@
     x="${robot1['x']}" y="${robot1['y']}" z="${robot1['z']}" yaw="${robot1['yaw']}"/>
   <xacro:robot_arm_macro model="${robot1['model']}" parent="robot1_rail_carriage" prefix="robot1_"
     controller_config_file="${controller_config_file}"/>
-  <xacro:gripper_macro prefix="robot1_" parent="robot1_tool0"/>
+  <xacro:gripper_catalog_macro model="${workcell.get('gripper_model', '')}" prefix="robot1_" parent="robot1_tool0"/>
 
   <gazebo>
     <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">

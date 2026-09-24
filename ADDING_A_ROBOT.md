@@ -353,8 +353,16 @@ or swap a slot's arm model     ros2 launch hold_and_weld_bringup
 
 Add an arm model           ->  urdf/robots/robot_catalog.xacro (include, list, branch)
 
-Swap the gripper           ->  gripper_prefix.xacro only (geometry, limits, mount joint);
-                               the gripper server reads finger limits from the URDF.
-                               Set gripper.open_position in pick_place_targets.yaml
-                               within them, or remove it to open fully.
+Swap the gripper           ->  config/workcell.yaml gripper_model (an entry of
+                               urdf/end_effectors/gripper_catalog.xacro; or
+                               "Change gripper" in workcell_configurator.launch.py)
+                           ->  joint_limits.yaml (finger velocity/acceleration)
+                               The gripper server reads finger limits from the URDF.
+                               Set gripper.open_position/close_position in
+                               pick_place_targets.yaml within them, or remove them.
+
+Add a gripper model        ->  urdf/end_effectors/<model>_gripper_prefix.xacro wrapping
+                               the vendor URDF into the canonical interface (see the
+                               gripper_catalog.xacro header), plus include/list/branch
+                               in gripper_catalog.xacro
 ```

@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <ostream>
 #include <string>
+#include <vector>
 
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
@@ -148,6 +150,7 @@ const char CYLINDER_GRIPPER_URDF[] =
   <joint name="finger_1_joint" type="prismatic">
     <parent link="base"/>
     <child link="finger_1"/>
+    <origin xyz="0.03 0 0" rpy="0 0 0"/>
     <axis xyz="1 0 0"/>
     <limit lower="0.0" upper="0.05" effort="50" velocity="0.05"/>
   </joint>
@@ -155,6 +158,7 @@ const char CYLINDER_GRIPPER_URDF[] =
   <joint name="finger_2_joint" type="prismatic">
     <parent link="base"/>
     <child link="finger_2"/>
+    <origin xyz="-0.03 0 0" rpy="0 0 0"/>
     <axis xyz="-1 0 0"/>
     <limit lower="0.0" upper="0.05" effort="50" velocity="0.05"/>
   </joint>
@@ -269,6 +273,151 @@ const char REVOLUTE_JOINT_URDF[] =
   </joint>
 </robot>
 )";
+
+/**
+ * @brief Rethink electric gripper as its wrapper macro emits it: vendor right
+ * finger flipped to an outward axis with [0, travel], mimic dropped, carriage
+ * box left out and tip-link collision merged into the finger links
+ */
+const char RETHINK_WRAPPER_URDF[] =
+  R"(
+<?xml version="1.0"?>
+<robot name="rethink_electric_gripper">
+  <gripper_metadata>
+    <base_link name="gripper_base"/>
+    <finger finger_id="1" link="left_finger" joint="left_finger_joint"/>
+    <finger finger_id="2" link="right_finger" joint="right_finger_joint"/>
+    <gripper_type>parallel</gripper_type>
+    <tcp_offset xyz="0 0 -0.1177" rpy="0 0 0"/>
+  </gripper_metadata>
+
+  <link name="gripper_base">
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.029" length="0.1"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="left_finger">
+    <collision>
+      <origin xyz="0 0.01725 -0.0615" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.01 0.0135 0.1127"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.01275 -0.0977" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.042 0.0065 0.037"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="right_finger">
+    <collision>
+      <origin xyz="0 -0.01725 -0.0615" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.01 0.0135 0.1127"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.01275 -0.0977" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.042 0.0065 0.037"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="left_finger_joint" type="prismatic">
+    <parent link="gripper_base"/>
+    <child link="left_finger"/>
+    <origin xyz="0 -0.0015 -0.02" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.020833" effort="20" velocity="0.1"/>
+  </joint>
+
+  <joint name="right_finger_joint" type="prismatic">
+    <parent link="gripper_base"/>
+    <child link="right_finger"/>
+    <origin xyz="0 0.0015 -0.02" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="0.0" upper="0.020833" effort="20" velocity="0.1"/>
+  </joint>
+</robot>
+)";
+
+/**
+ * @brief One finger joint of a convention-test gripper; defaults are canonical
+ */
+struct FingerJointSpec
+{
+  std::string origin_xyz;
+  std::string axis_xyz;
+  std::string parent = "gripper_base";
+  std::string lower = "0.0";
+  std::string upper = "0.02";
+  std::string extra;
+};
+
+/**
+ * @brief Two-finger gripper URDF built from per-joint specs, 0.02 m cube fingers
+ */
+std::string make_gripper_urdf(
+  const FingerJointSpec & left,
+  const FingerJointSpec & right,
+  const std::string & finger_geometry = "<box size=\"0.02 0.02 0.02\"/>")
+{
+  auto finger_link = [&](const std::string & name) {
+      return "  <link name=\"" + name + "\">\n"
+             "    <collision><geometry>" + finger_geometry + "</geometry></collision>\n"
+             "  </link>\n";
+    };
+  auto finger_joint = [](const std::string & name, const std::string & child,
+    const FingerJointSpec & spec) {
+      return "  <joint name=\"" + name + "\" type=\"prismatic\">\n"
+             "    <parent link=\"" + spec.parent + "\"/>\n"
+             "    <child link=\"" + child + "\"/>\n"
+             "    <origin xyz=\"" + spec.origin_xyz + "\" rpy=\"0 0 0\"/>\n"
+             "    <axis xyz=\"" + spec.axis_xyz + "\"/>\n"
+             "    <limit lower=\"" + spec.lower + "\" upper=\"" + spec.upper +
+             "\" effort=\"50\" velocity=\"0.1\"/>\n"
+             "    " + spec.extra + "\n"
+             "  </joint>\n";
+    };
+  return
+    "<?xml version=\"1.0\"?>\n"
+    "<robot name=\"convention_gripper\">\n"
+    "  <gripper_metadata>\n"
+    "    <base_link name=\"gripper_base\"/>\n"
+    "    <finger finger_id=\"1\" link=\"left_finger\" joint=\"left_finger_joint\"/>\n"
+    "    <finger finger_id=\"2\" link=\"right_finger\" joint=\"right_finger_joint\"/>\n"
+    "  </gripper_metadata>\n"
+    "  <link name=\"gripper_base\">\n"
+    "    <collision><geometry><box size=\"0.1 0.1 0.02\"/></geometry></collision>\n"
+    "  </link>\n" +
+    finger_link("left_finger") + finger_link("right_finger") +
+    finger_joint("left_finger_joint", "left_finger", left) +
+    finger_joint("right_finger_joint", "right_finger", right) +
+    "</robot>\n";
+}
+
+FingerJointSpec canonical_left()
+{
+  FingerJointSpec spec;
+  spec.origin_xyz = "0 0.02 -0.02";
+  spec.axis_xyz = "0 1 0";
+  return spec;
+}
+
+FingerJointSpec canonical_right()
+{
+  FingerJointSpec spec;
+  spec.origin_xyz = "0 -0.02 -0.02";
+  spec.axis_xyz = "0 -1 0";
+  return spec;
+}
 
 }  // namespace
 
@@ -509,6 +658,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingOptionalFields_UsesDefa
   <joint name="j1" type="prismatic">
     <parent link="base"/>
     <child link="f1"/>
+    <origin xyz="0 0.03 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="0.0" upper="0.05" effort="50" velocity="0.1"/>
   </joint>
@@ -516,6 +666,7 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithMissingOptionalFields_UsesDefa
   <joint name="j2" type="prismatic">
     <parent link="base"/>
     <child link="f2"/>
+    <origin xyz="0 -0.03 0" rpy="0 0 0"/>
     <axis xyz="0 -1 0"/>
     <limit lower="0.0" upper="0.05" effort="50" velocity="0.1"/>
   </joint>
@@ -576,14 +727,16 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithNonNormalizedAxis_NormalizesTo
   <joint name="j1" type="prismatic">
     <parent link="base"/>
     <child link="f1"/>
-    <axis xyz="0 3 4"/>
+    <origin xyz="0.03 0.04 0" rpy="0 0 0"/>
+    <axis xyz="3 4 0"/>
     <limit lower="0.0" upper="0.05" effort="50" velocity="0.1"/>
   </joint>
 
   <joint name="j2" type="prismatic">
     <parent link="base"/>
     <child link="f2"/>
-    <axis xyz="0 -2 0"/>
+    <origin xyz="-0.03 -0.04 0" rpy="0 0 0"/>
+    <axis xyz="-6 -8 0"/>
     <limit lower="0.0" upper="0.05" effort="50" velocity="0.1"/>
   </joint>
 </robot>
@@ -600,14 +753,157 @@ TEST_F(GripperParserTest, ParseFromUrdfString_WithNonNormalizedAxis_NormalizesTo
   EXPECT_NEAR(finger_2_magnitude, test_constants::kUnitMagnitude,
     test_constants::kPositionTolerance);
 
-  EXPECT_NEAR(gripper.finger_1_axis.x(), 0.0, test_constants::kPositionTolerance);
-  EXPECT_NEAR(gripper.finger_1_axis.y(), 0.6, test_constants::kPositionTolerance);
-  EXPECT_NEAR(gripper.finger_1_axis.z(), 0.8, test_constants::kPositionTolerance);
+  EXPECT_NEAR(gripper.finger_1_axis.x(), 0.6, test_constants::kPositionTolerance);
+  EXPECT_NEAR(gripper.finger_1_axis.y(), 0.8, test_constants::kPositionTolerance);
+  EXPECT_NEAR(gripper.finger_1_axis.z(), 0.0, test_constants::kPositionTolerance);
 
-  EXPECT_NEAR(gripper.finger_2_axis.x(), 0.0, test_constants::kPositionTolerance);
-  EXPECT_NEAR(gripper.finger_2_axis.y(), -1.0, test_constants::kPositionTolerance);
+  EXPECT_NEAR(gripper.finger_2_axis.x(), -0.6, test_constants::kPositionTolerance);
+  EXPECT_NEAR(gripper.finger_2_axis.y(), -0.8, test_constants::kPositionTolerance);
   EXPECT_NEAR(gripper.finger_2_axis.z(), 0.0, test_constants::kPositionTolerance);
 }
+
+TEST_F(GripperParserTest, ParseFromUrdfString_WithConventionBuilderDefaults_Parses)
+{
+  // Guards the builder itself: the malformed cases below differ from this by one field.
+  ParsedGripper gripper = parser_.parse_from_urdf_string(
+    make_gripper_urdf(canonical_left(), canonical_right()));
+
+  EXPECT_NEAR(gripper.max_opening, 0.04, test_constants::kPositionTolerance);
+}
+
+TEST_F(GripperParserTest, ParseFromUrdfString_WithRethinkWrapper_ExtractsStrokeAndAxes)
+{
+  ParsedGripper gripper = parser_.parse_from_urdf_string(RETHINK_WRAPPER_URDF);
+
+  EXPECT_NEAR(gripper.max_opening, 2.0 * 0.020833, test_constants::kPositionTolerance);
+
+  EXPECT_NEAR(gripper.finger_1_axis.y(), 1.0, test_constants::kPositionTolerance);
+  EXPECT_NEAR(gripper.finger_2_axis.y(), -1.0, test_constants::kPositionTolerance);
+
+  EXPECT_NEAR(gripper.tcp_offset.z(), -0.1177, test_constants::kPositionTolerance);
+
+  // Both collision elements of each finger (bar + merged tip) are kept.
+  Bnd_Box finger1_bbox;
+  BRepBndLib::Add(gripper.finger_1, finger1_bbox);
+  double xmin, ymin, zmin, xmax, ymax, zmax;
+  finger1_bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  EXPECT_NEAR(xmax - xmin, 0.042, test_constants::kPositionTolerance);
+}
+
+TEST_F(GripperParserTest, ParseFromUrdfString_WithMeshCollision_ReportsMeshAsTheCause)
+{
+  const std::string urdf = make_gripper_urdf(canonical_left(), canonical_right(),
+      "<mesh filename=\"package://vendor/meshes/finger.stl\"/>");
+  try {
+    parser_.parse_from_urdf_string(urdf);
+    FAIL() << "mesh collision was accepted";
+  } catch (const std::runtime_error & e) {
+    EXPECT_NE(std::string(e.what()).find("Mesh geometry not supported"), std::string::npos)
+      << e.what();
+  }
+}
+
+TEST_F(GripperParserTest, ParseFromUrdfString_WithClosingAxes_ReportsAxisDirectionAsTheCause)
+{
+  // Opposite axes, but each pointing toward the other finger
+  FingerJointSpec left = canonical_left();
+  FingerJointSpec right = canonical_right();
+  left.axis_xyz = "0 -1 0";
+  right.axis_xyz = "0 1 0";
+  try {
+    parser_.parse_from_urdf_string(make_gripper_urdf(left, right));
+    FAIL() << "closing axes were accepted";
+  } catch (const std::runtime_error & e) {
+    EXPECT_NE(std::string(e.what()).find("opening direction"), std::string::npos) << e.what();
+  }
+}
+
+struct ConventionViolation
+{
+  const char * name;
+  std::string urdf;
+};
+
+void PrintTo(const ConventionViolation & violation, std::ostream * os)
+{
+  *os << violation.name;
+}
+
+class GripperParserConventionTest : public ::testing::TestWithParam<ConventionViolation>
+{
+protected:
+  GripperParser parser_;
+};
+
+TEST_P(GripperParserConventionTest, ParseFromUrdfString_WithConventionViolation_Throws)
+{
+  EXPECT_THROW(
+    parser_.parse_from_urdf_string(GetParam().urdf),
+    std::runtime_error
+  );
+}
+
+std::vector<ConventionViolation> convention_violations()
+{
+  std::vector<ConventionViolation> cases;
+
+  FingerJointSpec mimic_right = canonical_right();
+  mimic_right.extra = "<mimic joint=\"left_finger_joint\" multiplier=\"1\"/>";
+  cases.push_back({"MimicOnFingerJoint", make_gripper_urdf(canonical_left(), mimic_right)});
+
+  // Schunk PG70 as shipped: both fingers [-0.001, 0.0301]
+  FingerJointSpec pg70_left = canonical_left();
+  FingerJointSpec pg70_right = canonical_right();
+  pg70_left.lower = pg70_right.lower = "-0.001";
+  pg70_left.upper = pg70_right.upper = "0.0301";
+  cases.push_back({"NonZeroLowerLimit", make_gripper_urdf(pg70_left, pg70_right)});
+
+  // Rethink as shipped: right finger on the left finger's axis with [-travel, 0]
+  FingerJointSpec rethink_right = canonical_right();
+  rethink_right.axis_xyz = "0 1 0";
+  rethink_right.lower = "-0.02";
+  rethink_right.upper = "0.0";
+  cases.push_back({"NegativeRangeFinger", make_gripper_urdf(canonical_left(), rethink_right)});
+
+  FingerJointSpec longer_right = canonical_right();
+  longer_right.upper = "0.03";
+  cases.push_back({"UnequalUpperLimits", make_gripper_urdf(canonical_left(), longer_right)});
+
+  FingerJointSpec same_axis_right = canonical_right();
+  same_axis_right.axis_xyz = "0 1 0";
+  cases.push_back({"NonOpposingAxes", make_gripper_urdf(canonical_left(), same_axis_right)});
+
+  FingerJointSpec perpendicular_right = canonical_right();
+  perpendicular_right.axis_xyz = "1 0 0";
+  cases.push_back(
+    {"PerpendicularAxes", make_gripper_urdf(canonical_left(), perpendicular_right)});
+
+  FingerJointSpec chained_right = canonical_right();
+  chained_right.parent = "left_finger";
+  cases.push_back(
+    {"FingerNotParentedToBase", make_gripper_urdf(canonical_left(), chained_right)});
+
+  // Fingers 0.02 m wide, joint origins only 0.01 m apart: they interpenetrate when closed
+  FingerJointSpec overlapping_left = canonical_left();
+  FingerJointSpec overlapping_right = canonical_right();
+  overlapping_left.origin_xyz = "0 0.005 -0.02";
+  overlapping_right.origin_xyz = "0 -0.005 -0.02";
+  cases.push_back(
+    {"FingersOverlapWhenClosed", make_gripper_urdf(overlapping_left, overlapping_right)});
+
+  cases.push_back(
+    {"MeshFingerCollision", make_gripper_urdf(canonical_left(), canonical_right(),
+      "<mesh filename=\"package://vendor/meshes/finger.stl\"/>")});
+
+  return cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  ConventionViolations,
+  GripperParserConventionTest,
+  ::testing::ValuesIn(convention_violations()),
+  [](const ::testing::TestParamInfo<ConventionViolation> & info) {return info.param.name;}
+);
 
 int main(int argc, char ** argv)
 {

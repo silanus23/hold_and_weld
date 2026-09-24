@@ -24,7 +24,7 @@
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `gripper.urdf_path` | string | — | Path to gripper URDF file. Required. Must contain `<gripper_metadata>` section. |
-| `gripper.max_opening` | double | from URDF | Override maximum gripper opening [m]. If not set, uses joint limits from URDF. |
+| `gripper.max_opening` | double | from URDF | Cap on the maximum gripper opening [m]. Can only lower the URDF value (2 × finger travel); a larger value is ignored. |
 
 ## Secondaries
 

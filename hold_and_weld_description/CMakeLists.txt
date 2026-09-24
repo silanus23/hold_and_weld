@@ -21,6 +21,12 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Licences of the third-party meshes installed above (vendor originals stay in src/)
+install(DIRECTORY vendor
+  DESTINATION share/${PROJECT_NAME}
+  FILES_MATCHING PATTERN "LICENSE.txt"
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

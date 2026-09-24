@@ -26,6 +26,8 @@
 #include <stdexcept>
 
 
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -35,6 +37,7 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <Standard_Failure.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopoDS_Compound.hxx>
 
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
@@ -140,6 +143,8 @@ TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
   } catch (const Standard_Failure & e) {
     throw std::runtime_error(
       "OCCT error creating shape from geometry: " + std::string(e.GetMessageString()));
+  } catch (const std::runtime_error &) {
+    throw;
   } catch (...) {
     throw std::runtime_error("Unknown error creating shape from geometry");
   }
@@ -399,6 +404,121 @@ std::pair<double, double> GripperParser::extract_joint_limits(
   return extract_joint_limits(robot, joint_name);
 }
 
+void GripperParser::validate_finger_joint(
+  tinyxml2::XMLElement * robot,
+  const std::string & joint_name,
+  const std::string & base_link,
+  const std::string & finger_link)
+{
+  for (tinyxml2::XMLElement * joint = robot->FirstChildElement("joint");
+    joint != nullptr;
+    joint = joint->NextSiblingElement("joint"))
+  {
+    const char * name = joint->Attribute("name");
+    if (!name || joint_name != name) {
+      continue;
+    }
+
+    if (joint->FirstChildElement("mimic")) {
+      throw std::runtime_error(
+        "Finger joint '" + joint_name + "' has a <mimic>; the gripper convention needs two "
+        "independent finger joints (drop the mimic in the model's wrapper macro)");
+    }
+
+    tinyxml2::XMLElement * parent = joint->FirstChildElement("parent");
+    const char * parent_link = parent ? parent->Attribute("link") : nullptr;
+    if (!parent_link || base_link != parent_link) {
+      throw std::runtime_error(
+        "Finger joint '" + joint_name + "' must be parented to base link '" + base_link +
+        "' (parent: " + (parent_link ? parent_link : "none") + ")");
+    }
+
+    tinyxml2::XMLElement * child = joint->FirstChildElement("child");
+    const char * child_link = child ? child->Attribute("link") : nullptr;
+    if (!child_link || finger_link != child_link) {
+      throw std::runtime_error(
+        "Finger joint '" + joint_name + "' must move finger link '" + finger_link +
+        "' (child: " + (child_link ? child_link : "none") + ")");
+    }
+    return;
+  }
+
+  throw std::runtime_error("Joint not found: " + joint_name);
+}
+
+void GripperParser::validate_finger_pair(
+  const ParsedGripper & gripper,
+  const std::pair<double, double> & f1_limits,
+  const std::pair<double, double> & f2_limits)
+{
+  constexpr double kLimitTolerance = 1e-9;
+  constexpr double kAxisTolerance = 1e-6;
+  constexpr double kOverlapTolerance = 1e-6;
+
+  const std::string joints =
+    "'" + gripper.finger_1_joint_name + "' / '" + gripper.finger_2_joint_name + "'";
+
+  if (std::abs(f1_limits.first) > kLimitTolerance ||
+    std::abs(f2_limits.first) > kLimitTolerance)
+  {
+    throw std::runtime_error(
+      "Finger joints " + joints + " must have lower limit 0 (closed), got " +
+      std::to_string(f1_limits.first) + " / " + std::to_string(f2_limits.first) +
+      "; shift the joint origin to the closed pose in the model's wrapper macro");
+  }
+
+  if (f1_limits.second <= 0.0 ||
+    std::abs(f1_limits.second - f2_limits.second) > kLimitTolerance)
+  {
+    throw std::runtime_error(
+      "Finger joints " + joints + " must share one positive upper limit (travel), got " +
+      std::to_string(f1_limits.second) + " / " + std::to_string(f2_limits.second));
+  }
+
+  if (gripper.finger_1_axis.dot(gripper.finger_2_axis) > -1.0 + kAxisTolerance) {
+    throw std::runtime_error(
+      "Finger joints " + joints + " must have opposite opening axes");
+  }
+
+  // Closed-pose gap between the fingers' inner faces along the closing axis, the
+  // same quantity FCLCollisionChecker measures as rest_gap_: rotate finger_2_axis
+  // onto +X, then compare exact bounding boxes.
+  gp_Trsf to_closing_frame;
+  to_closing_frame.SetRotation(
+    gp_Quaternion(
+      gp_Vec(gripper.finger_2_axis.x(), gripper.finger_2_axis.y(), gripper.finger_2_axis.z()),
+      gp_Vec(1.0, 0.0, 0.0)));
+
+  auto closing_extent = [&](const TopoDS_Shape & finger) {
+      Bnd_Box box;
+      BRepBndLib::AddOptimal(
+        finger.Moved(TopLoc_Location(to_closing_frame)), box, Standard_False, Standard_False);
+      return box;
+    };
+  const Bnd_Box f1_box = closing_extent(gripper.finger_1);
+  const Bnd_Box f2_box = closing_extent(gripper.finger_2);
+
+  // Opening moves finger 2 toward +X here, so it must be the finger on the +X side
+  const double f1_centre = 0.5 * (f1_box.CornerMin().X() + f1_box.CornerMax().X());
+  const double f2_centre = 0.5 * (f2_box.CornerMin().X() + f2_box.CornerMax().X());
+  if (f2_centre <= f1_centre) {
+    throw std::runtime_error(
+      "Finger joints " + joints + " have axes pointing toward each other; each axis must "
+      "point in its finger's opening direction (away from the other finger)");
+  }
+
+  const double f1_inner = f1_box.CornerMax().X();
+  const double f2_inner = f2_box.CornerMin().X();
+
+  if (f2_inner - f1_inner < -kOverlapTolerance) {
+    throw std::runtime_error(
+      "Fingers '" + gripper.finger_1_link_name + "' / '" + gripper.finger_2_link_name +
+      "' overlap by " + std::to_string(f1_inner - f2_inner) + " m along the closing axis "
+      "when closed; the innermost collision face of each finger must be its contact face "
+      "(drop carriage/slide geometry from finger collision in the model's wrapper macro)");
+  }
+}
+
 ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_string)
 {
   ParsedGripper gripper;
@@ -508,6 +628,11 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
     gripper.tcp_rpy = Eigen::Vector3d::Zero();
   }
 
+  validate_finger_joint(
+    robot, gripper.finger_1_joint_name, gripper.base_link_name, gripper.finger_1_link_name);
+  validate_finger_joint(
+    robot, gripper.finger_2_joint_name, gripper.base_link_name, gripper.finger_2_link_name);
+
   gripper.base = extract_link_shape(robot, gripper.base_link_name);
 
   TopoDS_Shape finger_1_raw = extract_link_shape(robot, gripper.finger_1_link_name);
@@ -536,11 +661,13 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
   gripper.finger_1_axis = extract_joint_axis(robot, gripper.finger_1_joint_name);
   gripper.finger_2_axis = extract_joint_axis(robot, gripper.finger_2_joint_name);
 
-  auto [f1_lower, f1_upper] = extract_joint_limits(robot, gripper.finger_1_joint_name);
-  auto [f2_lower, f2_upper] = extract_joint_limits(robot, gripper.finger_2_joint_name);
+  const auto f1_limits = extract_joint_limits(robot, gripper.finger_1_joint_name);
+  const auto f2_limits = extract_joint_limits(robot, gripper.finger_2_joint_name);
 
-  double max_single_travel = std::max(f1_upper, f2_upper);
-  gripper.max_opening = 2.0 * max_single_travel;
+  validate_finger_pair(gripper, f1_limits, f2_limits);
+
+  // Convention guarantees both fingers travel [0, upper]
+  gripper.max_opening = 2.0 * f1_limits.second;
 
   return gripper;
 }

@@ -53,8 +53,8 @@
   </group_state>
 
   <group_state name="gripper_open" group="robot1_gripper">
-    <joint name="robot1_left_finger_joint" value="0.15"/>
-    <joint name="robot1_right_finger_joint" value="0.15"/>
+    <joint name="robot1_left_finger_joint" value="0.064267"/>
+    <joint name="robot1_right_finger_joint" value="0.064267"/>
   </group_state>
 
   <group_state name="gripper_closed" group="robot1_gripper">

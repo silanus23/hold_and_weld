@@ -17,8 +17,12 @@ Workcell configurator launch file.
 
 Starts the configurator node and RViz2 with its palette, the 2D Goal Pose tool
 retargeted to placement, and the Measure tool. Standalone: nothing else needs to
-run. Saving writes to staging files next to workcell_file/objects_file, not the
-live configs themselves; copy the staged layout in yourself to apply it.
+run. workcell_file defaults to the pinned editing template
+hold_and_weld_description/config/workcell.configurator.yaml, not the live
+workcell.yaml, so every launch starts from the same fixed layout regardless of
+what a previous session saved. Saving writes to staging files in
+hold_and_weld_bringup/config/configurator_output (git-ignored); copy them
+into the live configs yourself to apply a layout.
 """
 
 from launch import LaunchDescription
@@ -40,8 +44,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'workcell_file',
             default_value=PathJoinSubstitution(
-                [FindPackageShare('hold_and_weld_description'), 'config', 'workcell.yaml']),
-            description='Robot slot layout to load and save',
+                [FindPackageShare('hold_and_weld_description'), 'config',
+                 'workcell.configurator.yaml']),
+            description=(
+                'Robot slot layout to load every launch (pinned editing template, not '
+                'the live workcell.yaml)'),
         ),
         DeclareLaunchArgument(
             'objects_file',
@@ -53,15 +60,17 @@ def generate_launch_description():
             'workcell_output_file',
             default_value='',
             description=(
-                'Staging file robot slots are saved to (default: workcell_file with a '
-                '.configurator suffix); copy it into workcell_file yourself to apply it'),
+                'Staging file robot slots are saved to (default: '
+                'config/configurator_output/workcell.yaml); copy it into workcell_file '
+                'yourself to apply it'),
         ),
         DeclareLaunchArgument(
             'objects_output_file',
             default_value='',
             description=(
-                'Staging file object slots are saved to (default: objects_file with a '
-                '.configurator suffix); copy it into objects_file yourself to apply it'),
+                'Staging file object slots are saved to (default: '
+                'config/configurator_output/objects.yaml); copy it into objects_file '
+                'yourself to apply it'),
         ),
     ]
 

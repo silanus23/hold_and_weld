@@ -1,18 +1,13 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro" name="gp25_gripper">
   <!--
-    Gripper Convention Template
-    This URDF follows the hold_and_weld gripper convention.
-    The gripper_metadata section below is parsed by GripperParser
-    to extract kinematic information for grasp planning.
-
-    Required elements:
-    - base_link: The static palm/base of the gripper
-    - finger elements: Each movable finger with its controlling joint
-    - Joints must be prismatic type with axis and limits defined
-    - The mount joint to `parent` carries this gripper's coupling offset, so a
-      gripper swap stays inside this file
+    Placeholder gripper: the "placeholder" entry of gripper_catalog.xacro, which
+    documents the canonical interface every gripper model follows. The
+    gripper_metadata section below is parsed by GripperParser for grasp planning.
   -->
+  <xacro:property name="placeholder_travel" value="0.15"/>
+  <xacro:property name="placeholder_spawn_position" value="${placeholder_travel / 2}"/>
+
   <xacro:macro name="gripper_macro" params="prefix parent">
 
     <!-- This section is parsed by GripperParser to extract gripper kinematics -->
@@ -109,16 +104,16 @@
       <child link="${prefix}left_finger"/>
       <origin xyz="0 0.03 -0.02" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
-      <limit lower="0.0" upper="0.15" effort="100" velocity="0.1"/>
-      <dynamics damping="1.0" friction="2.0"/>
+      <limit lower="0.0" upper="${placeholder_travel}" effort="100" velocity="0.1"/>
+      <dynamics damping="1.0" friction="0.0"/>
     </joint>
     <joint name="${prefix}right_finger_joint" type="prismatic">
       <parent link="${prefix}gripper_base"/>
       <child link="${prefix}right_finger"/>
       <origin xyz="0 -0.03 -0.02" rpy="0 0 0"/>
       <axis xyz="0 -1 0"/>
-      <limit lower="0.0" upper="0.15" effort="100" velocity="0.1"/>
-      <dynamics damping="1.0" friction="2.0"/>
+      <limit lower="0.0" upper="${placeholder_travel}" effort="100" velocity="0.1"/>
+      <dynamics damping="1.0" friction="0.0"/>
     </joint>
     <gazebo reference="${prefix}gripper_base">
       <mu1>0.8</mu1>
@@ -142,17 +137,21 @@
       <joint name="${prefix}left_finger_joint">
         <command_interface name="position">
           <param name="min">0.0</param>
-          <param name="max">0.15</param>
+          <param name="max">${placeholder_travel}</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${placeholder_spawn_position}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
       <joint name="${prefix}right_finger_joint">
         <command_interface name="position">
           <param name="min">0.0</param>
-          <param name="max">0.15</param>
+          <param name="max">${placeholder_travel}</param>
         </command_interface>
-        <state_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${placeholder_spawn_position}</param>
+        </state_interface>
         <state_interface name="velocity"/>
       </joint>
     </ros2_control>

@@ -7,6 +7,9 @@
 #
 # Poses are in the world frame [m, rad]. robot1's pose is its linear rail's; the
 # arm rides on the rail carriage. model must be an entry of urdf/robots/robot_catalog.xacro.
+#
+# gripper_model is robot1's end effector, an entry of urdf/end_effectors/gripper_catalog.xacro.
+# The real grippers there open to a few cm: pair a swap with a workpiece they can grasp.
 robots:
   robot1:
     model: gp25
@@ -20,3 +23,4 @@ robots:
     y: -0.5
     z: 0.0
     yaw: 3.14159
+gripper_model: robotiq_2f_140

@@ -15,18 +15,18 @@
          w: 1.0
 
      child_link:
-       urdf_path: 'urdf/environment/cube.urdf.xacro'
+       urdf_path: 'urdf/environment/robotiq_cube.urdf.xacro'
        id: 'child_link'
-       spawn_name: 'cube_tjoint_straight'
+       spawn_name: 'robotiq_cube_tjoint_straight'
        pose:
          x: 1.2
          y: 0.3
-         z: 0.125
+         z: 0.05
        end_pose:
          position:
            x: 1.2
            y: -0.5
-           z: 0.925
+           z: 0.85
          orientation:
            x: 0.0
            y: 0.0

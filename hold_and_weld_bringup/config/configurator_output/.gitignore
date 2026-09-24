@@ -1,0 +1,4 @@
+# Workcell configurator saves land here (workcell.yaml, objects.yaml).
+# The folder is tracked; its contents are not.
+*
+!.gitignore

@@ -6,6 +6,11 @@
   <description>Robot descriptions, URDFs, and meshes for hold and weld system</description>
   <maintainer email="berkantali23@outlook.com">Berkan Tali</maintainer>
   <license>Apache-2.0</license>
+  <!-- Third-party gripper geometry under meshes/, originals in vendor/ -->
+  <license file="vendor/onrobot_2fg7_description/LICENSE.txt">MIT</license>
+  <license file="vendor/rethink_ee_description/LICENSE.txt">BSD-3-Clause</license>
+  <license file="vendor/robotiq_2f_140_gripper_visualization/LICENSE.txt">BSD-3-Clause</license>
+  <license file="vendor/schunk_description/LICENSE.txt">Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

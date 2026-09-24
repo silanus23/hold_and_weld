@@ -53,6 +53,16 @@ namespace io
  * - Joint axes (opening directions) from prismatic joint definitions
  * - Joint limits for min/max opening calculation
  * - TCP offset for grasp frame definition
+ *
+ * Finger convention, enforced (parsing throws on a violation). Vendor grippers
+ * are normalised to it in their wrapper macro under
+ * hold_and_weld_description/urdf/end_effectors/, never here:
+ * - Both finger joints are prismatic, parented directly to the base link, and
+ *   have no <mimic>
+ * - Limits are [0, travel] with 0 = closed and equal travel on both fingers
+ * - Axes point in the opening direction and are opposite to each other
+ * - Collision is box/cylinder/sphere only; the closed fingers do not overlap
+ *   along the closing axis, so each finger's innermost face is its contact face
  */
 class GripperParser
 {
@@ -157,6 +167,38 @@ private:
   gp_Trsf extract_joint_origin(
     tinyxml2::XMLElement * robot,
     const std::string & joint_name);
+
+  /**
+   * @brief Check a finger joint's topology against the finger convention
+   *
+   * Throws if the joint has a <mimic>, or is not base_link -> finger_link.
+   *
+   * @param robot Root <robot> element
+   * @param joint_name Name of the finger joint
+   * @param base_link Name of the gripper base link (the required parent)
+   * @param finger_link Name of the finger link (the required child)
+   */
+  void validate_finger_joint(
+    tinyxml2::XMLElement * robot,
+    const std::string & joint_name,
+    const std::string & base_link,
+    const std::string & finger_link);
+
+  /**
+   * @brief Check the parsed finger pair against the finger convention
+   *
+   * Throws on limits other than equal [0, travel], non-opposing axes, axes
+   * pointing toward each other, or fingers that overlap along the closing axis
+   * at the closed pose.
+   *
+   * @param gripper Gripper with finger shapes (in base frame) and axes filled in
+   * @param f1_limits (lower, upper) of finger 1's joint [m]
+   * @param f2_limits (lower, upper) of finger 2's joint [m]
+   */
+  void validate_finger_pair(
+    const ParsedGripper & gripper,
+    const std::pair<double, double> & f1_limits,
+    const std::pair<double, double> & f2_limits);
 
   /**
    * @brief Parse xyz string to Vector3d

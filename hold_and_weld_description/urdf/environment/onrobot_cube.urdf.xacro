@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="child_link">
+  <!--
+    Small test cube sized for the onrobot_2fg7 gripper (gripper_catalog.xacro):
+    its fingers close to a 0.0066 m gap and open to ~0.0446 m, so 0.03 m leaves
+    ~7 mm per side when open. Same link name as cube.urdf.xacro, so it drops into
+    the child_link slot of objects.yaml.
+  -->
+  <xacro:property name="cube_size" value="0.03"/>
+  <xacro:property name="cube_mass" value="0.05"/>
+
+  <link name="child_link">
+    <visual>
+      <geometry>
+        <box size="${cube_size} ${cube_size} ${cube_size}"/>
+      </geometry>
+      <material name="blue">
+        <color rgba="0 0.45 0.9 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${cube_size} ${cube_size} ${cube_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${cube_mass}"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="${cube_mass * cube_size**2 / 6}" ixy="0.0" ixz="0.0"
+               iyy="${cube_mass * cube_size**2 / 6}" iyz="0.0"
+               izz="${cube_mass * cube_size**2 / 6}"/>
+    </inertial>
+  </link>
+
+  <!-- Gazebo properties for the onrobot cube -->
+  <gazebo reference="child_link">
+    <visual>
+      <material>
+        <ambient>0 0.45 0.9 1</ambient>
+        <diffuse>0 0.45 0.9 1</diffuse>
+        <specular>0.5 0.5 0.5 1</specular>
+      </material>
+    </visual>
+    <collision>
+      <surface>
+        <friction>
+          <ode>
+            <mu>0.8</mu>
+            <mu2>0.8</mu2>
+          </ode>
+        </friction>
+      </surface>
+    </collision>
+  <gravity>0</gravity>
+  <static>true</static>
+  </gazebo>
+
+</robot>

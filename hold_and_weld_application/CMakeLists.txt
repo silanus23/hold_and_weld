@@ -82,6 +82,7 @@ target_link_libraries(hold_and_weld_kinematics
 
 add_library(hold_and_weld_action_servers SHARED
   src/action_servers/gripper_action_server.cpp
+  src/action_servers/controller_readiness.cpp
   src/action_servers/gripper_aperture.cpp
   src/action_servers/welder_action_server.cpp
   src/action_servers/move_to_pose_action_server.cpp
@@ -246,6 +247,13 @@ if(BUILD_TESTING)
     test/gripper_aperture_test.cpp
   )
   target_link_libraries(gripper_aperture_test
+    hold_and_weld_action_servers
+  )
+
+  ament_add_gtest(controller_readiness_test
+    test/controller_readiness_test.cpp
+  )
+  target_link_libraries(controller_readiness_test
     hold_and_weld_action_servers
   )
 

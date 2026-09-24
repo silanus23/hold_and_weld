@@ -5,6 +5,8 @@ log/
 .catkin_tools/
 .colcon/
 *.json
+# Vendored models: upstream source commit of each (see their LICENSE.txt)
+!hold_and_weld_description/vendor/*/meta-information.json
 
 *.o
 *.so
@@ -55,3 +57,6 @@ tempCodeRunnerFile.py
 .clang-format
 .clangd/
 .aider*
+.ruff_cache/
+.claude/
+CLAUDE.md

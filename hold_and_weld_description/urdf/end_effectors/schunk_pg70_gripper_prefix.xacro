@@ -1,0 +1,147 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="schunk_pg70_gripper">
+  <!--
+    Schunk PG70 parallel gripper. Source: ipa320/schunk_modular_robotics
+    schunk_description (Apache-2.0, original in vendor/schunk_description), palm
+    mesh under meshes/schunk_pg70.
+
+    Normalised to the canonical interface in gripper_catalog.xacro. Differences
+    from the vendor URDF, all expressed here:
+    - Vendor frame rotated by pi about y (fingers along -z, left finger stays +y);
+      origins below are already in that rotated frame
+    - Limits [-0.001, 0.0301] shifted to [0, 0.0311]: joint origins moved to the
+      closed pose (vendor y +-0.0055 -> +-0.0045); right finger's <mimic> dropped
+    - Vendor world/podest (LWA4P arm-base mesh) links, transmissions and gazebo
+      plugin dropped; placeholder 1 kg finger/palm inertias replaced by box estimates
+    - Fingers: the vendor ships 1 cm placeholder boxes (PG70 jaws are customer-made).
+      These are plain 60 mm aluminium-sized jaws, box visual and collision, whose
+      inner face sits on the joint origin
+  -->
+  <xacro:property name="pg70_travel" value="0.0311"/>
+  <xacro:property name="pg70_spawn_position" value="${pg70_travel / 2}"/>
+
+  <xacro:macro name="schunk_pg70_finger_link" params="name side">
+    <!-- side: +1 for the left finger (+y), -1 for the right finger (-y) -->
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 ${side * 0.005} -0.025" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.02 0.01 0.06"/>
+        </geometry>
+        <material name="pg70_jaw">
+          <color rgba="0.25 0.25 0.25 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 ${side * 0.005} -0.025" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.02 0.01 0.06"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.05"/>
+        <origin xyz="0 ${side * 0.005} -0.025" rpy="0 0 0"/>
+        <inertia ixx="1.54e-05" ixy="0.0" ixz="0.0" iyy="1.67e-05" iyz="0.0" izz="2.1e-06"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="schunk_pg70_gripper_macro" params="prefix parent">
+
+    <!-- This section is parsed by GripperParser to extract gripper kinematics -->
+    <gripper_metadata>
+      <base_link name="${prefix}gripper_base"/>
+      <finger finger_id="1" link="${prefix}left_finger" joint="${prefix}left_finger_joint"/>
+      <finger finger_id="2" link="${prefix}right_finger" joint="${prefix}right_finger_joint"/>
+      <gripper_type>parallel</gripper_type>
+      <!-- Centre of the jaws below the carriers -->
+      <tcp_offset xyz="0 0 -0.1039" rpy="0 0 0"/>
+    </gripper_metadata>
+
+    <!-- Palm mounting face (collision box top) sits on the flange -->
+    <joint name="${prefix}tool0_to_gripper" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}gripper_base"/>
+      <origin xyz="0 0 0.00855" rpy="${pi} 0 0"/>
+    </joint>
+
+    <link name="${prefix}gripper_base">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 ${pi} 0"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/schunk_pg70/visual/pg70.dae"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.03145" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.082 0.114 0.080"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="1.0"/>
+        <origin xyz="0 0 -0.03145" rpy="0 0 0"/>
+        <inertia ixx="1.62e-03" ixy="0.0" ixz="0.0" iyy="1.09e-03" iyz="0.0" izz="1.64e-03"/>
+      </inertial>
+    </link>
+
+    <xacro:schunk_pg70_finger_link name="${prefix}left_finger" side="1"/>
+    <xacro:schunk_pg70_finger_link name="${prefix}right_finger" side="-1"/>
+
+    <joint name="${prefix}left_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}left_finger"/>
+      <origin xyz="0 0.0045 -0.0789" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="${pg70_travel}" effort="10" velocity="0.041"/>
+      <dynamics damping="1.0" friction="0.0"/>
+    </joint>
+    <joint name="${prefix}right_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}right_finger"/>
+      <origin xyz="0 -0.0045 -0.0789" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="${pg70_travel}" effort="10" velocity="0.041"/>
+      <dynamics damping="1.0" friction="0.0"/>
+    </joint>
+
+    <gazebo reference="${prefix}gripper_base">
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}left_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}right_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+
+    <ros2_control name="${prefix}gripper_system" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+      <joint name="${prefix}left_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${pg70_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${pg70_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}right_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${pg70_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${pg70_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>

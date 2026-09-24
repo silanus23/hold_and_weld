@@ -12,9 +12,11 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}/
 )
 
+# Configurator saves stay in src/; only the folder's .gitignore is installed.
 install(DIRECTORY
   config
   DESTINATION share/${PROJECT_NAME}/
+  PATTERN "configurator_output/*.yaml" EXCLUDE
 )
 
 install(DIRECTORY

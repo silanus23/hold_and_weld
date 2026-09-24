@@ -21,6 +21,7 @@
 #include <lifecycle_msgs/msg/state.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
 
+#include "hold_and_weld_application/action_servers/controller_readiness.hpp"
 #include "hold_and_weld_application/action_servers/gripper_aperture.hpp"
 #include "hold_and_weld_application/utils.hpp"
 
@@ -112,6 +113,10 @@ GripperActionServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     this->get_node_logging_interface(),
     this->get_node_waitables_interface(),
     gripper_controller_topic);
+  gripper_controller_name_ =
+    hold_and_weld::controller_name_from_action_topic(gripper_controller_topic);
+  list_controllers_client_ = create_client<controller_manager_msgs::srv::ListControllers>(
+    "/controller_manager/list_controllers");
 
   attached_collision_pub_ = this->create_publisher<moveit_msgs::msg::AttachedCollisionObject>(
     "/attached_collision_object", 10);
@@ -341,6 +346,7 @@ GripperActionServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 
   try {
     if (gripper_action_client_) {gripper_action_client_.reset();}
+    if (list_controllers_client_) {list_controllers_client_.reset();}
     if (planning_scene_client_) {planning_scene_client_.reset();}
     if (get_planning_scene_client_) {get_planning_scene_client_.reset();}
     if (attached_collision_pub_) {attached_collision_pub_.reset();}
@@ -414,6 +420,7 @@ GripperActionServer::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 
   try {
     if (gripper_action_client_) {gripper_action_client_.reset();}
+    if (list_controllers_client_) {list_controllers_client_.reset();}
     if (planning_scene_client_) {planning_scene_client_.reset();}
     if (get_planning_scene_client_) {get_planning_scene_client_.reset();}
     if (attached_collision_pub_) {attached_collision_pub_.reset();}
@@ -639,6 +646,10 @@ bool GripperActionServer::run_job(
       step++;
     };
 
+  if (!wait_for_gripper_controller()) {
+    return false;
+  }
+
   step_feedback("opening_gripper");
   if (!set_finger_aperture(open_position_)) {
     RCLCPP_ERROR(logger_, "Failed to open gripper");
@@ -841,6 +852,34 @@ bool GripperActionServer::resolve_finger_apertures()
     open_position_, requested_open_position_ ? "from positions YAML" : "from joint limit",
     close_position_, requested_close_position_ ? "from positions YAML" : "from joint limit");
   return true;
+}
+
+bool GripperActionServer::wait_for_gripper_controller()
+{
+  const auto deadline = std::chrono::steady_clock::now() +
+    std::chrono::seconds(timing::GRIPPER_CONTROLLER_TIMEOUT_SEC);
+  bool logged_wait = false;
+  while (rclcpp::ok() && std::chrono::steady_clock::now() < deadline) {
+    auto request = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
+    auto future = list_controllers_client_->async_send_request(request);
+    const bool answered = future.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    if (answered &&
+      hold_and_weld::is_controller_active(future.get()->controller, gripper_controller_name_))
+    {
+      return true;
+    }
+    if (!answered) {
+      list_controllers_client_->remove_pending_request(future);
+    }
+    if (!logged_wait) {
+      RCLCPP_INFO(logger_, "Waiting for %s to become active", gripper_controller_name_.c_str());
+      logged_wait = true;
+    }
+    rclcpp::sleep_for(std::chrono::milliseconds(250));
+  }
+  RCLCPP_ERROR(logger_, "%s not active after %d s", gripper_controller_name_.c_str(),
+    timing::GRIPPER_CONTROLLER_TIMEOUT_SEC);
+  return false;
 }
 
 bool GripperActionServer::set_finger_aperture(double position)

@@ -1,0 +1,19 @@
+# Pinned editing template for workcell_configurator.launch.py: every launch reloads
+# this file (not the live workcell.yaml, and not a previous session's save), so it
+# always starts from the same known layout. Same schema as workcell.yaml. Edit by
+# hand or via the configurator's "Save layout"; copy the result into workcell.yaml
+# yourself to make it live.
+robots:
+  robot1:
+    model: gp25
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+  robot2:
+    model: gp25
+    x: 2.445407
+    y: -0.5
+    z: 0.0
+    yaw: 3.14159
+gripper_model: onrobot_2fg7

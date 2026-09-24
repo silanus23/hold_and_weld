@@ -1,0 +1,167 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="rethink_electric_gripper">
+  <!--
+    Rethink Robotics electric parallel gripper (Baxter/Sawyer), extended_narrow
+    fingers with paddle tips on both sides. Source: RethinkRobotics/baxter_common
+    rethink_ee_description (BSD-3-Clause, original in
+    vendor/rethink_ee_description), meshes under meshes/rethink_electric_gripper.
+
+    Normalised to the canonical interface in gripper_catalog.xacro. Differences
+    from the vendor URDF, all expressed here:
+    - Vendor frame rotated by pi about y (fingers along -z, left finger stays +y);
+      finger visuals/collision below are already in that rotated frame
+    - Right finger: vendor axis +y with [-0.020833, 0] and <mimic multiplier=-1>
+      becomes axis -y with [0, 0.020833], no mimic
+    - Finger tip links (fixed joints) merged into the finger links
+    - The finger carriage box is left out of finger collision (it reaches past
+      the contact pad toward the other finger); the base collision covers its
+      slot over the full stroke instead
+    - Vendor world/left_hand/left_gripper links, transmissions and the vendor's
+      placeholder inertias dropped; inertias below are box/cylinder estimates
+  -->
+  <xacro:property name="rethink_travel" value="0.020833"/>
+  <xacro:property name="rethink_spawn_position" value="${rethink_travel / 2}"/>
+
+  <xacro:macro name="rethink_electric_finger_link" params="name side">
+    <!-- side: +1 for the left finger (+y), -1 for the right finger (-y) -->
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi if side > 0 else 0} ${0 if side > 0 else pi} 0"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/rethink_electric_gripper/visual/extended_narrow.dae"/>
+        </geometry>
+      </visual>
+      <visual>
+        <origin xyz="0 ${side * 0.01725} -0.1127" rpy="${pi if side > 0 else 0} ${0 if side > 0 else pi} 0"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/rethink_electric_gripper/visual/paddle_tip.dae"/>
+        </geometry>
+      </visual>
+      <!-- Finger bar -->
+      <collision>
+        <origin xyz="0 ${side * 0.01725} -0.0615" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.01 0.0135 0.1127"/>
+        </geometry>
+      </collision>
+      <!-- Paddle tip (vendor tip link): the contact pad -->
+      <collision>
+        <origin xyz="0 ${side * 0.01275} -0.0977" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.042 0.0065 0.037"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.03"/>
+        <origin xyz="0 ${side * 0.016} -0.07" rpy="0 0 0"/>
+        <inertia ixx="3.2e-05" ixy="0.0" ixz="0.0" iyy="3.2e-05" iyz="0.0" izz="7.1e-07"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="rethink_electric_gripper_macro" params="prefix parent">
+
+    <!-- This section is parsed by GripperParser to extract gripper kinematics -->
+    <gripper_metadata>
+      <base_link name="${prefix}gripper_base"/>
+      <finger finger_id="1" link="${prefix}left_finger" joint="${prefix}left_finger_joint"/>
+      <finger finger_id="2" link="${prefix}right_finger" joint="${prefix}right_finger_joint"/>
+      <gripper_type>parallel</gripper_type>
+      <!-- Centre of the paddle tips -->
+      <tcp_offset xyz="0 0 -0.1177" rpy="0 0 0"/>
+    </gripper_metadata>
+
+    <!-- Base top (collision cylinder radius) sits on the flange -->
+    <joint name="${prefix}tool0_to_gripper" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}gripper_base"/>
+      <origin xyz="0 0 0.029" rpy="${pi} 0 0"/>
+    </joint>
+
+    <link name="${prefix}gripper_base">
+      <visual>
+        <origin xyz="0 0 0" rpy="${-pi/2} 0 0"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/rethink_electric_gripper/visual/electric_gripper_base.dae"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="0.029" length="0.1"/>
+        </geometry>
+      </collision>
+      <!-- Finger carriages over the full stroke -->
+      <collision>
+        <origin xyz="0 0 -0.0283" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.02 0.1 0.017"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.3"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="3.13e-04" ixy="0.0" ixz="0.0" iyy="1.26e-04" iyz="0.0" izz="3.13e-04"/>
+      </inertial>
+    </link>
+
+    <xacro:rethink_electric_finger_link name="${prefix}left_finger" side="1"/>
+    <xacro:rethink_electric_finger_link name="${prefix}right_finger" side="-1"/>
+
+    <joint name="${prefix}left_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}left_finger"/>
+      <origin xyz="0 -0.0015 -0.02" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="${rethink_travel}" effort="20" velocity="0.1"/>
+      <dynamics damping="0.7" friction="0.0"/>
+    </joint>
+    <joint name="${prefix}right_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}right_finger"/>
+      <origin xyz="0 0.0015 -0.02" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="${rethink_travel}" effort="20" velocity="0.1"/>
+      <dynamics damping="0.7" friction="0.0"/>
+    </joint>
+
+    <gazebo reference="${prefix}gripper_base">
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}left_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}right_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+
+    <ros2_control name="${prefix}gripper_system" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+      <joint name="${prefix}left_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${rethink_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${rethink_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}right_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${rethink_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${rethink_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>

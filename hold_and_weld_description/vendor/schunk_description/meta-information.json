@@ -1,0 +1,63 @@
+{
+    "robots": [
+        {
+            "name": "LWA 4P",
+            "type": "robotic arm",
+            "manufacturer": "Schunk",
+            "xacro-generated": true,
+            "urdf": [
+                "urdf/schunk_lwa4p.urdf"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/ipa320/schunk_modular_robotics/tree/b2d73bdd333eceda0e91b4f8d4e8881433dc243a/schunk_description",
+            "id": 107
+        },
+        {
+            "name": "LWA 4P",
+            "type": "robotic arm",
+            "manufacturer": "Schunk",
+            "xacro-generated": true,
+            "urdf": [
+                "urdf/schunk_lwa4p_extended.urdf"
+            ],
+            "variant": "extended",
+            "id": 305
+        },
+        {
+            "name": "LWA 4D",
+            "type": "robotic arm",
+            "manufacturer": "Schunk",
+            "xacro-generated": true,
+            "urdf": [
+                "urdf/schunk_lwa4d.urdf"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/ipa320/schunk_modular_robotics/tree/b2d73bdd333eceda0e91b4f8d4e8881433dc243a/schunk_description",
+            "id": 108
+        },
+        {
+            "name": "PG 70",
+            "type": "end effector",
+            "manufacturer": "Schunk",
+            "xacro-generated": true,
+            "urdf": [
+                "urdf/schunk_pg70.urdf"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/ipa320/schunk_modular_robotics/tree/b2d73bdd333eceda0e91b4f8d4e8881433dc243a/schunk_description",
+            "id": 109
+        },
+        {
+            "name": "PW 70",
+            "type": "end effector",
+            "manufacturer": "Schunk",
+            "xacro-generated": true,
+            "urdf": [
+                "urdf/schunk_pw70.urdf"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/ipa320/schunk_modular_robotics/tree/b2d73bdd333eceda0e91b4f8d4e8881433dc243a/schunk_description",
+            "id": 110
+        }
+    ]
+}

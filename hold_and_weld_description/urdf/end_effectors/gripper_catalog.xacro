@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gripper_catalog">
+  <!--
+    Gripper models the robot1 slot can hold, picked by gripper_model in
+    config/workcell.yaml. Same idea as robots/robot_catalog.xacro: every model's
+    <model>_gripper_prefix.xacro wraps the vendor geometry and emits the same
+    canonical interface, so controllers, SRDF groups, MoveIt configs, the gripper
+    action server and the grasp sampler never change on a swap. Vendor quirks are
+    normalised inside the wrapper, never in YAML or C++. What does change: the
+    SRDF gripper_open states and pick_place_targets.yaml's finger positions hold
+    the live gripper's travel.
+
+    Canonical interface (GripperParser rejects violations):
+    - Links ${prefix}gripper_base, ${prefix}left_finger, ${prefix}right_finger
+    - Joints ${prefix}left_finger_joint, ${prefix}right_finger_joint: prismatic,
+      parented directly to gripper_base, no <mimic>
+    - Limits [0, travel] with 0 = closed, equal travel on both fingers
+    - Axes point in the opening direction, opposite to each other; fingers
+      extend along -z of gripper_base and open along +y (left) / -y (right)
+    - Collision is box/cylinder/sphere only (vendor meshes go in <visual>), and
+      each finger's innermost collision face is its contact face: carriage/slide
+      geometry that reaches past it belongs to the base's collision, and tip/pad
+      links are merged into the finger link
+    - The mount joint ${prefix}tool0_to_gripper, gripper_metadata (tcp_offset at
+      the contact pads) and the ${prefix}gripper_system <ros2_control> block
+    - Gazebo: finger joint friction 0 (Gazebo drives position commands as joint
+      velocity commands, and joint friction holds the fingers still), and a
+      position initial_value strictly inside the limits, by convention half
+      travel (a finger spawned exactly on a limit can land a hair past it, where
+      Gazebo ignores its commands)
+
+    The placeholder model is gripper_prefix.xacro (gripper_macro).
+
+    Adding a model: include its <model>_gripper_prefix.xacro, add it to
+    gripper_catalog, and add one xacro:if branch below.
+  -->
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/gripper_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/rethink_electric_gripper_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/schunk_pg70_gripper_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/onrobot_2fg7_gripper_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/end_effectors/robotiq_2f_140_gripper_prefix.xacro"/>
+
+  <xacro:property name="gripper_catalog" value="${['placeholder', 'rethink_electric', 'schunk_pg70', 'onrobot_2fg7', 'robotiq_2f_140']}"/>
+
+  <xacro:macro name="gripper_catalog_macro" params="model prefix parent">
+    <xacro:if value="${model == ''}">
+      ${xacro.fatal('workcell.yaml has no gripper_model for', prefix, '- set it to one of', gripper_catalog)}
+    </xacro:if>
+    <xacro:unless value="${model in gripper_catalog}">
+      ${xacro.fatal('Unknown gripper model', python.repr(model), 'for', prefix, '- gripper_catalog.xacro has', gripper_catalog)}
+    </xacro:unless>
+
+    <xacro:if value="${model == 'placeholder'}">
+      <xacro:gripper_macro prefix="${prefix}" parent="${parent}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'rethink_electric'}">
+      <xacro:rethink_electric_gripper_macro prefix="${prefix}" parent="${parent}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'schunk_pg70'}">
+      <xacro:schunk_pg70_gripper_macro prefix="${prefix}" parent="${parent}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'onrobot_2fg7'}">
+      <xacro:onrobot_2fg7_gripper_macro prefix="${prefix}" parent="${parent}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'robotiq_2f_140'}">
+      <xacro:robotiq_2f_140_gripper_macro prefix="${prefix}" parent="${parent}"/>
+    </xacro:if>
+  </xacro:macro>
+</robot>

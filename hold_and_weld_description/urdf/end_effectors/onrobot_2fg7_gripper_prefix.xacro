@@ -1,0 +1,153 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="onrobot_2fg7_gripper">
+  <!--
+    OnRobot 2FG7 parallel gripper, outward-mounted fingers. Source:
+    juandpenan/onrobot_2fg7_description (MIT, original in
+    vendor/onrobot_2fg7_description), meshes under meshes/onrobot_2fg7.
+
+    Normalised to the canonical interface in gripper_catalog.xacro. Differences
+    from the vendor URDF, all expressed here:
+    - Vendor frame rotated rpy (pi, 0, pi/2): fingers along -z and jaws opening
+      along y like the other models (vendor jaws move along x); the vendor's +x
+      finger ("left_finger") stays the canonical left finger (+y)
+    - Vendor joint value q closes the jaws (q = 0 open, 0.019 closed). Joint
+      origins moved to the closed pose (vendor q = 0.019) with outward axes and
+      [0, 0.019]; right finger's <mimic> and [-0.019, 0.019] range dropped
+    - Collision: STL meshes replaced by bounding boxes (base 0.071 x 0.09 x 0.1172,
+      fingers 0.032 x 0.0192 x 0.045); meshes kept as visuals. Finger link
+      frames sit at the finger box centres; inner faces 6.6 mm apart when closed
+    - Vendor world link, transmission, grasp-fix and mimic gazebo plugins dropped
+  -->
+  <xacro:property name="onrobot_2fg7_travel" value="0.019"/>
+  <xacro:property name="onrobot_2fg7_spawn_position" value="${onrobot_2fg7_travel / 2}"/>
+
+  <xacro:macro name="onrobot_2fg7_finger_link" params="name mesh side">
+    <!-- side: +1 for the left finger (+y), -1 for the right finger (-y) -->
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 ${-side * 0.0319} 0.13975" rpy="${pi} 0 ${pi/2}"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/onrobot_2fg7/visual/${mesh}"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="onrobot_silver">
+          <color rgba="0.7 0.7 0.7 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.032 0.0192 0.045"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.0232"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="5e-06" ixy="0.0" ixz="0.0" iyy="6e-06" iyz="0.0" izz="2e-06"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="onrobot_2fg7_gripper_macro" params="prefix parent">
+
+    <!-- This section is parsed by GripperParser to extract gripper kinematics -->
+    <gripper_metadata>
+      <base_link name="${prefix}gripper_base"/>
+      <finger finger_id="1" link="${prefix}left_finger" joint="${prefix}left_finger_joint"/>
+      <finger finger_id="2" link="${prefix}right_finger" joint="${prefix}right_finger_joint"/>
+      <gripper_type>parallel</gripper_type>
+      <!-- Centre of the fingers -->
+      <tcp_offset xyz="0 0 -0.13975" rpy="0 0 0"/>
+    </gripper_metadata>
+
+    <!-- Base mounting face (vendor base z = 0) sits on the flange -->
+    <joint name="${prefix}tool0_to_gripper" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}gripper_base"/>
+      <origin xyz="0 0 0" rpy="${pi} 0 0"/>
+    </joint>
+
+    <link name="${prefix}gripper_base">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi} 0 ${pi/2}"/>
+        <geometry>
+          <mesh filename="package://hold_and_weld_description/meshes/onrobot_2fg7/visual/base_link.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="onrobot_silver">
+          <color rgba="0.7 0.7 0.7 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.0586" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.071 0.09 0.1172"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="1.2647"/>
+        <origin xyz="0 0 -0.0681" rpy="0 0 0"/>
+        <inertia ixx="0.001812" ixy="0.0" ixz="0.0" iyy="0.001504" iyz="0.0" izz="0.001053"/>
+      </inertial>
+    </link>
+
+    <xacro:onrobot_2fg7_finger_link name="${prefix}left_finger" mesh="left_finger_link.stl" side="1"/>
+    <xacro:onrobot_2fg7_finger_link name="${prefix}right_finger" mesh="right_finger_link.stl" side="-1"/>
+
+    <joint name="${prefix}left_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}left_finger"/>
+      <origin xyz="0 0.0129 -0.13975" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="${onrobot_2fg7_travel}" effort="140" velocity="0.45"/>
+      <dynamics damping="1.0" friction="0.0"/>
+    </joint>
+    <joint name="${prefix}right_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base"/>
+      <child link="${prefix}right_finger"/>
+      <origin xyz="0 -0.0129 -0.13975" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="${onrobot_2fg7_travel}" effort="140" velocity="0.45"/>
+      <dynamics damping="1.0" friction="0.0"/>
+    </joint>
+
+    <gazebo reference="${prefix}gripper_base">
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}left_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="${prefix}right_finger">
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+
+    <ros2_control name="${prefix}gripper_system" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+      <joint name="${prefix}left_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${onrobot_2fg7_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${onrobot_2fg7_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}right_finger_joint">
+        <command_interface name="position">
+          <param name="min">0.0</param>
+          <param name="max">${onrobot_2fg7_travel}</param>
+        </command_interface>
+        <state_interface name="position">
+          <param name="initial_value">${onrobot_2fg7_spawn_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+</robot>
