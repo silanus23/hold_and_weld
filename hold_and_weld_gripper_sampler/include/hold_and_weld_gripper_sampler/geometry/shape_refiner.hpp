@@ -33,7 +33,6 @@ namespace geometry
 /**
  * @brief Refines CAD geometry for gripper sampling by removing small features
  *        and splitting large curved surfaces into manageable patches.
- *
  */
 class ShapeRefiner
 {
@@ -41,26 +40,31 @@ public:
   /**
    * @brief Constructor
    *
-   * @param max_cylinder_radius Maximum cylinder radius before radial splitting [m]
-   * @param max_arc_length Maximum edge arc length before surface splitting [m]
+   * @param max_cylinder_radius Maximum cylinder radius before radial splitting [m].
+   *        Stored but not used yet — the radial split (get_cylinder_splits) is not implemented.
+   * @param max_arc_length Maximum edge arc length before surface splitting [m]. Must be > 0.
    * @param enclave_area_ratio Maximum enclave area as fraction of total area (e.g. 0.005 = 0.5%)
    * @param enclave_angle_threshold Maximum wall angle for enclave suppression [degrees].
    *        Enclaves with walls steeper than this are kept as real features.
    * @param max_face_area_ratio Maximum single-face area as fraction of total area before a
    *        warning is emitted and an additional edge-based split is attempted (e.g. 0.3 = 30%).
+   * @param planarity_tolerance_deg Maximum corner-normal deviation for a non-plane face to
+   *        still count as flat and be left unsplit [degrees].
    */
   ShapeRefiner(
     double max_cylinder_radius,
     double max_arc_length,
     double enclave_area_ratio,
     double enclave_angle_threshold,
-    double max_face_area_ratio = 0.3);
+    double max_face_area_ratio = 0.3,
+    double planarity_tolerance_deg = 1.0);
 
   /**
    * @brief Refine a shape by removing enclaves and splitting large surfaces.
    *
-   * Large unsplit surfaces (>30% of total area) will trigger a WARN log.This may indicate gentle
-   * BSplines, lofted surfaces, or offset surfacesthat cannot be automatically split.
+   * Surfaces still larger than max_face_area_ratio of the total area after arc-length
+   * splitting trigger a WARN log. This may indicate gentle BSplines, lofted surfaces, or
+   * offset surfaces that cannot be automatically split. Large flat faces also trigger it.
    *
    * @param raw_shape Input shape (typically from STEP import)
    * @return Refined shape
@@ -73,6 +77,7 @@ private:
   double enclave_area_ratio_;
   double enclave_angle_threshold_;
   double max_face_area_ratio_;
+  double planarity_tolerance_deg_;
 
   /**
    * @brief Identify enclave features (small pockets/holes) to remove.
@@ -134,6 +139,8 @@ private:
   /**
    * @brief Get split parameters for perfect cylinders.
    *
+   * Declared only — not implemented or called yet.
+   *
    * Checks radius against max_cylinder_radius first, then falls back
    * to arc length check.
    *
@@ -146,6 +153,8 @@ private:
 
   /**
    * @brief Get split parameters for cones and other analytical surfaces.
+   *
+   * Declared only — not implemented or called yet.
    *
    * @param face Face to split
    * @param u_splits Output U parameter splits
@@ -172,7 +181,7 @@ private:
     std::vector<double> & v_splits) const;
 
   /**
-   * @brief Check if a face is physically planar within 1° normal deviation.
+   * @brief Check if a face is physically planar within planarity_tolerance_deg_.
    *
    * @param face Face to check
    * @return true if face is planar
@@ -190,11 +199,12 @@ private:
   gp_Dir calculate_safe_normal(const TopoDS_Face & face) const;
 
   /**
-   * @brief Phase 1: pre-split U-periodic faces with ShapeUpgrade_ShapeDivideClosed.
+   * @brief Phase 1: open closed faces with ShapeUpgrade_ShapeDivideClosed.
    *
-   * Opens seams on periodic surfaces whose full U arc-length exceeds
-   * max_arc_length_. BRepFeat_SplitShape (phase 2) silently fails on
-   * unseamed periodic faces, so this must run first.
+   * Runs when any face covering a full U period has an arc length above
+   * max_arc_length_. Every closed face is cut once, into two halves; phase 2 then
+   * splits each half by its own arc length. BRepFeat_SplitShape (phase 2)
+   * silently fails on unseamed closed faces, so this must run first.
    *
    * @param shape Input shape (post-heal, post-enclave-removal)
    * @return Shape with periodic faces opened
@@ -202,11 +212,12 @@ private:
   TopoDS_Shape refine_phase1_periodic_split(const TopoDS_Shape & shape) const;
 
   /**
-   * @brief Phase 2: split non-periodic faces at inflection points and where
-   *        edge arc-lengths exceed max_arc_length_.
+   * @brief Phase 2: split open (not full-period) faces at inflection points and
+   *        where edge arc-lengths exceed max_arc_length_.
    *
    * Uses BRepFeat_SplitShape with ISO-curve edges inserted at the computed
-   * parameter values.
+   * parameter values. Partial faces on periodic surfaces (half-pipes, fillets)
+   * are included.
    *
    * @param shape Input shape (output of phase 1)
    * @param global_total_area Total surface area used for diagnostics
