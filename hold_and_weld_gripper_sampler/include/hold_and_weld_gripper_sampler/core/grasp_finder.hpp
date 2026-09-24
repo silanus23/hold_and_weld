@@ -89,6 +89,8 @@ struct ShapeRefinerConfig
   double max_arc_length = 0.200;
   double enclave_area_ratio = 0.005;
   double enclave_angle_threshold = 45.0;
+  double max_face_area_ratio = 0.3;
+  double planarity_tolerance_deg = 1.0;
 };
 
 /**

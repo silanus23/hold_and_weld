@@ -143,7 +143,7 @@ private:
   };
 
   /**
-   * @brief Find opposing surface pairs within gripper opening range.
+   * @brief Find surface pairs whose normals are antiparallel within [min_angle_deg, max_angle_deg].
    *
    * @param topology Primary shape topology
    * @param valid_surface_ids Surfaces to pair
@@ -185,14 +185,15 @@ private:
     const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags) const;
 
   /**
-   * @brief Check if a 2D UV point is inside a wire using ray casting.
+   * @brief Check if a 2D UV point is inside a wire using BRepClass_FaceClassifier.
    *
    * @param point_2d UV point to test
    * @param wire Wire to test against
    * @param face Face the wire belongs to
-   * @return true if point is inside the wire
+   * @return true if point is inside or on the wire; std::nullopt if the wire
+   *         could not be turned into a face to classify against
    */
-  bool is_point_inside_wire(
+  std::optional<bool> is_point_inside_wire(
     const gp_Pnt2d & point_2d,
     const TopoDS_Wire & wire,
     const TopoDS_Face & face) const;
@@ -204,7 +205,7 @@ private:
    * @param face Face the point belongs to
    * @param surface_id Surface ID for exclusion lookup
    * @param exclusion_areas Exclusion wires
-   * @return true if point is in an exclusion zone
+   * @return true if point is in an exclusion zone, or could not be classified
    */
   bool is_point_in_exclusion(
     const gp_Pnt & point_3d,
@@ -230,9 +231,12 @@ private:
   /**
    * @brief Project a contact point onto the opposing face to find the antipodal contact.
    *
-   * Uses BRepExtrema_DistShapeShape to find the nearest point on face_2.
+   * Casts rays with IntCurvesFace_ShapeIntersector: along face_1's inward
+   * normal first, then outward, then toward and away from face_2's centroid.
+   * The first direction that hits face_2 gives the nearest hit along it.
    *
    * @param contact_1 Contact point to project
+   * @param face_1 Face contact_1 lies on; supplies the primary ray direction
    * @param face_2 Target face to project onto
    * @param opposing_contact Output contact point on face_2
    * @return true if a valid opposing contact was found

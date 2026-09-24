@@ -24,7 +24,7 @@
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `gripper.urdf_path` | string | — | Path to gripper URDF file. Required. Must contain `<gripper_metadata>` section. |
-| `gripper.max_opening` | double | from URDF | Cap on the maximum gripper opening [m]. Can only lower the URDF value (2 × finger travel); a larger value is ignored. |
+| `gripper.max_opening` | double | from URDF | Cap on the maximum gripper opening [m]. Must be > 0. Can only lower the URDF value (2 × finger travel); a larger value is ignored. |
 
 ## Secondaries
 
@@ -34,10 +34,10 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 |---|---|---|---|
 | `secondaries[].id` | string | — | Unique identifier for this secondary |
 | `secondaries[].type` | string | — | Shape type. One of: `ground_plane`, `box`, `cylinder`, `step`, `urdf` |
-| `secondaries[].transform.translation` | x/y/z doubles | 0.0 | Translation in world frame [m]. Not applicable for `ground_plane`. |
+| `secondaries[].transform.translation` | x/y/z doubles | 0.0 | Translation in world frame [m]. For `ground_plane` only x/y are used, as the plane centre. |
 | `secondaries[].transform.rotation` | x/y/z/w doubles | identity | Rotation quaternion. Not applicable for `ground_plane`. |
 
-**Type: `ground_plane`**
+**Type: `ground_plane`** (at most one per config)
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -165,10 +165,12 @@ vanishing `|dS/du|` at a cone apex or sphere pole.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `shape_refiner.enabled` | bool | true | Enable shape refinement |
-| `shape_refiner.max_cylinder_radius` | double | 0.100 | Cylinders with radius below this are split by arc length only. Above this triggers radius based split [m] |
-| `shape_refiner.max_arc_length` | double | 0.200 | Maximum allowed edge arc length before splitting [m] |
-| `shape_refiner.enclave_area_ratio` | double | 0.005 | Maximum enclave area as fraction of total shape area before suppression |
-| `shape_refiner.enclave_angle_threshold` | double | 45.0 | Maximum wall angle for enclave suppression [deg]. Walls steeper than this are kept as real features. |
+| `shape_refiner.max_cylinder_radius` | double | 0.100 | Must be > 0. **Not used yet** — the radius-based cylinder split is not implemented; cylinders are split by arc length only [m] |
+| `shape_refiner.max_arc_length` | double | 0.200 | Maximum allowed edge arc length before splitting [m]. Must be > 0. |
+| `shape_refiner.enclave_area_ratio` | double | 0.005 | Maximum enclave area as fraction of total shape area before suppression. Range [0, 1]. |
+| `shape_refiner.enclave_angle_threshold` | double | 45.0 | Maximum wall angle for enclave suppression [deg]. Walls steeper than this are kept as real features. Range [0, 90]. |
+| `shape_refiner.max_face_area_ratio` | double | 0.3 | A face larger than this fraction of the total area after arc-length splitting gets a WARN and one more edge-based split. Range (0, 1]. |
+| `shape_refiner.planarity_tolerance_deg` | double | 1.0 | Non-plane faces whose corner normals all stay within this angle of the centre normal are treated as flat and not split [deg]. Range (0, 90). |
 
 ## Jaw Clearance
 
@@ -204,8 +206,8 @@ Controls OCCT triangulation quality for exclusion zone geometry.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `mesh_deflection.linear` | double | 0.001 | Maximum distance between mesh edge and actual curve [m] |
-| `mesh_deflection.angular` | double | 0.1 | Maximum angular deviation between adjacent mesh triangles [rad] |
+| `mesh_deflection.linear` | double | 0.001 | Maximum distance between mesh edge and actual curve [m]. Must be > 0. Also used to triangulate the primary shape. |
+| `mesh_deflection.angular` | double | 0.1 | Maximum angular deviation between adjacent mesh triangles [rad]. Must be > 0. Also used to triangulate the primary shape. |
 
 ## Output
 

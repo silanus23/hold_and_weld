@@ -271,10 +271,13 @@ std::vector<FaceSample> sample_face_region(
   std::vector<RegionClassifier> wire_classifiers;
   wire_classifiers.reserve(wires_with_flags.size());
   for (const auto & [wire, is_excl] : wires_with_flags) {
+    // An unusable wire rejects the face, for the reason given in the catch below.
     const TopoDS_Face wire_face = face_bounded_by_wire(face, wire);
     if (wire_face.IsNull()) {
-      RCLCPP_WARN(logger_, "sample_face_region: failed to build face for wire, skipping");
-      continue;
+      RCLCPP_WARN(logger_,
+        "sample_face_region: failed to build face for region wire, "
+        "rejecting this face's samples conservatively");
+      return samples;
     }
 
     try {

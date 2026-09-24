@@ -14,8 +14,11 @@
 
 #include "hold_and_weld_gripper_sampler/io/config_parser.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <utility>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -130,10 +133,18 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       if (params["mesh_deflection"]["linear"]) {
         config.mesh_linear_deflection = params["mesh_deflection"]["linear"].as<double>();
         config.finder_config.mesh_linear_deflection = config.mesh_linear_deflection;
+        if (!(config.mesh_linear_deflection > 0.0)) {
+          set_error("mesh_deflection: 'linear' must be > 0");
+          return std::nullopt;
+        }
       }
       if (params["mesh_deflection"]["angular"]) {
         config.mesh_angular_deflection = params["mesh_deflection"]["angular"].as<double>();
         config.finder_config.mesh_angular_deflection = config.mesh_angular_deflection;
+        if (!(config.mesh_angular_deflection > 0.0)) {
+          set_error("mesh_deflection: 'angular' must be > 0");
+          return std::nullopt;
+        }
       }
     }
 
@@ -196,6 +207,37 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       }
       if (sr_node["enclave_angle_threshold"]) {
         sr.enclave_angle_threshold = sr_node["enclave_angle_threshold"].as<double>();
+      }
+      if (sr_node["max_face_area_ratio"]) {
+        sr.max_face_area_ratio = sr_node["max_face_area_ratio"].as<double>();
+      }
+      if (sr_node["planarity_tolerance_deg"]) {
+        sr.planarity_tolerance_deg = sr_node["planarity_tolerance_deg"].as<double>();
+      }
+      // Negated comparisons so NaN is rejected too.
+      if (!(sr.max_cylinder_radius > 0.0)) {
+        set_error("shape_refiner.max_cylinder_radius must be > 0");
+        return std::nullopt;
+      }
+      if (!(sr.max_arc_length > 0.0) || !std::isfinite(sr.max_arc_length)) {
+        set_error("shape_refiner.max_arc_length must be finite and > 0");
+        return std::nullopt;
+      }
+      if (!(sr.enclave_area_ratio >= 0.0 && sr.enclave_area_ratio <= 1.0)) {
+        set_error("shape_refiner.enclave_area_ratio must be in [0, 1]");
+        return std::nullopt;
+      }
+      if (!(sr.enclave_angle_threshold >= 0.0 && sr.enclave_angle_threshold <= 90.0)) {
+        set_error("shape_refiner.enclave_angle_threshold must be in [0, 90] degrees");
+        return std::nullopt;
+      }
+      if (!(sr.max_face_area_ratio > 0.0 && sr.max_face_area_ratio <= 1.0)) {
+        set_error("shape_refiner.max_face_area_ratio must be in (0, 1]");
+        return std::nullopt;
+      }
+      if (!(sr.planarity_tolerance_deg > 0.0 && sr.planarity_tolerance_deg < 90.0)) {
+        set_error("shape_refiner.planarity_tolerance_deg must be in (0, 90) degrees");
+        return std::nullopt;
       }
     }
 
@@ -273,6 +315,10 @@ bool ConfigParser::parse_gripper(const YAML::Node & node, ParsedConfig & config)
 
   if (node["max_opening"]) {
     config.gripper_max_opening = node["max_opening"].as<double>();
+    if (!(*config.gripper_max_opening > 0.0)) {
+      set_error("gripper.max_opening must be > 0");
+      return false;
+    }
   }
 
   return true;
@@ -287,10 +333,19 @@ bool ConfigParser::parse_secondaries(
     return false;
   }
 
+  bool has_ground_plane = false;
   for (const auto & item : node) {
     SecondaryConfig sec_config;
     if (!parse_secondary(item, sec_config)) {
       return false;
+    }
+    // GroundConstraint holds a single plane, so a second one would silently replace the first.
+    if (sec_config.type == "ground_plane") {
+      if (has_ground_plane) {
+        set_error("At most one secondary of type 'ground_plane' is allowed");
+        return false;
+      }
+      has_ground_plane = true;
     }
     configs.push_back(sec_config);
   }
@@ -547,6 +602,29 @@ bool ConfigParser::parse_sampling(const YAML::Node & node, sampling::SamplingCon
     config.alignment_threshold = node["alignment_threshold"].as<double>();
   }
 
+  if (!(config.sample_density > 0.0)) {
+    set_error("sampling: 'sample_density' must be > 0");
+    return false;
+  }
+  if (!(config.normal_sample_density > 0.0)) {
+    set_error("sampling: 'normal_sample_density' must be > 0");
+    return false;
+  }
+  if (config.min_gripper_opening < 0.0 ||
+    config.min_gripper_opening > config.max_gripper_opening)
+  {
+    set_error("sampling: need 0 <= 'min_gripper_opening' <= 'max_gripper_opening'");
+    return false;
+  }
+  if (config.min_angle_deg > config.max_angle_deg) {
+    set_error("sampling: 'min_angle_deg' must be <= 'max_angle_deg'");
+    return false;
+  }
+  if (config.max_lateral_deviation < 0.0) {
+    set_error("sampling: 'max_lateral_deviation' must be >= 0");
+    return false;
+  }
+
   return true;
 }
 
@@ -613,6 +691,38 @@ bool ConfigParser::parse_orientation(
   }
   if (node["seed_step_deg"]) {
     config.seed_step_deg = node["seed_step_deg"].as<double>();
+  }
+
+  const std::pair<const char *, double> positive[] = {
+    {"finger_length", config.finger_length},
+    {"finger_radius", config.finger_radius},
+    {"ring_step_size", config.ring_step_size},
+    {"angular_step_deg", config.angular_step_deg},
+    {"seed_step_deg", config.seed_step_deg},
+    {"debug_sweep_step_deg", config.debug_sweep_step_deg},
+  };
+  for (const auto & [key, value] : positive) {
+    if (!(value > 0.0)) {
+      set_error(std::string("orientation: '") + key + "' must be > 0");
+      return false;
+    }
+  }
+  const std::pair<const char *, double> non_negative[] = {
+    {"collision_tolerance", config.collision_tolerance},
+    {"flat_detection_tolerance_m", config.flat_detection_tolerance_m},
+    {"cliff_merge_tolerance_deg", config.cliff_merge_tolerance_deg},
+    {"min_cliff_width_deg", config.min_cliff_width_deg},
+    {"ray_lift_offset", config.ray_lift_offset},
+  };
+  for (const auto & [key, value] : non_negative) {
+    if (!(value >= 0.0)) {
+      set_error(std::string("orientation: '") + key + "' must be >= 0");
+      return false;
+    }
+  }
+  if (config.finger_radius > config.finger_length) {
+    set_error("orientation: 'finger_radius' must be <= 'finger_length'");
+    return false;
   }
 
   return true;

@@ -42,12 +42,6 @@
 #include "hold_and_weld_gripper_sampler/sampling/face_sampler.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
-// TODO(@silanus23): Surface pairing uses face_min_distance as a pre-filter which false-rejects
-// valid pairs on organic/curved shapes where face edges are close but centers are graspable.
-// Fix: remove distance check from find_surface_pairs, keep only normal angle pre-filter,
-// let contact sampling handle distance validation entirely.
-// This is required before using the system on non-prismatic workpieces.
-
 namespace hold_and_weld_gripper_sampler
 {
 namespace sampling
@@ -90,8 +84,8 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
   RCLCPP_INFO(logger_, "Found %zu valid surface pairs", surface_pairs.size());
 
   if (surface_pairs.empty()) {
-    RCLCPP_WARN(logger_, "No valid surface pairs found - check gripper opening range "
-      "and surface normal requirements");
+    RCLCPP_WARN(logger_, "No valid surface pairs found - check min/max_angle_deg "
+      "and the sample-area wires");
     return contact_pairs;
   }
 
@@ -344,13 +338,13 @@ std::vector<gp_Pnt> ContactPointSampler::sample_with_exclusions(
   return points;
 }
 
-bool ContactPointSampler::is_point_inside_wire(
+std::optional<bool> ContactPointSampler::is_point_inside_wire(
   const gp_Pnt2d & point_2d,
   const TopoDS_Wire & wire,
   const TopoDS_Face & face) const
 {
   const TopoDS_Face wire_face = sampling::face_bounded_by_wire(face, wire);
-  if (wire_face.IsNull()) {return false;}
+  if (wire_face.IsNull()) {return std::nullopt;}
 
   BRepClass_FaceClassifier classifier(wire_face, point_2d, 1e-6);
   const TopAbs_State state = classifier.State();
@@ -374,29 +368,34 @@ bool ContactPointSampler::is_point_in_exclusion(
     return false;
   }
 
+  // Anything that stops the point being classified counts as excluded.
   try {
     Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
     GeomAPI_ProjectPointOnSurf projector(point_3d, surf);
 
     if (projector.NbPoints() == 0) {
-      return false;
+      return true;
     }
 
     double u, v;
-    projector.Parameters(1, u, v);
+    projector.LowerDistanceParameters(u, v);
     gp_Pnt2d point_2d(u, v);
 
     for (const auto & [wire, is_exclusion_zone] : wires_with_flags) {
-      bool inside_wire = is_point_inside_wire(point_2d, wire, face);
-
-      if (is_exclusion_zone && inside_wire) {
+      const auto inside_wire = is_point_inside_wire(point_2d, wire, face);
+      if (!inside_wire.has_value()) {
         return true;
-      } else if (!is_exclusion_zone && !inside_wire) {
+      }
+
+      if (is_exclusion_zone && *inside_wire) {
+        return true;
+      } else if (!is_exclusion_zone && !*inside_wire) {
         return true;
       }
     }
   } catch (const Standard_Failure & e) {
     RCLCPP_DEBUG(logger_, "Projection failed in exclusion check: %s", e.GetMessageString());
+    return true;
   }
 
   return false;
@@ -428,15 +427,18 @@ bool ContactPointSampler::is_point_in_allowed_area(
     }
 
     double u, v;
-    projector.Parameters(1, u, v);
+    projector.LowerDistanceParameters(u, v);
     gp_Pnt2d point_2d(u, v);
 
     for (const auto & [wire, is_exclusion_zone] : wires_with_flags) {
-      bool inside_wire = is_point_inside_wire(point_2d, wire, face);
-
-      if (is_exclusion_zone && inside_wire) {
+      const auto inside_wire = is_point_inside_wire(point_2d, wire, face);
+      if (!inside_wire.has_value()) {
         return false;
-      } else if (!is_exclusion_zone && !inside_wire) {
+      }
+
+      if (is_exclusion_zone && *inside_wire) {
+        return false;
+      } else if (!is_exclusion_zone && !*inside_wire) {
         return false;
       }
     }
@@ -484,15 +486,17 @@ bool ContactPointSampler::find_opposing_contact(
     };
 
   try {
-    // Primary: shoot along the surface normal at contact_1 (both directions).
-    // This guarantees the ray is perpendicular to face_1, so the resulting
-    // pair passes alignment checks regardless of where on the face contact_1 is.
+    // Primary: shoot along the surface normal at contact_1, so the ray is
+    // perpendicular to face_1 and the pair passes the alignment checks wherever
+    // contact_1 sits. Inward first: the normal is outward, and only a hit behind
+    // face_1 can make an external grip; the outward hit is kept as a fallback so
+    // is_valid_pairing still reports it as an internal grip.
     auto normal_opt = geometry::surface_normal_at_point(contact_1, face_1);
     if (normal_opt.has_value()) {
       gp_Vec n = normal_opt.value();
       n.Normalize();
-      if (try_ray(gp_Dir(n.X(), n.Y(), n.Z()))) {return true;}
       if (try_ray(gp_Dir(-n.X(), -n.Y(), -n.Z()))) {return true;}
+      if (try_ray(gp_Dir(n.X(), n.Y(), n.Z()))) {return true;}
     }
 
     // Fallback: centroid-aimed ray (works for compact symmetric faces).
@@ -505,10 +509,13 @@ bool ContactPointSampler::find_opposing_contact(
       if (try_ray(gp_Dir(-approach.X(), -approach.Y(), -approach.Z()))) {return true;}
       if (try_ray(gp_Dir(approach.X(), approach.Y(), approach.Z()))) {return true;}
     }
-  } catch (const Standard_Failure &) {
+  } catch (const Standard_Failure & e) {
+    RCLCPP_DEBUG(logger_, "find_opposing_contact: OCCT error (%s), skipping pair",
+      e.GetMessageString());
+    return false;
   }
 
-  RCLCPP_DEBUG(logger_, "find_opposing_contact: all ray attempts failed, skipping pair");
+  RCLCPP_DEBUG(logger_, "find_opposing_contact: no ray hit face_2, skipping pair");
   return false;
 }
 

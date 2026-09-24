@@ -151,12 +151,12 @@ double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2)
  * @brief Compute surface normal at a point on a face
  *
  * Projects the point onto the surface to find UV parameters, then evaluates
- * the normal there. Falls back to face center normal if projection fails.
- * Handles TopAbs_REVERSED faces correctly.
+ * the normal there. Handles TopAbs_REVERSED faces correctly.
  *
  * @param point Query point (should lie on or near the face)
  * @param face Face to evaluate normal on
- * @return Normal vector, or std::nullopt if undefined
+ * @return Normal vector, or std::nullopt if the face is null, the projection
+ *         fails, or the normal is undefined there (e.g. at a pole)
  */
 std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS_Face & face);
 

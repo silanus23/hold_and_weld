@@ -18,7 +18,11 @@
  *
  * Usage:
  *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node --config <path_to_yaml>
+ *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node --output <path_to_json>
  *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node  # uses default config
+ *
+ * -c/--config and -o/--output can be combined. Without --output, results go to
+ * <hold_and_weld_application share>/grasps/grasps.json. Unknown arguments are rejected.
  */
 
 #include <chrono>
@@ -32,6 +36,7 @@
 
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <rclcpp/rclcpp.hpp>
+#include <Standard_Failure.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
 #include "hold_and_weld_gripper_sampler/core/gripper.hpp"
@@ -47,41 +52,44 @@ using hold_and_weld_gripper_sampler::core::GraspFinder;
 using hold_and_weld_gripper_sampler::core::GraspFinderConfig;
 using hold_and_weld_gripper_sampler::core::GraspFinderResult;
 
-int main(int argc, char ** argv)
+namespace
 {
-  rclcpp::init(argc, argv);
+
+// Returns the process exit code. Kept separate from main() so every exit path,
+// including exceptions, goes through the single rclcpp::shutdown() in main().
+int run(const std::vector<std::string> & args)
+{
   try {
     auto node = std::make_shared<rclcpp::Node>("grasp_finder_node");
     auto logger = node->get_logger();
 
-    std::string sampler_pkg_share;
-    std::string app_pkg_share;
-
-    try {
-      sampler_pkg_share = ament_index_cpp::get_package_share_directory(
-      "hold_and_weld_gripper_sampler");
-      app_pkg_share = ament_index_cpp::get_package_share_directory(
-      "hold_and_weld_application");
-    } catch (const std::exception & e) {
-      RCLCPP_ERROR(logger, "Could not find package share directories: %s", e.what());
-      rclcpp::shutdown();
-      return 1;
-    } catch (...) {
-      RCLCPP_ERROR(logger, "Unknown error finding package share directories");
-      rclcpp::shutdown();
-      return 1;
-    }
-
     std::string config_path;
     std::string output_path_arg;
 
-    for (int i = 1; i < argc; ++i) {
-      std::string arg = argv[i];
-      if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
-        config_path = argv[++i];
-      } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
-        output_path_arg = argv[++i];
+    // args[0] is the program name; ROS arguments were already stripped.
+    for (size_t i = 1; i < args.size(); ++i) {
+      const std::string & arg = args[i];
+      const bool is_config = (arg == "--config" || arg == "-c");
+      const bool is_output = (arg == "--output" || arg == "-o");
+      if (!is_config && !is_output) {
+        RCLCPP_ERROR(logger, "Unknown argument '%s'. Usage: [--config <yaml>] [--output <json>]",
+          arg.c_str());
+        return 1;
       }
+      if (i + 1 >= args.size()) {
+        RCLCPP_ERROR(logger, "Argument '%s' needs a value", arg.c_str());
+        return 1;
+      }
+      (is_config ? config_path : output_path_arg) = args[++i];
+    }
+
+    std::string sampler_pkg_share;
+    try {
+      sampler_pkg_share = ament_index_cpp::get_package_share_directory(
+        "hold_and_weld_gripper_sampler");
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(logger, "Could not find package share directory: %s", e.what());
+      return 1;
     }
 
     if (config_path.empty()) {
@@ -132,19 +140,22 @@ int main(int argc, char ** argv)
         return 1;
       }
 
-    // Save raw shape for FCL before any refinement — ShapeRefiner can introduce
-    // face orientation artifacts that cause BVH holes in collision meshes.
+      // Save raw shape for FCL before any refinement — ShapeRefiner can introduce
+      // face orientation artifacts that cause BVH holes in collision meshes.
       fcl_primary_shape = primary_shape;
 
-    // Refine shape before mapping — ShapeRefiner must run on the raw shape
-    // before the mapper builds its face index, so topology reflects refined geometry.
+      // Refine shape before mapping — ShapeRefiner must run on the raw shape
+      // before the mapper builds its face index, so topology reflects refined geometry.
       if (config.finder_config.shape_refiner.enabled) {
         RCLCPP_INFO(logger, "Running ShapeRefiner on primary shape...");
+        const auto & sr = config.finder_config.shape_refiner;
         geometry::ShapeRefiner refiner(
-          config.finder_config.shape_refiner.max_cylinder_radius,
-          config.finder_config.shape_refiner.max_arc_length,
-          config.finder_config.shape_refiner.enclave_area_ratio,
-          config.finder_config.shape_refiner.enclave_angle_threshold);
+          sr.max_cylinder_radius,
+          sr.max_arc_length,
+          sr.enclave_area_ratio,
+          sr.enclave_angle_threshold,
+          sr.max_face_area_ratio,
+          sr.planarity_tolerance_deg);
         TopoDS_Shape refined = refiner.refine(primary_shape);
         if (!refined.IsNull()) {
           primary_shape = refined;
@@ -156,13 +167,18 @@ int main(int argc, char ** argv)
 
       topology = mapper->load_from_shape(primary_shape, "workpiece");
 
-    // Triangulate primary shape for kissing surface detection (side-effect on shape)
+      // Triangulate primary shape for kissing surface detection (side-effect on shape)
       RCLCPP_DEBUG(logger, "Triangulating primary shape for contact detection...");
-      BRepMesh_IncrementalMesh mesher(primary_shape, 0.0001, Standard_False, 0.5);
+      BRepMesh_IncrementalMesh mesher(
+        primary_shape, config.mesh_linear_deflection, Standard_False,
+        config.mesh_angular_deflection);
       (void)mesher;
       RCLCPP_DEBUG(logger, "Primary shape triangulation complete");
     } catch (const std::exception & e) {
       RCLCPP_ERROR(logger, "Failed to load primary shape: %s", e.what());
+      return 1;
+    } catch (const Standard_Failure & e) {
+      RCLCPP_ERROR(logger, "Failed to load primary shape: %s", e.GetMessageString());
       return 1;
     } catch (...) {
       RCLCPP_ERROR(logger, "Unknown error loading primary shape");
@@ -185,6 +201,9 @@ int main(int argc, char ** argv)
       }
     } catch (const std::exception & e) {
       RCLCPP_ERROR(logger, "Failed to load gripper: %s", e.what());
+      return 1;
+    } catch (const Standard_Failure & e) {
+      RCLCPP_ERROR(logger, "Failed to load gripper: %s", e.GetMessageString());
       return 1;
     } catch (...) {
       RCLCPP_ERROR(logger, "Unknown error loading gripper");
@@ -210,14 +229,13 @@ int main(int argc, char ** argv)
               sec_config.translation.x(),
               sec_config.translation.y());
 
-          // Override the FCL ground plane Z with the explicit YAML z_position
+          // Override the FCL ground plane Z with the explicit YAML z_position.
+          // ConfigParser allows only one ground_plane, so nothing is overwritten here.
           config.finder_config.ground_bottom_z = sec_config.z_position;
           config.finder_config.ground_center_x = sec_config.translation.x();
           config.finder_config.ground_center_y = sec_config.translation.y();
           config.finder_config.ground_size_x = sec_config.size_x;
           config.finder_config.ground_size_y = sec_config.size_y;
-
-
         } else if (sec_config.type == "box") {
           shape = shape_loader.make_box(
           sec_config.dimensions, sec_config.translation, sec_config.rotation);
@@ -237,8 +255,9 @@ int main(int argc, char ** argv)
             shape, sec_config.translation, sec_config.rotation);
           }
         } else {
-          RCLCPP_WARN(logger, "Unknown secondary type '%s', skipping", sec_config.type.c_str());
-          continue;
+          RCLCPP_ERROR(logger, "Unknown secondary type '%s' for '%s'",
+            sec_config.type.c_str(), sec_config.id.c_str());
+          return 1;
         }
 
         if (sec_config.type == "ground_plane") {
@@ -250,26 +269,23 @@ int main(int argc, char ** argv)
         RCLCPP_DEBUG(logger, "Secondary loaded: %s (%s)",
         sec_config.id.c_str(), sec_config.type.c_str());
       } catch (const std::exception & e) {
-        RCLCPP_WARN(logger, "Failed to load secondary '%s': %s",
-        sec_config.id.c_str(), e.what());
-        continue;
+        // Fail closed: grasps generated without this obstacle could collide with it.
+        RCLCPP_ERROR(logger, "Failed to load secondary '%s': %s",
+          sec_config.id.c_str(), e.what());
+        return 1;
+      } catch (const Standard_Failure & e) {
+        RCLCPP_ERROR(logger, "Failed to load secondary '%s': %s",
+          sec_config.id.c_str(), e.GetMessageString());
+        return 1;
       } catch (...) {
-        RCLCPP_WARN(logger, "Unknown error loading secondary '%s'", sec_config.id.c_str());
-        continue;
+        RCLCPP_ERROR(logger, "Unknown error loading secondary '%s'", sec_config.id.c_str());
+        return 1;
       }
     }
 
-    const size_t loaded_total =
-      secondary_shapes.size() + config.finder_config.ground_shapes.size();
-    if (loaded_total < config.secondaries.size()) {
-      RCLCPP_WARN(
-      logger,
-      "Only %zu / %zu secondary shapes loaded — collision checking is incomplete!",
-      loaded_total, config.secondaries.size());
-    } else {
-      RCLCPP_INFO(logger, "Secondary shapes loaded: %zu / %zu",
-      secondary_shapes.size(), config.secondaries.size());
-    }
+    RCLCPP_INFO(logger, "Secondary shapes loaded: %zu / %zu",
+      secondary_shapes.size() + config.finder_config.ground_shapes.size(),
+      config.secondaries.size());
 
     RCLCPP_INFO(logger, "Shapes split: %zu secondary, %zu ground_plane",
     secondary_shapes.size(), config.finder_config.ground_shapes.size());
@@ -338,6 +354,15 @@ int main(int argc, char ** argv)
       output_path = output_path_arg;
       RCLCPP_INFO(logger, "Output path: %s", output_path.c_str());
     } else {
+      // Looked up only here so --output works without hold_and_weld_application installed.
+      std::string app_pkg_share;
+      try {
+        app_pkg_share = ament_index_cpp::get_package_share_directory("hold_and_weld_application");
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(logger, "No --output given and default output package not found: %s",
+          e.what());
+        return 1;
+      }
       std::string output_dir = app_pkg_share + "/grasps";
       try {
         std::filesystem::create_directories(output_dir);
@@ -393,9 +418,24 @@ int main(int argc, char ** argv)
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(rclcpp::get_logger("grasp_finder_node"), "Fatal error: %s", e.what());
+    return 1;
+  } catch (const Standard_Failure & e) {
+    RCLCPP_ERROR(rclcpp::get_logger("grasp_finder_node"), "Fatal OCCT error: %s",
+      e.GetMessageString());
+    return 1;
   } catch (...) {
     RCLCPP_ERROR(rclcpp::get_logger("grasp_finder_node"), "Fatal unknown error");
+    return 1;
   }
-  rclcpp::shutdown();
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  const int exit_code = run(rclcpp::remove_ros_arguments(argc, argv));
+  rclcpp::shutdown();
+  return exit_code;
 }

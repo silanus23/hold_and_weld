@@ -40,7 +40,7 @@ namespace geometry
  * @brief Represents a corner (vertex) in the object topology.
  *
  * Stores position and connectivity to adjacent edges and surfaces.
- * All data is in world frame after STEP file transformation.
+ * All data is in world frame, after the load-time transform is applied.
  */
 struct Corner
 {
@@ -151,12 +151,13 @@ struct Surface
 };
 
 /**
- * @brief Container for object topology extracted from STEP file.
+ * @brief Container for object topology extracted from a loaded shape
+ *        (STEP, URDF or a raw OCCT shape).
  *
  * Provides read-only access to corners, edges, and surfaces with
  * their connectivity relationships. All elements are 0-indexed.
  *
- * Built by GeometryMapper during STEP file loading.
+ * Built by GeometryMapper when a shape is loaded.
  */
 class Topology
 {

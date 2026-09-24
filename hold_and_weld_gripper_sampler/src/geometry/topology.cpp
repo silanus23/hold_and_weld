@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 namespace hold_and_weld_gripper_sampler
 {

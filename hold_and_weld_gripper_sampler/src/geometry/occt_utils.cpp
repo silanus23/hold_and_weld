@@ -233,9 +233,8 @@ Eigen::Vector3d extract_translation(const gp_Trsf & transform)
 
 Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform)
 {
-  // gp_Mat::Value(row, col) returns elements in mathematical row-major order.
-  // The rotation matrix was built via SetValues which stores gripper->world directly,
-  // so we read it straight into Eigen without transposing.
+  // gp_Mat::Value(row, col) and Eigen's (row, col) index the same mathematical element,
+  // so the matrix is copied as-is, without transposing.
   Eigen::Matrix3d eigen_rot;
   const gp_Mat & m = transform.VectorialPart();
   for (int row = 1; row <= 3; ++row) {
@@ -268,30 +267,37 @@ std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS
     return std::nullopt;
   }
 
-  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+  try {
+    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+    if (surf.IsNull()) {
+      return std::nullopt;
+    }
 
-  GeomAPI_ProjectPointOnSurf projector(point, surf);
+    GeomAPI_ProjectPointOnSurf projector(point, surf);
 
-  if (projector.NbPoints() == 0) {
-    // Projection failed — caller must handle this case
+    if (projector.NbPoints() == 0) {
+      // Projection failed — caller must handle this case
+      return std::nullopt;
+    }
+
+    double u, v;
+    projector.LowerDistanceParameters(u, v);
+
+    GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
+
+    if (!props.IsNormalDefined()) {
+      return std::nullopt;
+    }
+
+    gp_Vec normal = props.Normal();
+    if (face.Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+
+    return normal;
+  } catch (const Standard_Failure &) {
     return std::nullopt;
   }
-
-  double u, v;
-  projector.Parameters(1, u, v);
-
-  GeomLProp_SLProps props(surf, u, v, 1, 1e-6);
-
-  if (!props.IsNormalDefined()) {
-    return std::nullopt;
-  }
-
-  gp_Vec normal = props.Normal();
-  if (face.Orientation() == TopAbs_REVERSED) {
-    normal.Reverse();
-  }
-
-  return normal;
 }
 
 }  // namespace geometry
