@@ -27,10 +27,11 @@ namespace filters
 {
 
 /**
- * @brief Filters surfaces by minimum oriented bounding box dimension.
+ * @brief Filters surfaces by minimum in-plane width.
  *
- * Rejects surfaces whose smallest local-frame extent is below the threshold.
- * Works for both planar and curved surfaces.
+ * Rejects surfaces whose smallest extent, measured in the plane normal to
+ * Surface::normal over every in-plane direction, is below the threshold.
+ * Curved surfaces are measured by their boundary projected onto that plane.
  */
 class SurfaceDimensionFilter : public core::SurfaceFilter
 {
@@ -38,16 +39,17 @@ public:
   /**
    * @brief Constructor
    *
-   * @param min_dimension Minimum allowed dimension in meters
+   * @param min_dimension Minimum allowed dimension in meters. Must be finite and >= 0.
    */
   explicit SurfaceDimensionFilter(double min_dimension);
 
   /**
    * @brief Evaluate which surfaces pass the minimum dimension threshold
    *
-   * For each surface in the topology, computes the oriented bounding box in
-   * the surface's local coordinate frame and checks whether its smallest
-   * dimension (width, height, or depth) is at least min_dimension.
+   * For each surface in the topology, projects the boundary edges onto the plane
+   * normal to Surface::normal and checks whether the minimum width of their
+   * convex hull (the short side of the tightest enclosing rectangle) is at least
+   * min_dimension. Depth along the normal is not checked.
    *
    * @param topology Topology containing all surfaces to evaluate
    * @return Vector of surface IDs that satisfy the minimum dimension requirement

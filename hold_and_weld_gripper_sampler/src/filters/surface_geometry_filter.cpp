@@ -15,6 +15,7 @@
 #include "hold_and_weld_gripper_sampler/filters/surface_filters/surface_geometry_filter.hpp"
 
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <BRepAdaptor_Surface.hxx>
@@ -38,6 +39,13 @@ static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 SurfaceGeometryFilter::SurfaceGeometryFilter(double min_area, double max_mean_curvature)
 : min_area_(min_area), max_mean_curvature_(max_mean_curvature)
 {
+  // Negated comparisons so NaN is rejected too.
+  if (!(min_area_ >= 0.0)) {
+    throw std::invalid_argument("SurfaceGeometryFilter: min_area must be >= 0");
+  }
+  if (!(max_mean_curvature_ >= 0.0)) {
+    throw std::invalid_argument("SurfaceGeometryFilter: max_mean_curvature must be >= 0");
+  }
 }
 
 std::vector<int> SurfaceGeometryFilter::evaluate(const geometry::Topology & topology) const

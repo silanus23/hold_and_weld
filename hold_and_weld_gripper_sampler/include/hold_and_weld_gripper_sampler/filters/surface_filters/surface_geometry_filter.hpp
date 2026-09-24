@@ -37,8 +37,10 @@ public:
   /**
    * @brief Constructor
    *
-   * @param min_area Minimum surface area in m^2 (default: 0.001 = 10cm^2)
-   * @param max_mean_curvature Maximum mean curvature in 1/m (default: 0.1 = radius >= 10m)
+   * @param min_area Minimum surface area in m^2 (default: 0.001 = 10cm^2). Must be >= 0.
+   * @param max_mean_curvature Maximum absolute mean curvature in 1/m, sampled at the face's
+   *        UV centre. Must be >= 0. Default 0.1 means sphere radius >= 10 m or cylinder
+   *        radius >= 5 m (a cylinder's mean curvature is 1/(2r)).
    */
   SurfaceGeometryFilter(
     double min_area = 0.001,
