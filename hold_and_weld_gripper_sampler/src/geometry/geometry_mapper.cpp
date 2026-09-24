@@ -63,6 +63,22 @@ namespace geometry
 
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
+namespace
+{
+
+// Reads a required URDF attribute; a missing one would otherwise reach sscanf as nullptr.
+const char * required_attribute(const tinyxml2::XMLElement * element, const char * name)
+{
+  const char * value = element->Attribute(name);
+  if (!value) {
+    throw std::runtime_error(
+      std::string("<") + element->Name() + "> is missing the '" + name + "' attribute");
+  }
+  return value;
+}
+
+}  // namespace
+
 GeometryMapper::GeometryMapper() {}
 GeometryMapper::~GeometryMapper() {}
 
@@ -98,13 +114,16 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
       continue;
     }
 
-    tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
-    if (!geometry) {
-      throw std::runtime_error("Link has <collision> but no <geometry> element");
-    }
-
     const char * link_name = link->Attribute("name");
     std::string link_name_str = link_name ? link_name : "unknown";
+
+    tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
+    if (!geometry) {
+      RCLCPP_ERROR(logger_, "Link '%s' has <collision> but no <geometry> element - skipping",
+        link_name_str.c_str());
+      continue;
+    }
+
     RCLCPP_DEBUG(logger_, "Processing link: %s", link_name_str.c_str());
 
     gp_Trsf transform;
@@ -140,7 +159,7 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
     try {
       if (auto * box = geometry->FirstChildElement("box")) {
         double x, y, z;
-        if (std::sscanf(box->Attribute("size"), "%lf %lf %lf", &x, &y, &z) != 3) {
+        if (std::sscanf(required_attribute(box, "size"), "%lf %lf %lf", &x, &y, &z) != 3) {
           throw std::runtime_error("Invalid box size attributes");
         }
         if (x <= 1e-6 || y <= 1e-6 || z <= 1e-6) {
@@ -152,8 +171,8 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
 
       } else if (auto * cylinder = geometry->FirstChildElement("cylinder")) {
         double r, l;
-        if (std::sscanf(cylinder->Attribute("radius"), "%lf", &r) != 1 ||
-          std::sscanf(cylinder->Attribute("length"), "%lf", &l) != 1)
+        if (std::sscanf(required_attribute(cylinder, "radius"), "%lf", &r) != 1 ||
+          std::sscanf(required_attribute(cylinder, "length"), "%lf", &l) != 1)
         {
           throw std::runtime_error("Invalid cylinder attributes");
         }
@@ -164,15 +183,20 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
 
       } else if (auto * sphere = geometry->FirstChildElement("sphere")) {
         double r;
-        if (std::sscanf(sphere->Attribute("radius"), "%lf", &r) != 1) {
+        if (std::sscanf(required_attribute(sphere, "radius"), "%lf", &r) != 1) {
           throw std::runtime_error("Invalid sphere radius");
         }
         if (r <= 1e-6) {throw std::runtime_error("Sphere radius too small");}
         BRepPrimAPI_MakeSphere maker(r);
         shape = maker.Shape();
+      } else {
+        // <mesh> and anything else: not supported here (ShapeLoader handles meshes).
+        const tinyxml2::XMLElement * child = geometry->FirstChildElement();
+        throw std::runtime_error(
+          std::string("Unsupported geometry type '") + (child ? child->Name() : "none") + "'");
       }
 
-      if (!shape.IsNull() && origin) {
+      if (origin) {
         BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
         if (!transformer.IsDone()) {
           throw std::runtime_error("Geometry transformation failed for link: " + link_name_str);
@@ -190,6 +214,10 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
     }
     builder.Add(compound, shape);
     link_count++;
+  }
+
+  if (link_count == 0) {
+    throw std::runtime_error("URDF contains no usable collision geometry");
   }
 
   RCLCPP_DEBUG(logger_, "Created compound shape from %d link(s)", link_count);
@@ -267,14 +295,10 @@ Topology GeometryMapper::create_topology_from_shape(
 
   RCLCPP_DEBUG(logger_, "Extracting topology from shape");
 
-  const auto make_fallback_normal = [](const gp_Pnt & center) -> gp_Vec {
-      gp_Vec fallback(center.X(), center.Y(), center.Z());
-      if (fallback.Magnitude() > 1e-6) {
-        fallback.Normalize();
-      } else {
-        fallback = gp_Vec(0, 0, 1);
-      }
-      return fallback;
+  // Last resort when no surface normal can be evaluated. Z-up is arbitrary, hence the WARN.
+  const auto make_fallback_normal = [](int face_index) -> gp_Vec {
+      RCLCPP_WARN(logger_, "Face %d: normal undefined, using Z-up fallback", face_index);
+      return gp_Vec(0, 0, 1);
     };
 
   try {
@@ -366,20 +390,28 @@ Topology GeometryMapper::create_topology_from_shape(
 
       Handle(Geom_Surface) surf_geom = BRep_Tool::Surface(face);
       if (surf_geom.IsNull()) {
-        surface.normal = make_fallback_normal(surface.center);
+        surface.normal = make_fallback_normal(i - 1);
       } else {
         Standard_Real u_min, u_max, v_min, v_max;
         BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
+        // Normal at the middle of the UV bounding box. On a trimmed or holed face that
+        // point can lie outside the face, so this is representative only for faces whose
+        // normal barely varies (the planar faces the filters care about).
         GeomLProp_SLProps props_normal(surf_geom, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1,
           1e-6);
+        if (!props_normal.IsNormalDefined()) {
+          // Midpoint can land on a pole (sphere apex, cone tip) — retry at 10% offset.
+          props_normal.SetParameters(
+            u_min + (u_max - u_min) * 0.1, v_min + (v_max - v_min) * 0.1);
+        }
 
         if (props_normal.IsNormalDefined()) {
           gp_Vec normal = props_normal.Normal();
           if (face.Orientation() == TopAbs_REVERSED) {normal.Reverse();}
           surface.normal = normal;
         } else {
-          surface.normal = make_fallback_normal(surface.center);
+          surface.normal = make_fallback_normal(i - 1);
         }
       }
     }

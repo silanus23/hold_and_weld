@@ -35,6 +35,9 @@ namespace geometry
  * @brief Loads CAD geometry and extracts topology for grasp sampling.
  *
  * Supports URDF strings, URDF files, STEP files, and raw OCCT shapes.
+ * URDF support is limited to box/cylinder/sphere collision geometry placed by each
+ * <collision><origin>; joint transforms are ignored, so every link sits at the URDF
+ * root frame. Meshes are skipped. Links that cannot be built are logged and skipped.
  * Maintains an internal face map for surface ID lookups after loading.
  */
 class GeometryMapper
