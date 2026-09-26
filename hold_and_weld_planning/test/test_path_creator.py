@@ -88,14 +88,46 @@ class TestLine:
         # A single primitive; the bow is within welding tolerance either way.
         assert len(seams) == 1
 
+    def test_line_holds_tolerance_against_the_chord_it_is_welded_along(self, creator):
+        # The welder runs one LIN from the first point to the last, so the tolerance has to hold
+        # against that chord. A one-sided bow sits closer to its best-fit line than to its chord.
+        t = np.linspace(0.0, 0.3, 60)
+        sag = 1.5e-3 * np.sin(np.pi * t / 0.3)
+        positions = np.column_stack([t, sag, np.zeros(60)])
+        seams = creator.process_path(make_seam_points(positions))
+        for seam in seams:
+            if seam.config['geometry_type'] != 'line':
+                continue
+            points = seam.config['smoothed_points']
+            chord = points[-1] - points[0]
+            chord /= np.linalg.norm(chord)
+            offsets = points - points[0]
+            off_chord = offsets - np.outer(offsets @ chord, chord)
+            assert np.max(np.linalg.norm(off_chord, axis=1)) <= creator.cfg.tolerance
+
 
 class TestCircle:
 
-    def test_closed_circle_is_one_arc(self, creator):
+    def test_closed_circle_is_arcs_with_distinct_ends(self, creator):
+        # The welder runs one Pilz CIRC per arc, from its first point to its last; a single
+        # full-circle arc has the goal on top of the start, which no CIRC can execute.
         positions = circle_points(closed=True)
         seams = creator.process_path(make_seam_points(positions), is_closed=True)
-        assert len(seams) == 1
-        assert seams[0].config['geometry_type'] == 'arc'
+        assert len(seams) >= 2
+        for seam in seams:
+            assert seam.config['geometry_type'] == 'arc'
+            points = seam.config['smoothed_points']
+            assert np.linalg.norm(points[-1] - points[0]) > creator.cfg.tolerance
+        total = sum(seam.length() for seam in seams)
+        assert total == pytest.approx(2.0 * np.pi * 0.1, rel=1e-2)
+
+    def test_small_closed_circle_is_split_too(self, creator):
+        # Well under max_arc_length, so the length split never fires on its own.
+        positions = circle_points(radius=0.02, n=60, closed=True)
+        seams = creator.process_path(make_seam_points(positions), is_closed=True)
+        for seam in seams:
+            points = seam.config['smoothed_points']
+            assert np.linalg.norm(points[-1] - points[0]) > creator.cfg.tolerance
 
     def test_open_arc_is_arc(self, creator):
         positions = circle_points(closed=False)

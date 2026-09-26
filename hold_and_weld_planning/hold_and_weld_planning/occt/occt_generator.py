@@ -16,7 +16,9 @@
 
 Uses pythonocc-core to create exact geometric representations from URDF
 primitives (Box, Cylinder, Sphere). Provides deterministic geometry for
-precise seam extraction without mesh approximation.
+precise seam extraction without mesh approximation. Every link of a part is
+fused into one solid, so a face where two links meet is interior rather than
+a seam.
 """
 
 import logging
@@ -24,7 +26,6 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from OCC.Core.BRep import BRep_Builder
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCC.Core.BRepPrimAPI import (
@@ -33,7 +34,7 @@ from OCC.Core.BRepPrimAPI import (
     BRepPrimAPI_MakeSphere,
 )
 from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt
-from OCC.Core.TopoDS import TopoDS_Compound
+from OCC.Core.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCC.Core.TopoDS import TopoDS_Shape
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
 
@@ -46,7 +47,7 @@ class OCCTGenerator:
     """Generate OCCT shapes from URDF collision geometry.
 
     Converts URDF primitives to exact OCCT geometric representations,
-    applies transformations, and fuses into single compound shape.
+    applies transformations, and fuses them into a single solid.
     """
 
     def __init__(
@@ -82,24 +83,24 @@ class OCCTGenerator:
         # part needs the joint tree walked before any of its geometry can be placed.
         self.link_poses = link_poses(robot_object)
 
-    def create_shape_for_all_links(self) -> TopoDS_Compound:
-        """Combine all link geometries into single OCCT compound.
+    def create_shape_for_all_links(self) -> TopoDS_Shape:
+        """Fuse all link geometries into a single OCCT shape.
 
         Iterates through all links in the URDF, converts collision geometry
         to OCCT primitives, applies transforms, and fuses them together.
 
         Returns:
-            Combined TopoDS_Compound representing entire robot
+            Fused TopoDS_Shape representing the entire part
 
         Raises:
-            RuntimeError: If any link's geometry cannot be built. A compound
-                missing a link is not a smaller workpiece, it is the wrong
-                one: seam extraction would go on to weld the hole the missing
-                link left, so this cannot be downgraded to a skip.
+            RuntimeError: If any link's geometry cannot be built, or the links
+                cannot be fused. A shape missing a link is not a smaller
+                workpiece, it is the wrong one: seam extraction would go on to
+                weld the hole the missing link left, so this cannot be
+                downgraded to a skip.
+            ValueError: If no link has collision geometry.
         """
-        compound = TopoDS_Compound()
-        builder = BRep_Builder()
-        builder.MakeCompound(compound)
+        link_shapes = []
 
         total_links = len(self.robot.links)
         processed_links = 0
@@ -125,11 +126,43 @@ class OCCTGenerator:
                     f'Failed to create shape for link "{link.name}": {e}'
                 )
 
-            builder.Add(compound, link_shape)
+            link_shapes.append(link_shape)
             processed_links += 1
 
+        if not link_shapes:
+            raise ValueError(
+                'URDF has no collision geometry on any link; seams are extracted from '
+                '<collision> elements, not <visual>'
+            )
+
         logger.info(f'Successfully created shapes for {processed_links}/{total_links} link(s)')
-        return compound
+        return self._fuse(link_shapes, 'links')
+
+    @staticmethod
+    def _fuse(shapes: list[TopoDS_Shape], what: str) -> TopoDS_Shape:
+        """Fuse shapes into one and merge the faces the fuse left split.
+
+        A plain compound keeps each link's own faces, so two links meeting flush leave a face
+        pair where they touch and an edge across each face they share: both read to the
+        extractor as a joint. The fuse removes the touching faces; unifying then merges the
+        coplanar faces either side of the old boundary so no edge is left along it.
+
+        Raises:
+            RuntimeError: If the fuse fails.
+        """
+        if len(shapes) == 1:
+            return shapes[0]
+
+        result = shapes[0]
+        for shape in shapes[1:]:
+            fuse = BRepAlgoAPI_Fuse(result, shape)
+            if not fuse.IsDone() or fuse.Shape().IsNull():
+                raise RuntimeError(f'Failed to fuse {what}')
+            result = fuse.Shape()
+
+        unify = ShapeUpgrade_UnifySameDomain(result, True, True, False)
+        unify.Build()
+        return unify.Shape()
 
     def create_link_shape(self, link: Any) -> TopoDS_Shape:
         """Create OCCT shape for all collision elements in a link.
@@ -161,6 +194,12 @@ class OCCTGenerator:
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
                         f'Box size must be [x, y, z], got {geom.size}'
+                    )
+
+                if any(s <= 0 for s in geom.size):
+                    raise ValueError(
+                        f"Link '{link.name}' collision {idx}: "
+                        f'Box size must be positive: {geom.size}'
                     )
 
                 dx, dy, dz = geom.size
@@ -199,7 +238,7 @@ class OCCTGenerator:
                     f'Unsupported geometry type: {type(geom).__name__}'
                 )
 
-            link_T = self.link_poses.get(link.name, np.eye(4))
+            link_T = self.link_poses[link.name]
             local_T = origin_to_matrix(collision.origin)
             absolute_T = self.world_transform @ link_T @ local_T
 
@@ -211,19 +250,8 @@ class OCCTGenerator:
             logger.warning(f'Link "{link.name}" produced no valid shapes')
             raise ValueError(f'Link "{link.name}" has no valid collision geometry')
 
-        if len(shapes) == 1:
-            return shapes[0]
-
         logger.debug(f'Fusing {len(shapes)} shape(s) for link "{link.name}"')
-        result = shapes[0]
-        for i, shape in enumerate(shapes[1:], start=1):
-            fused = BRepAlgoAPI_Fuse(result, shape)
-            result = fused.Shape()
-
-            if result.IsNull():
-                logger.error(
-                    f'Fuse operation failed for link "{link.name}" at shape {i+1}/{len(shapes)}'
-                )
-                raise ValueError(f'Failed to fuse shapes for link "{link.name}"')
-
-        return result
+        try:
+            return self._fuse(shapes, f'shapes for link "{link.name}"')
+        except RuntimeError as e:
+            raise ValueError(str(e))

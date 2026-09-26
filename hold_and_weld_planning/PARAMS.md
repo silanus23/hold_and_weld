@@ -5,7 +5,7 @@
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `workpiece.mode` | string | `auto` | Processing mode. One of: `auto`, `mesh`, `occt` |
-| `workpiece.auto_detect_seams` | bool | `false` | Enable automatic seam detection from geometry |
+| `workpiece.auto_detect_seams` | bool | `false` | Not read. Seams are always extracted from geometry; a hand-written top-level `seams:` list is optional and only checked for well-formedness. |
 | `workpiece.main_part.main_path` | string | — | Path to main part. Supports URDF, xacro, STL, STEP, IGES and `package://` URIs. Required. |
 | `workpiece.main_part.world_pose.xyz` | double[3] | [0, 0, 0] | Main part translation in world frame [m] |
 | `workpiece.main_part.world_pose.rpy` | double[3] | [0, 0, 0] | Main part rotation as roll/pitch/yaw [rad] |
@@ -17,9 +17,9 @@
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.work_angle_deg` | double | — | Torch tilt angle perpendicular to travel direction [deg]. Required. |
-| `parameters.travel_angle_deg` | double | — | Torch tilt angle along travel direction [deg]. Required. |
-| `parameters.gap_mm` | double | — | Distance from seam to torch tip [mm]. Required. |
+| `parameters.work_angle_deg` | double | — | Torch tilt angle perpendicular to travel direction [deg]. Required. Strictly between -90 and 90. |
+| `parameters.travel_angle_deg` | double | — | Torch tilt angle along travel direction [deg]. Required. Strictly between -90 and 90. |
+| `parameters.gap_mm` | double | — | Distance from seam to torch tip [mm]. Required. Must be > 0. |
 | `parameters.waypoint_spacing_mm` | double | 10.0 | Distance between generated waypoints along seam [mm] |
 | `parameters.num_smooth_points` | int | 100 | Points sampled along each seam curve. **OCCT mode only** - nothing under `mesh/` reads it, where seam density comes from the tessellation and `refine_iterations` instead. Must be >= 2. |
 
@@ -165,14 +165,18 @@ Parameters for the OCCT-based seam extractor. Only used when `mode` is `occt` or
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `parameters.epsilon` | double | 1e-3 | Distance tolerance for face-pair proximity [m]. Shared with mesh mode, see Contact boundary above. |
+| `parameters.coincidence_samples` | int | 5 | Points sampled along an intersection edge when checking whether another face pair already produced it. Must be >= 2. |
+
+STEP and IGES files are converted to metres on load, whatever unit they declare.
 
 ## Path Creator
 
 Classifies the ordered seam points into LINE, ARC and PTP segments. Every
 parameter below is read by `mesh/path_creator.py`; all are optional.
 
-The cascade, in order: a run is a LINE if a straight line holds
-`path_tolerance_mm`; an ARC if a circle holds the stricter
+The cascade, in order: a run is a LINE if the chord from its first point to its
+last holds `path_tolerance_mm` (the chord, not a best-fit line, because the
+welder runs one LIN along exactly that chord); an ARC if a circle holds the stricter
 `arc_strictness x path_tolerance_mm` AND subtends at least `min_arc_angle_deg`
 AND consumes `arc_gain` times the run a line would; otherwise PTP. The
 asymmetry is deliberate - a false PTP only densifies waypoints, a false arc
@@ -180,14 +184,18 @@ leaves the seam.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.path_tolerance_mm` | double | 1.0 | Master fit tolerance: max deviation from a fitted line [mm] |
+| `parameters.path_tolerance_mm` | double | 1.0 | Master fit tolerance: max deviation from a line's chord [mm] |
 | `parameters.arc_strictness` | double | 0.5 | Arc tolerance as a fraction of `path_tolerance_mm`. 0 disables arcs. |
 | `parameters.min_arc_angle_deg` | double | 15.0 | Below this subtended angle a run is not worth calling an arc [deg] |
 | `parameters.arc_gain` | double | 1.5 | An arc must consume this multiple of the run a line would, or the line wins |
 | `parameters.min_fit_points` | int | 4 | Fewest points a segment may be fitted from. Must be >= 3. |
 | `parameters.max_line_length` | double | 0.5 | Hard split length for a line, not geometric [m] |
-| `parameters.max_arc_length` | double | 0.5 | Hard split length for an arc [m]. Why a 706.79mm semicircle emerges as two arcs of 353.39mm. |
+| `parameters.max_arc_length` | double | 0.5 | Hard split length for an arc [m]. Why a 706.79mm semicircle emerges as two arcs of 353.39mm. A closed arc is split in two regardless, since a CIRC cannot end where it starts. |
 | `parameters.max_ptp_length` | double | 0.1 | Hard split length for a PTP run [m] |
+
+Every key under `parameters:` is checked against the full set the pipeline
+reads, and any other key is logged as a WARNING naming it — a misspelled key
+would otherwise be ignored by every stage.
 
 `waypoint_spacing_mm` (see Planner) is also read here: a run too short to carry
 two weld poses is not a segment, so the process spacing doubles as the minimum

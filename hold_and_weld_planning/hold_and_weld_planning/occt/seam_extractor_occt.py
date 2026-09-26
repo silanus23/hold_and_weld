@@ -122,7 +122,7 @@ class SeamExtractorOCCT:
         Raises:
             ValueError: If a parameter is out of range.
         """
-        # Both sample counts divide by (count - 1), and a per-edge failure only yields no seam.
+        # Both sample counts divide by (count - 1); caught here rather than as a failed edge.
         if self.coincidence_samples < 2:
             raise ValueError(
                 'coincidence_samples must be >= 2 (a curve needs two ends), '
@@ -149,8 +149,12 @@ class SeamExtractorOCCT:
 
         Returns:
             List of Seam objects with geometry and metadata.
-            Empty list if no seams found. Individual seam failures are logged
-            but don't stop extraction.
+            Empty list if no seams found.
+
+        Raises:
+            RuntimeError: If any intersection edge cannot be processed. Every edge is attempted
+                first so the error names them all; a job missing a seam is the wrong job, not a
+                smaller one.
         """
         logger.info('Starting OCCT seam extraction')
         contact_candidates = self._find_contact_face_pairs()
@@ -168,7 +172,7 @@ class SeamExtractorOCCT:
 
         logger.info(f'Extracted {len(intersection_data)} intersection edge(s)')
         seams = []
-        failed_count = 0
+        failures = []
 
         for idx, edge_data in enumerate(intersection_data):
             try:
@@ -179,10 +183,16 @@ class SeamExtractorOCCT:
                 )
 
             except Exception as e:
-                failed_count += 1
-                logger.warning(f'Failed to process edge {idx + 1}/{len(intersection_data)}: {e}')
+                failures.append(f'edge {idx + 1}/{len(intersection_data)}: {e}')
+                logger.error(f'Failed to process {failures[-1]}')
 
-        logger.info(f'Successfully extracted {len(seams)} seam(s), {failed_count} edge(s) failed')
+        if failures:
+            raise RuntimeError(
+                f'{len(failures)} intersection edge(s) could not be processed: '
+                + '; '.join(failures)
+            )
+
+        logger.info(f'Successfully extracted {len(seams)} seam(s)')
         return seams
 
     def _process_single_edge(self, edge_data: dict) -> list[Seam]:
@@ -382,7 +392,7 @@ class SeamExtractorOCCT:
 
     def _get_matching_boundary_edge(self, seam_edge: TopoDS_Shape,
                                     face: TopoDS_Shape
-                                    ) -> TopoDS_Shape:
+                                    ) -> TopoDS_Shape | None:
         """Get boundary edge from face that geometrically matches seam edge, or None if synthetic.
 
         When several edges align, the nearest wins rather than the first in explorer order.
@@ -753,7 +763,13 @@ class SeamExtractorOCCT:
 
         # Fast path for planes - normal is constant everywhere
         if adaptor.GetType() == GeomAbs_Plane:
-            normal_dir = adaptor.Plane().Axis().Direction()
+            position = adaptor.Plane().Position()
+            normal_dir = position.Direction()
+
+            # The surface normal is XDirection x YDirection, which is the main direction only for
+            # a right-handed frame. Mirrored parts can arrive with left-handed planes.
+            if not position.Direct():
+                normal_dir.Reverse()
 
             # Respect face orientation (REVERSED means normal points inward)
             if face.Orientation() == TopAbs_REVERSED:
@@ -823,7 +839,38 @@ class SeamExtractorOCCT:
                        normals_main: np.ndarray,
                        normals_secondary: np.ndarray
                        ) -> list[Seam]:
-        """Wrap geometry and normals into a Seam object with metadata."""
+        """Wrap geometry and normals into Seam objects with metadata.
+
+        A closed arc is split into two halves: the welder runs one Pilz CIRC per arc, from its
+        first point to its last, and a full circle puts that goal on top of its start.
+        """
+        points = geometry['points']
+        kind = geometry['type']
+
+        if kind == 'arc' and np.linalg.norm(points[-1] - points[0]) <= self.tolerance:
+            if len(points) < 5:
+                raise RuntimeError(
+                    f'closed arc sampled at {len(points)} points cannot be split into two arcs; '
+                    'raise num_smooth_points'
+                )
+            mid = len(points) // 2
+            halves = (slice(0, mid + 1), slice(mid, len(points)))
+            return [
+                self._wrap_one_seam(
+                    dict(geometry, points=points[half], is_closed=False), is_edge_joint,
+                    normals_main[half], normals_secondary[half])
+                for half in halves
+            ]
+
+        return [self._wrap_one_seam(geometry, is_edge_joint, normals_main, normals_secondary)]
+
+    def _wrap_one_seam(self,
+                       geometry: dict,
+                       is_edge_joint: bool,
+                       normals_main: np.ndarray,
+                       normals_secondary: np.ndarray
+                       ) -> Seam:
+        """Wrap geometry and normals into one Seam object with metadata."""
         points = geometry['points']
         kind = geometry['type']
         extra: dict = {}
@@ -846,4 +893,4 @@ class SeamExtractorOCCT:
             'smoothed_points': points,
             **extra,
         })
-        return [seam]
+        return seam

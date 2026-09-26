@@ -92,7 +92,9 @@ def load_urdf_config(
         yaml_path: Path to YAML config file
 
     Returns:
-        Tuple of (seams, parameters, workpiece_config)
+        Tuple of (seams, parameters, workpiece_config). `seams` holds any
+        hand-written seams under `seams:`, which are optional; the CLI
+        extracts seams from geometry either way.
 
     Raises:
         FileNotFoundError: If config file not found
@@ -108,42 +110,38 @@ def load_urdf_config(
     with open(yaml_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    if 'workpiece' not in config:
+    # An empty file, or a key with nothing under it, loads as None; checked here so it is named
+    # rather than surfacing as a TypeError on the first lookup.
+    if not isinstance(config, dict):
+        raise ValueError(
+            f'Config must be a YAML mapping, got {type(config).__name__} in {yaml_path}')
+
+    workpiece = config.get('workpiece')
+    if not isinstance(workpiece, dict):
         raise ValueError(f"Config missing 'workpiece' section in {yaml_path}")
 
-    if (
-        'main_part' not in config['workpiece']
-        or 'secondary_part' not in config['workpiece']
-    ):
-        raise ValueError(f"Config must have both 'main_part' and 'secondary_part' in {yaml_path}")
+    for part, key in (('main_part', 'main_path'), ('secondary_part', 'secondary_path')):
+        if not isinstance(workpiece.get(part), dict):
+            raise ValueError(f"Config missing 'workpiece.{part}' section in {yaml_path}")
+        if not workpiece[part].get(key):
+            raise ValueError(f"Missing '{key}' under workpiece.{part} in {yaml_path}")
 
-    if 'main_path' not in config['workpiece']['main_part']:
-        raise ValueError(f"Missing 'main_path' under workpiece.main_part in {yaml_path}")
+    if not isinstance(config.get('parameters'), dict):
+        raise ValueError(
+            f"Config missing 'parameters' section, or it is not a mapping, in {yaml_path}")
 
-    if 'secondary_path' not in config['workpiece']['secondary_part']:
-        raise ValueError(f"Missing 'secondary_path' under workpiece.secondary_part in {yaml_path}")
-
-    if 'parameters' not in config:
-        raise ValueError(f"Config missing 'parameters' section in {yaml_path}")
-
-    auto_detect = config['workpiece'].get('auto_detect_seams', False)
-
-    # Only require seams if auto-detect is disabled
+    # Seams are always extracted from geometry by the CLI; a hand-written list is optional and
+    # only parsed so a malformed one is still reported.
     seams = []
-    if not auto_detect:
-        if 'seams' not in config or not config['seams']:
-            raise ValueError(f"Config missing 'seams' or seams list is empty in {yaml_path}")
+    for seam_dict in config.get('seams') or []:
+        if not isinstance(seam_dict, dict) or 'start' not in seam_dict or 'end' not in seam_dict:
+            raise ValueError(f"Each seam must have 'start' and 'end' in {yaml_path}")
+        seams.append(Seam(seam_dict))
 
-        for seam_dict in config['seams']:
-            if 'start' not in seam_dict or 'end' not in seam_dict:
-                raise ValueError(f"Each seam must have 'start' and 'end' in {yaml_path}")
-            seams.append(Seam(seam_dict))
-
+    if seams:
         logger.info(f'Loaded {len(seams)} seam(s) from config')
-    else:
-        logger.info('Auto-detect mode enabled, seams will be extracted from geometry')
 
-    return seams, config['parameters'], config['workpiece']
+    return seams, config['parameters'], workpiece
 
 
 def export_to_json(

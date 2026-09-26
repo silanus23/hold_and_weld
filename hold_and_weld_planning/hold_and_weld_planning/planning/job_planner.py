@@ -14,6 +14,7 @@
 
 """Orchestrate complete weld job planning from URDF/CAD to trajectories."""
 
+from dataclasses import fields
 import logging
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,9 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import trimesh
 
-from .weld_planner import WeldPlanner
+from .weld_planner import WeldPlanner, WeldPlannerParams
 from ..mesh.mesh_loader import MeshLoader
+from ..mesh.params import PathCreatorParams, SeamExtractorMeshParams
 from ..mesh.seam_extractor_mesh import SeamExtractorMesh
 from ..mesh.shell_generator import ShellGenerator
 from ..occt.occt_generator import OCCTGenerator
@@ -36,6 +38,15 @@ logger = logging.getLogger(__name__)
 OCCT_EXTENSIONS = {'.step', '.stp', '.iges', '.igs'}
 MESH_EXTENSIONS = {'.stl'}
 URDF_EXTENSIONS = {'.urdf', '.xacro'}
+
+# Every key some stage of either pipeline reads from the shared parameter dict. Each stage ignores
+# the others' keys by design, so a misspelled key is ignored by all of them, silently, unless
+# something checks it against the whole set.
+KNOWN_PARAMETERS = frozenset(
+    spec.name
+    for params in (SeamExtractorMeshParams, PathCreatorParams, WeldPlannerParams)
+    for spec in fields(params)
+) | {'epsilon', 'num_smooth_points', 'coincidence_samples', 'refine_iterations'}
 
 
 class JobPlanner:
@@ -76,6 +87,13 @@ class JobPlanner:
 
         explicit_refine = 'refine_iterations' in (parameters or {})
         self.parameters = dict(parameters or {})
+
+        unknown = sorted(set(self.parameters) - KNOWN_PARAMETERS)
+        if unknown:
+            logger.warning(
+                f'Unknown parameter key(s) {unknown} are read by no stage and have no effect; '
+                'check the spelling against PARAMS.md'
+            )
 
         if mode not in ['auto', 'mesh', 'occt']:
             raise ValueError(f"Mode must be 'auto', 'mesh', or 'occt', got '{mode}'")
@@ -168,7 +186,10 @@ class JobPlanner:
             List of Seam objects with generated poses
 
         Raises:
-            RuntimeError: If pipeline stage fails
+            RuntimeError: If a pipeline stage fails, including any single seam
+                failing to extract or plan
+            ValueError: If an input or parameter is invalid
+            FileNotFoundError: If an input file does not exist
         """
         if self.mode == 'occt':
             return self._plan_job_occt()
@@ -215,22 +236,33 @@ class JobPlanner:
         return self._generate_poses(seams)
 
     def _generate_poses(self, seams: list) -> list:
-        """Run WeldPlanner over extracted seams and return successfully planned ones."""
+        """Run WeldPlanner over every extracted seam.
+
+        Raises:
+            RuntimeError: If any seam fails to plan. Every seam is attempted first so the error
+                names them all; a job missing a seam is the wrong job, not a smaller one.
+        """
         logger.info('Generating weld poses...')
         weld_planner = WeldPlanner(self.parameters)
 
+        failures = []
         for idx, seam in enumerate(seams):
             try:
                 weld_planner.generate_seam(seam)
                 num_poses = len(seam.poses) if seam.poses else 0
                 logger.debug(f'Seam {idx}: {num_poses} pose(s) generated')
             except Exception as e:
-                logger.warning(f'Failed to generate poses for seam {idx}: {e}')
-                continue
+                failures.append(f'seam {idx}: {e}')
+                logger.error(f'Failed to generate poses for {failures[-1]}')
 
-        successful_seams = [s for s in seams if s.is_generated]
-        logger.info(f'Successfully planned {len(successful_seams)}/{len(seams)} seam(s)')
-        return successful_seams
+        if failures:
+            raise RuntimeError(
+                f'{len(failures)} of {len(seams)} seam(s) could not be planned: '
+                + '; '.join(failures)
+            )
+
+        logger.info(f'Successfully planned {len(seams)} seam(s)')
+        return seams
 
     def _generate_shells(self) -> tuple:
         """Generate watertight trimesh shells for both parts."""

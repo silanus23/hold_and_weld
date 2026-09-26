@@ -133,11 +133,11 @@ class PathCreator:
     def _split_on_contact_type(self, seam_points: list[SeamPoint]) -> list[list[SeamPoint]]:
         """Group the chain into sublists of uniform joint character.
 
-        The character is (is_edge_joint, owner_side); a change in either ends a sublist. Runs
-        shorter than `min_contact_run` are flicker at ambiguous zones and get absorbed into their
-        longer same-mesh neighbour - by LENGTH, not point count, since the two meshes sample at
-        very different densities. Never absorbed across a mesh handoff, however short: that would
-        relabel the other mesh's points into a fit shaped by this mesh's geometry.
+        The character is (is_edge_joint, owner_side); a change in either ends a sublist. Short
+        runs (by LENGTH, since the two meshes sample at very different densities) are flicker at
+        ambiguous zones and get absorbed into a same-side neighbour, never across a mesh handoff.
+        A single-point run can't be fitted alone, so it rides with an adjacent sublist instead,
+        keeping its own normals.
         """
         runs: list[list[Any]] = []
         for sp in seam_points:
@@ -292,13 +292,20 @@ class PathCreator:
         return best
 
     def _line_max_deviation(self, points: NDArray) -> float:
-        """Max perpendicular distance of points from their best-fit line."""
-        centroid = points.mean(axis=0)
-        centered = points - centroid
-        _, _, vt = np.linalg.svd(centered, full_matrices=False)
-        direction = vt[0]
-        projected = np.outer(centered @ direction, direction)
-        return float(np.max(np.linalg.norm(centered - projected, axis=1)))
+        """Max perpendicular distance of points from the chord joining the first and last.
+
+        The chord, not a best-fit line: the welder runs one LIN from the first point to the
+        last, and a one-sided bow sits up to twice as far from that chord as from its fit.
+        A run whose ends coincide has no chord and is never a line.
+        """
+        chord = points[-1] - points[0]
+        length = np.linalg.norm(chord)
+        if length < 1e-12:
+            return float('inf')
+        direction = chord / length
+        offsets = points - points[0]
+        projected = np.outer(offsets @ direction, direction)
+        return float(np.max(np.linalg.norm(offsets - projected, axis=1)))
 
     def _fit_circle(self, points: NDArray) -> dict[str, Any] | None:
         """Kasa circle fit in the PCA plane, with full 3D max deviation.
@@ -344,7 +351,11 @@ class PathCreator:
         }
 
     def _split_by_length(self, points: NDArray, seg_type: str) -> list[tuple[NDArray, int]]:
-        """Split a segment into equal parts when it exceeds the type's max length."""
+        """Split a segment into equal parts when it exceeds the type's max length.
+
+        A closed arc is split in two whatever its length: the welder runs one Pilz CIRC per arc,
+        from its first point to its last, and a full circle puts that goal on top of its start.
+        """
         max_len = {
             'line': self.cfg.max_line_length,
             'arc': self.cfg.max_arc_length,
@@ -352,10 +363,12 @@ class PathCreator:
 
         step_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
         total = float(np.sum(step_lengths))
-        if total <= max_len:
+        n_splits = int(np.ceil(total / max_len))
+        if seg_type == 'arc' and np.linalg.norm(points[-1] - points[0]) <= self.cfg.tolerance:
+            n_splits = max(n_splits, 2)
+        if n_splits <= 1:
             return [(points, 0)]
 
-        n_splits = int(np.ceil(total / max_len))
         target = total / n_splits
 
         result: list[tuple[NDArray, int]] = []

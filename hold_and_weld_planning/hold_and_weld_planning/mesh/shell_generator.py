@@ -94,6 +94,7 @@ class ShellGenerator:
                 missing a link is not a smaller workpiece, it is the wrong
                 one: seam extraction would go on to weld the hole the
                 missing link left, so this cannot be downgraded to a skip.
+            ValueError: If no link has collision geometry.
         """
         logger.info(f'Creating shells for {len(self.robot.links)} links')
 
@@ -123,6 +124,13 @@ class ShellGenerator:
 
             self.total_manifold += link_manifold
             processed_count += 1
+
+        # An empty manifold is otherwise only caught downstream, as a misleading "not watertight".
+        if processed_count == 0:
+            raise ValueError(
+                'URDF has no collision geometry on any link; seams are extracted from '
+                '<collision> elements, not <visual>'
+            )
 
         logger.info(f'Successfully created shells for {processed_count} link(s)')
         return self.total_manifold

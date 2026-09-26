@@ -14,8 +14,9 @@
 
 """OCCTLoader - Load CAD files (STEP/IGES) and convert to OCCT shapes.
 
-Handles package:// URI resolution, applies world transforms, and provides
-OCCT TopoDS_Shape objects for exact geometric seam extraction.
+Handles package:// URI resolution, converts the file's length unit to metres,
+applies world transforms, and provides OCCT TopoDS_Shape objects for exact
+geometric seam extraction.
 """
 
 import logging
@@ -24,6 +25,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCC.Core.gp import gp_Pnt, gp_Trsf
 from OCC.Core.IFSelect import IFSelect_RetDone
 from OCC.Core.IGESControl import IGESControl_Reader
 from OCC.Core.STEPControl import STEPControl_Reader
@@ -34,12 +36,18 @@ from ..utils.transforms import numpy_to_gp_trsf
 
 logger = logging.getLogger(__name__)
 
+# OCCT states lengths in millimetres; the pipeline works in metres.
+MM_PER_M = 1000.0
+
 
 class OCCTLoader:
     """Load CAD files and convert to OCCT shapes for weld planning pipeline.
 
     Handles package:// URI resolution and world pose transformation.
-    Supports STEP (.step, .stp) and IGES (.iges, .igs) file formats.
+    Supports STEP (.step, .stp) and IGES (.iges, .igs) file formats. The
+    shape comes out in metres whatever unit the file was saved in: CAD tools
+    mostly save millimetres, and a part left in them is 1000x too big for a
+    world pose and an epsilon that are both stated in metres.
     """
 
     def __init__(
@@ -99,13 +107,15 @@ class OCCTLoader:
             )
 
     def _load_step(self, file_path: Path) -> TopoDS_Shape:
-        """Load STEP file using STEPControl_Reader."""
+        """Load STEP file using STEPControl_Reader, in metres."""
         reader = STEPControl_Reader()
         status = reader.ReadFile(str(file_path))
 
         if status != IFSelect_RetDone:
             raise RuntimeError(f'Failed to read STEP file: {file_path}')
 
+        # The reader converts from the unit the file declares into this one, stated in mm.
+        reader.SetSystemLengthUnit(MM_PER_M)
         reader.TransferRoots()
         shape = reader.OneShape()
 
@@ -116,12 +126,19 @@ class OCCTLoader:
         return shape
 
     def _load_iges(self, file_path: Path) -> TopoDS_Shape:
-        """Load IGES file using IGESControl_Reader."""
+        """Load IGES file using IGESControl_Reader, in metres."""
         reader = IGESControl_Reader()
         status = reader.ReadFile(str(file_path))
 
         if status != IFSelect_RetDone:
             raise RuntimeError(f'Failed to read IGES file: {file_path}')
+
+        # Unlike the STEP reader, this one has no system-unit setting and hands the shape back in
+        # the file's own unit, which the global section states in mm.
+        unit_mm = reader.IGESModel().GlobalSection().UnitValue()
+        if not unit_mm > 0.0:
+            raise RuntimeError(
+                f'IGES file declares no usable length unit ({unit_mm}): {file_path}')
 
         reader.TransferRoots()
         shape = reader.OneShape()
@@ -129,8 +146,17 @@ class OCCTLoader:
         if shape.IsNull():
             raise RuntimeError(f'IGES file contains no valid shapes: {file_path}')
 
-        logger.debug(f'IGES file loaded successfully: {file_path.name}')
-        return shape
+        logger.debug(f'IGES file loaded successfully: {file_path.name} (unit {unit_mm} mm)')
+        return self._scale(shape, unit_mm / MM_PER_M)
+
+    @staticmethod
+    def _scale(shape: TopoDS_Shape, factor: float) -> TopoDS_Shape:
+        """Scale a shape uniformly about the origin."""
+        if factor == 1.0:
+            return shape
+        trsf = gp_Trsf()
+        trsf.SetScale(gp_Pnt(0.0, 0.0, 0.0), factor)
+        return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
 
     def _apply_transform(
         self, shape: TopoDS_Shape, transform: NDArray

@@ -203,7 +203,7 @@ class SeamExtractorMesh:
 
         Neither mesh is "the" seam mesh: where a part terminates its boundary runs along its own
         sharp rim, where it merely supports the other the boundary is an imprint across coplanar
-        faces, and on an overhanging joint each mesh does both over partof the curve. Sharpness
+        faces, and on an overhanging joint each mesh does both over part of the curve. Sharpness
         alone isn't enough either, since a part's edges away from the joint are just as sharp, so a
         candidate must sit on the other mesh too.
         """
@@ -419,7 +419,7 @@ class SeamExtractorMesh:
                 normal_wall[idx] = self.fields.fan_normal(side, int(v), ~contact)
             self._warn_zero_normals(
                 side, normal_wall[rows], 'wall',
-                'the weld pose there will be unusable'
+                'WeldPlanner gives each the normal of its nearest neighbour that has one'
             )
 
         return [

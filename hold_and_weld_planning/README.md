@@ -53,7 +53,8 @@ which is conserved under retriangulation and so separates a real part edge from 
 tessellated curve.
 
 Classification into LINE, ARC and PTP is a tolerance cascade in `path_creator.py`, not a
-best-fit contest — see PARAMS.md.
+best-fit contest — see PARAMS.md. A line's tolerance is held against its chord, which is
+what the welder's LIN follows.
 
 ### OCCT
 

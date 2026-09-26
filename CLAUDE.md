@@ -41,9 +41,10 @@ colcon test-result --verbose
 ./build/hold_and_weld_application/<test_name>
 ```
 
-`hold_and_weld_planning` (Python/ament_python) uses ament_flake8 + pydocstyle
-(Google convention) + a copyright check as its "tests" — see
-`test/test_flake8.py`, `test/test_copyright.py`.
+`hold_and_weld_planning` (Python/ament_python) has pytest unit tests under `test/`
+alongside ament_flake8 + pydocstyle (Google convention) and a copyright check.
+Run them with ROS sourced (`python3 -m pytest test`); note that `caplog` captures
+nothing there, because the launch pytest plugin makes loggers that do not propagate.
 
 Lint/style is also enforced repo-wide via pre-commit (`.pre-commit-config.yaml`):
 ament_cpplint, ament_uncrustify (auto-reformats C++), ament_lint_cmake, ament_xmllint,
@@ -155,7 +156,8 @@ Two independent seam extractors feeding a common `Core` object model
   `num_smooth_points`), but it is NOT free of judgement: which part supplies the
   base normal and which the wall is decided from boundary-edge topology, and a
   curve OCCT cannot name as a line or circle is demoted to a PtP segment. Pipe
-  joint detection incomplete, and the package has no tests of its own.
+  joint detection incomplete. STEP/IGES are converted to metres on load, and a
+  multi-link URDF is fused into one solid.
 
 - **Mesh extractor** (`mesh/`): contact-boundary based, pure Python. Marks faces
   within `epsilon` of the other mesh, takes the edges bounding that set, keeps

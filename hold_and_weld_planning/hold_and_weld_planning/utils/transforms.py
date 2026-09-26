@@ -86,8 +86,10 @@ def numpy_to_gp_trsf(matrix: NDArray) -> Any:
 
     gp_Trsf models a rigid motion with a uniform scale, so shear or
     non-uniform scale cannot survive the conversion. That is reported rather
-    than refused: a slightly non-unit determinant is usually accumulated
-    round-off in a pose composed from several origins.
+    than refused: a rotation block slightly off orthonormal is usually
+    accumulated round-off in a pose composed from several origins. The check
+    is R^T R against the identity, not the determinant alone, which a pure
+    shear leaves at exactly 1.
 
     OCCT is imported inside the body so that the mesh pipeline, which shares
     this module for the URDF helpers above, does not pull in pythonocc.
@@ -104,10 +106,12 @@ def numpy_to_gp_trsf(matrix: NDArray) -> Any:
     if matrix.shape != (4, 4):
         raise ValueError(f'transform must be 4x4, got {matrix.shape}')
 
-    determinant = np.linalg.det(matrix[:3, :3])
-    if not np.isclose(determinant, 1.0, atol=1e-3):
+    rotation = matrix[:3, :3]
+    off_orthonormal = float(np.max(np.abs(rotation.T @ rotation - np.eye(3))))
+    if off_orthonormal > 1e-3:
         logger.warning(
-            f'Transform has non-unit determinant {determinant:.6f}, may contain scaling/shear'
+            f'Transform rotation block is {off_orthonormal:.6f} off orthonormal: it contains '
+            'scaling or shear; gp_Trsf keeps only a rotation and a uniform scale'
         )
 
     trsf = gp_Trsf()
@@ -135,13 +139,12 @@ def link_poses(robot: Any) -> dict:
         robot: The parsed URDF model (urdf_parser_py `URDF`).
 
     Returns:
-        Dict mapping link name to its 4x4 pose in the root frame. Links that
-        no joint reaches — a disconnected model — are left at the identity.
+        Dict mapping link name to its 4x4 pose in the root frame.
 
     Raises:
-        ValueError: If two links share a name, or a joint names a parent or
-            child link that was never declared, or the joint tree contains a
-            cycle.
+        ValueError: If two links share a name, a joint names a parent or
+            child link that was never declared, the joint tree contains a
+            cycle, or a link is reached from no root (a disconnected model).
     """
     link_names = [link.name for link in robot.links]
     duplicates = {name for name in link_names if link_names.count(name) > 1}

@@ -14,6 +14,7 @@
 
 """Generate weld torch poses along seam paths using dual surface normals."""
 
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -21,7 +22,58 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
+from ..mesh.params import ParamsBase
+
 logger = logging.getLogger(__name__)
+
+# Below this length a vector has no direction worth building a frame from.
+DEGENERATE_LENGTH = 1e-10
+
+
+@dataclass
+class WeldPlannerParams(ParamsBase):
+    """Weld parameters for WeldPlanner; all but the spacing are required."""
+
+    work_angle_deg: float
+    travel_angle_deg: float
+    gap_mm: float
+    waypoint_spacing_mm: float = 10.0
+
+    REQUIRED = ('work_angle_deg', 'travel_angle_deg', 'gap_mm')
+
+    @classmethod
+    def from_dict(cls, params: dict[str, Any] | None):
+        """Build from a config dict, naming any required key that is missing.
+
+        Raises:
+            ValueError: If params is not a dict, a required key is missing, a value cannot be
+                coerced, or a value fails a constraint.
+        """
+        if isinstance(params, dict):
+            missing = [key for key in cls.REQUIRED if key not in params]
+            if missing:
+                raise ValueError(f'Missing required weld parameter(s): {missing}')
+        elif params is not None:
+            raise ValueError(f'params must be a dict, got {type(params).__name__}')
+        else:
+            raise ValueError(f'Missing required weld parameter(s): {list(cls.REQUIRED)}')
+        return super().from_dict(params)
+
+    def __post_init__(self) -> None:
+        """Reject values that would place the torch nowhere sensible.
+
+        Raises:
+            ValueError: If a parameter is out of range.
+        """
+        for key in ('gap_mm', 'waypoint_spacing_mm'):
+            if not getattr(self, key) > 0.0:
+                raise ValueError(f'{key} must be > 0, got {getattr(self, key)}')
+
+        # At 90 degrees either tilt lays the torch flat along a surface; past it, into the part.
+        for key in ('work_angle_deg', 'travel_angle_deg'):
+            if not abs(getattr(self, key)) < 90.0:
+                raise ValueError(
+                    f'{key} must be strictly between -90 and 90, got {getattr(self, key)}')
 
 
 class WeldPlanner:
@@ -36,29 +88,25 @@ class WeldPlanner:
                 - travel_angle_deg: Travel angle in degrees (torch tilt along travel)
                 - gap_mm: Gap distance from seam in millimeters
                 - waypoint_spacing_mm: Distance between waypoints (default 10mm)
+                Other keys are ignored, so the job's shared parameter dict can
+                be handed over whole.
 
         Raises:
-            ValueError: If gap_mm or waypoint_spacing_mm is non-positive
+            ValueError: If a required key is missing, a value is not a finite
+                number, gap_mm or waypoint_spacing_mm is non-positive, or an
+                angle is not strictly between -90 and 90 degrees.
         """
-        self.work_angle_rad = np.radians(parameters['work_angle_deg'])
-        self.travel_angle_rad = np.radians(parameters['travel_angle_deg'])
-        self.gap_m = parameters['gap_mm'] / 1000.0
-        self.waypoint_spacing_m = parameters.get('waypoint_spacing_mm', 10.0) / 1000.0
-
-        if self.gap_m <= 0:
-            raise ValueError(f'gap_mm must be positive, got {parameters["gap_mm"]}')
-
-        if self.waypoint_spacing_m <= 0:
-            raise ValueError(
-                f'waypoint_spacing_mm must be positive, '
-                f'got {parameters.get("waypoint_spacing_mm", 10.0)}'
-            )
+        cfg = WeldPlannerParams.from_dict(parameters)
+        self.work_angle_rad = np.radians(cfg.work_angle_deg)
+        self.travel_angle_rad = np.radians(cfg.travel_angle_deg)
+        self.gap_m = cfg.gap_mm / 1000.0
+        self.waypoint_spacing_m = cfg.waypoint_spacing_mm / 1000.0
 
         logger.debug(
-            f'WeldPlanner initialized: work_angle={parameters["work_angle_deg"]}°, '
-            f'travel_angle={parameters["travel_angle_deg"]}°, '
-            f'gap={parameters["gap_mm"]}mm, '
-            f'waypoint_spacing={parameters.get("waypoint_spacing_mm", 10.0)}mm'
+            f'WeldPlanner initialized: work_angle={cfg.work_angle_deg}°, '
+            f'travel_angle={cfg.travel_angle_deg}°, '
+            f'gap={cfg.gap_mm}mm, '
+            f'waypoint_spacing={cfg.waypoint_spacing_mm}mm'
         )
 
     def generate_seam(self, seam: Any) -> None:
@@ -73,7 +121,8 @@ class WeldPlanner:
 
         Raises:
             RuntimeError: If required data missing from seam.config
-            ValueError: If arrays have invalid lengths
+            ValueError: If arrays have invalid lengths, no point has a usable
+                normal, or every point coincides so there is no tangent
 
         Side Effects:
             - Sets seam.poses to list of pose dictionaries
@@ -96,6 +145,8 @@ class WeldPlanner:
         logger.debug(f'Generating poses for seam with {len(points)} points')
 
         self._validate_arrays(points, normals_main, normals_secondary)
+        normals_main = self._fill_missing_normals(normals_main, 'normals_main')
+        normals_secondary = self._fill_missing_normals(normals_secondary, 'normals_secondary')
 
         sampled_indices = self._sample_by_distance(points, self.waypoint_spacing_m)
         logger.debug(f'Sampled {len(sampled_indices)} waypoints from {len(points)} points')
@@ -132,6 +183,36 @@ class WeldPlanner:
                 f'normals_secondary length {len(normals_secondary)} does not match '
                 f'points length {len(points)}'
             )
+
+    @staticmethod
+    def _fill_missing_normals(normals: NDArray, name: str) -> NDArray:
+        """Give each point without a usable normal that of the nearest point with one.
+
+        An extractor reports a normal it could not find as zeros. Left in, one such point makes
+        its pose NaN and costs the whole seam; along a seam the surface turns slowly, so the
+        neighbour's normal is the better answer.
+
+        Raises:
+            ValueError: If no point has a usable normal.
+        """
+        normals = np.asarray(normals, dtype=float)
+        usable = np.isfinite(normals).all(axis=1) & (
+            np.linalg.norm(np.nan_to_num(normals), axis=1) > DEGENERATE_LENGTH)
+        if usable.all():
+            return normals
+        if not usable.any():
+            raise ValueError(f'Seam has no usable normal in {name}')
+
+        good = np.nonzero(usable)[0]
+        bad = np.nonzero(~usable)[0]
+        nearest = good[np.argmin(np.abs(bad[:, None] - good[None, :]), axis=1)]
+        filled = normals.copy()
+        filled[bad] = normals[nearest]
+        logger.warning(
+            f'{len(bad)} of {len(normals)} point(s) have no usable {name}; '
+            'each takes the normal of the nearest point that has one'
+        )
+        return filled
 
     def _sample_by_distance(self, points: NDArray, spacing: float) -> list[int]:
         """Return point indices sampled at specified spacing along path."""
@@ -219,17 +300,28 @@ class WeldPlanner:
         return pose
 
     def _compute_tangent(self, points: NDArray, index: int) -> NDArray:
-        """Compute normalized tangent vector at index using central differences."""
-        if index == 0:
-            tangent = points[1] - points[0]
-        elif index == len(points) - 1:
-            tangent = points[-1] - points[-2]
-        else:
-            tangent = points[index + 1] - points[index - 1]
+        """Compute normalized tangent vector at index using central differences.
 
+        Each side takes the nearest point that does not coincide with this one, so a repeated
+        sample still gets the seam's direction.
+
+        Raises:
+            ValueError: If every point coincides with this one.
+        """
+        here = points[index]
+        distance = np.linalg.norm(points - here, axis=1)
+        apart = distance > DEGENERATE_LENGTH
+
+        ahead = np.nonzero(apart[index + 1:])[0]
+        behind = np.nonzero(apart[:index])[0]
+        forward = points[index + 1 + ahead[0]] if len(ahead) else here
+        backward = points[behind[-1]] if len(behind) else here
+
+        tangent = forward - backward
         norm = np.linalg.norm(tangent)
-        if norm < 1e-10:
-            return np.array([1, 0, 0])
+        if norm < DEGENERATE_LENGTH:
+            raise ValueError(
+                f'Cannot compute tangent at index {index}: every seam point coincides with it')
 
         return tangent / norm
 

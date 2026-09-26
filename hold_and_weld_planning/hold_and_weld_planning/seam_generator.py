@@ -32,6 +32,25 @@ from hold_and_weld_planning.utils.path_utils import (
 )
 
 
+def default_config_path() -> Path | None:
+    """Locate the example config: installed share directory first, then the source tree."""
+    candidates = []
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        candidates.append(
+            Path(get_package_share_directory('hold_and_weld_planning')) / 'config')
+    except Exception:
+        # Not installed, or no ROS environment: the source tree is the only place left.
+        pass
+    candidates.append(Path(__file__).resolve().parent.parent / 'config')
+
+    for directory in candidates:
+        path = directory / 'urdf_welding_conf.yaml'
+        if path.exists():
+            return path
+    return None
+
+
 def parse_arguments():
     """Parse command-line arguments for the seam generation CLI."""
     parser = argparse.ArgumentParser(
@@ -50,13 +69,13 @@ Examples:
         """,
     )
 
-    default_config = Path(__file__).parent.parent / 'config' / 'urdf_welding_conf.yaml'
+    default_config = default_config_path()
 
     parser.add_argument(
         '--input',
         '-i',
         type=str,
-        default=str(default_config) if default_config.exists() else None,
+        default=str(default_config) if default_config else None,
         help='Input YAML configuration file',
     )
 

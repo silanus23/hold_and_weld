@@ -97,6 +97,9 @@ class ArcSegment:
         Raises:
             ValueError: If geometry type is not 'arc' or missing required fields
         """
+        missing = [key for key in ('type', 'points', 'center', 'radius') if key not in geometry]
+        if missing:
+            raise ValueError(f'Arc geometry is missing field(s): {missing}')
         if geometry['type'] != 'arc':
             raise ValueError(f"Expected geometry type 'arc', got '{geometry['type']}'")
 

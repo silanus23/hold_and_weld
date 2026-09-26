@@ -84,11 +84,26 @@ class MeshLoader:
             logger.error(f'Failed to load mesh from {resolved_path}: {e}')
             raise ValueError(f'Failed to load mesh: {e}')
 
-        if len(mesh.vertices) == 0:
+        # A file holding several solids loads as a Scene. Each is kept as its own mesh and they
+        # are unioned below: concatenating them into one mesh would leave any overlap
+        # self-intersecting.
+        if isinstance(mesh, trimesh.Scene):
+            meshes = [m for m in mesh.dump() if isinstance(m, trimesh.Trimesh)]
+        elif isinstance(mesh, trimesh.Trimesh):
+            meshes = [mesh]
+        else:
+            raise ValueError(
+                f'{resolved_path} holds no triangle mesh (loaded as {type(mesh).__name__})')
+
+        if not meshes or sum(len(m.vertices) for m in meshes) == 0:
             raise ValueError(f'Loaded mesh has no vertices: {resolved_path}')
 
-        logger.info(f'Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces')
-        self.manifold = self._build_manifold(mesh)
+        logger.info(
+            f'Loaded mesh: {len(meshes)} solid(s), '
+            f'{sum(len(m.vertices) for m in meshes)} vertices, '
+            f'{sum(len(m.faces) for m in meshes)} faces'
+        )
+        self.manifold = self._build_manifold(meshes)
         if refine_iterations > 0:
             logger.info(
                 f'Mesh loaded and converted to manifold (refined {refine_iterations} iterations)'
@@ -96,24 +111,28 @@ class MeshLoader:
         else:
             logger.info('Mesh loaded and converted to manifold (no refinement)')
 
-    def _build_manifold(self, mesh: trimesh.Trimesh) -> manifold3d.Manifold:
-        """Convert trimesh to manifold, refine for density, and apply world transform."""
-        try:
-            manifold_obj = manifold3d.Manifold(
-                manifold3d.Mesh(
-                    vert_properties=np.array(mesh.vertices, dtype=np.float64),
-                    tri_verts=np.array(mesh.faces, dtype=np.int32),
+    def _build_manifold(self, meshes: list[trimesh.Trimesh]) -> manifold3d.Manifold:
+        """Union the meshes as manifolds, refine for density, and apply world transform."""
+        manifold_obj = manifold3d.Manifold()
+        for index, mesh in enumerate(meshes):
+            try:
+                solid = manifold3d.Manifold(
+                    manifold3d.Mesh(
+                        vert_properties=np.array(mesh.vertices, dtype=np.float64),
+                        tri_verts=np.array(mesh.faces, dtype=np.int32),
+                    )
                 )
-            )
-        except Exception as e:
-            raise ValueError(f'Failed to convert mesh to manifold: {e}')
+            except Exception as e:
+                raise ValueError(f'Failed to convert mesh {index} to manifold: {e}')
 
-        # manifold3d does not raise on a malformed mesh - it silently returns an empty Manifold
-        # whose error status would otherwise only surface much later, inside whatever boolean op
-        # first touches it.
-        status = manifold_obj.status()
-        if status != manifold3d.Error.NoError:
-            raise ValueError(f'Mesh failed manifold conversion: {status}')
+            # manifold3d does not raise on a malformed mesh - it silently returns an empty
+            # Manifold whose error status would otherwise only surface much later, inside
+            # whatever boolean op first touches it.
+            status = solid.status()
+            if status != manifold3d.Error.NoError:
+                raise ValueError(f'Mesh {index} failed manifold conversion: {status}')
+
+            manifold_obj += solid
 
         # Subdivide to increase vertex density for smoother seam extraction
         if self.refine_iterations > 0:
