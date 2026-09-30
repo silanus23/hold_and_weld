@@ -18,7 +18,7 @@ from hold_and_weld_planning.planning.job_planner import JobPlanner
 
 import pytest
 
-REQUIRED = {'work_angle_deg': 45.0, 'travel_angle_deg': 0.0, 'gap_mm': 0.0}
+REQUIRED = {'work_angle_deg': 45.0, 'travel_angle_deg': 0.0, 'gap_mm': 1.0}
 
 
 class TestParameterIsolation:
@@ -74,3 +74,17 @@ class TestModeDetection:
     def test_an_unknown_extension_is_refused(self):
         with pytest.raises(ValueError):
             JobPlanner('a.obj', 'b.obj', parameters=dict(REQUIRED))
+
+
+class TestParameterValidation:
+    """A bad value fails at construction, before any geometry is loaded."""
+
+    @pytest.mark.parametrize('main,secondary,bad', [
+        ('a.stl', 'b.stl', {'gap_mm': -1.0}),
+        ('a.stl', 'b.stl', {'path_tolerance_mm': 0.0}),
+        ('a.stl', 'b.stl', {'refine_iterations': 1.5}),
+        ('a.step', 'b.step', {'coincidence_samples': 1}),
+    ])
+    def test_a_bad_value_is_refused_by_name(self, main, secondary, bad):
+        with pytest.raises(ValueError, match=next(iter(bad))):
+            JobPlanner(main, secondary, parameters=dict(REQUIRED, **bad))

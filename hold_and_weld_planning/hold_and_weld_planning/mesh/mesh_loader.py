@@ -25,6 +25,7 @@ import numpy as np
 from numpy.typing import NDArray
 import trimesh
 
+from .params import MeshLoadParams
 from ..utils.path_utils import resolve_package_path
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class MeshLoader:
         self,
         mesh_path: str | Path,
         world_transform: NDArray | None = None,
-        refine_iterations: int = 32,
+        refine_iterations: int = MeshLoadParams.refine_iterations,
     ) -> None:
         """Initialize mesh loader and build manifold.
 
@@ -51,7 +52,7 @@ class MeshLoader:
             mesh_path: Path to mesh file (supports package:// URIs)
             world_transform: Global pose matrix (4x4) to apply after loading.
                 Defaults to identity.
-            refine_iterations: Number of mesh subdivision iterations (default: 32)
+            refine_iterations: Pieces each edge is split into; see MeshLoadParams
 
         Raises:
             ValueError: If mesh loading or conversion fails
@@ -68,8 +69,8 @@ class MeshLoader:
                 f'world_transform must be 4x4, got {world_transform.shape}'
             )
 
-        if refine_iterations < 0:
-            raise ValueError(f'refine_iterations must be non-negative, got {refine_iterations}')
+        refine_iterations = MeshLoadParams.from_dict(
+            {'refine_iterations': refine_iterations}).refine_iterations
 
         self.world_transform = world_transform
         self.refine_iterations = refine_iterations
@@ -81,8 +82,7 @@ class MeshLoader:
         try:
             mesh = trimesh.load(resolved_path)
         except Exception as e:
-            logger.error(f'Failed to load mesh from {resolved_path}: {e}')
-            raise ValueError(f'Failed to load mesh: {e}')
+            raise ValueError(f'Failed to load mesh from {resolved_path}: {e}') from e
 
         # A file holding several solids loads as a Scene. Each is kept as its own mesh and they
         # are unioned below: concatenating them into one mesh would leave any overlap
@@ -123,7 +123,7 @@ class MeshLoader:
                     )
                 )
             except Exception as e:
-                raise ValueError(f'Failed to convert mesh {index} to manifold: {e}')
+                raise ValueError(f'Failed to convert mesh {index} to manifold: {e}') from e
 
             # manifold3d does not raise on a malformed mesh - it silently returns an empty
             # Manifold whose error status would otherwise only surface much later, inside

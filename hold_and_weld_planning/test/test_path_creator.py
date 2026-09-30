@@ -294,3 +294,13 @@ class TestSegmentIndexing:
             for point, normal in zip(stored, normals):
                 index = int(round(point[0] / t[1]))
                 assert normal[0] == pytest.approx(float(index))
+
+
+class TestBadInput:
+    """A chain the classifier cannot use fails the job rather than vanishing from it."""
+
+    def test_a_non_finite_position_is_refused_not_skipped(self, creator):
+        positions = np.column_stack([np.linspace(0.0, 0.1, 10), np.zeros(10), np.zeros(10)])
+        positions[3, 0] = np.nan
+        with pytest.raises(ValueError, match='non-finite'):
+            creator.process_path(make_seam_points(positions))

@@ -86,8 +86,7 @@ class OCCTLoader:
         try:
             shape = self._load_cad_file(resolved_path)
         except Exception as e:
-            logger.error(f'Failed to load CAD file: {e}')
-            raise ValueError(f'Failed to load CAD file: {e}')
+            raise ValueError(f'Failed to load CAD file: {e}') from e
 
         self.shape = self._apply_transform(shape, world_transform)
         logger.info('CAD file loaded and transformed successfully')
@@ -166,7 +165,6 @@ class OCCTLoader:
         transformed_shape = BRepBuilderAPI_Transform(shape, trsf).Shape()
 
         if transformed_shape.IsNull():
-            logger.error('Transform operation produced null shape')
             raise RuntimeError('Failed to apply transformation to shape')
 
         return transformed_shape

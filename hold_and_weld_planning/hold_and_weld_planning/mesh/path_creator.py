@@ -60,20 +60,21 @@ class PathCreator:
                 classify as one arc.
 
         Returns:
-            List of Seam objects. Empty if fewer than 2 valid points.
+            List of Seam objects.
+
+        Raises:
+            ValueError: If the chain has fewer than 2 points, or a position is not a finite 3D
+                point. Refused rather than skipped: a job missing a seam is the wrong job.
         """
         if len(seam_points) < 2:
-            logger.warning(f'Too few SeamPoints to process: {len(seam_points)}')
-            return []
+            raise ValueError(f'Too few SeamPoints to process: {len(seam_points)}')
 
         if any(np.shape(sp.position) != (3,) for sp in seam_points):
-            logger.warning('SeamPoint positions are not 3D; skipping chain')
-            return []
+            raise ValueError('SeamPoint positions are not 3D')
         bad = sum(not np.isfinite(sp.position).all() for sp in seam_points)
         if bad:
-            logger.warning(
-                f'{bad} of {len(seam_points)} SeamPoint position(s) non-finite; skipping chain')
-            return []
+            raise ValueError(
+                f'{bad} of {len(seam_points)} SeamPoint position(s) are non-finite')
 
         working = list(seam_points)
         if is_closed and len(working) >= 3:

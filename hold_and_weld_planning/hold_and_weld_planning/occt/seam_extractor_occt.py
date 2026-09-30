@@ -31,6 +31,7 @@ kissing surfaces, then extracts exact seam curves and surface normals.
 # - Hardcoded fallback normals [0,0,1] should fail instead
 # - G1 continuity check samples only one point on edge
 
+from dataclasses import dataclass
 import logging
 
 import numpy as np
@@ -65,6 +66,37 @@ from ..mesh.params import ParamsBase
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class SeamExtractorOCCTParams(ParamsBase):
+    """Tuning for SeamExtractorOCCT; every field is optional."""
+
+    epsilon: float = 1e-3
+    num_smooth_points: int = 100
+    coincidence_samples: int = 5
+
+    def __post_init__(self) -> None:
+        """Reject parameter values that fail late, or silently produce nothing.
+
+        Raises:
+            ValueError: If a parameter is out of range.
+        """
+        # Both sample counts divide by (count - 1); caught here rather than as a failed edge.
+        if self.coincidence_samples < 2:
+            raise ValueError(
+                'coincidence_samples must be >= 2 (a curve needs two ends), '
+                f'got {self.coincidence_samples}'
+            )
+
+        if self.num_smooth_points < 2:
+            raise ValueError(
+                'num_smooth_points must be >= 2 (a segment needs two ends), '
+                f'got {self.num_smooth_points}'
+            )
+
+        if not self.epsilon > 0.0:
+            raise ValueError(f'epsilon must be > 0, got {self.epsilon}')
+
+
 class SeamExtractorOCCT:
     """Extract weld seams from OCCT shapes using face-to-face proximity detection.
 
@@ -72,15 +104,18 @@ class SeamExtractorOCCT:
     to extract exact intersection geometry.
     """
 
-    def __init__(self, shape_1: TopoDS_Shape, shape_2: TopoDS_Shape, params: dict) -> None:
+    def __init__(self, shape_1: TopoDS_Shape, shape_2: TopoDS_Shape,
+                 params: dict | None = None) -> None:
         """Initialize OCCT seam extractor.
 
         Args:
             shape_1: First OCCT shape (already transformed to world frame)
             shape_2: Second OCCT shape (already transformed to world frame)
-            params: Dictionary with keys:
-                    - num_smooth_points: Points per seam curve (default 100)
-                    - epsilon: Distance tolerance for contact detection (default 1e-3)
+            params: Optional config dict, per SeamExtractorOCCTParams. Unknown
+                keys are ignored.
+
+        Raises:
+            ValueError: If a shape is null or a parameter is out of range.
         """
         if shape_1.IsNull():
             raise ValueError('shape_1 is null')
@@ -88,14 +123,11 @@ class SeamExtractorOCCT:
             raise ValueError('shape_2 is null')
         self.shape_1 = shape_1
         self.shape_2 = shape_2
-        self.params = params
 
-        self.num_smooth_points = ParamsBase._coerce(
-            'num_smooth_points', int, params.get('num_smooth_points', 100))
-        self.tolerance = ParamsBase._coerce('epsilon', float, params.get('epsilon', 1e-3))
-        self.coincidence_samples = ParamsBase._coerce(
-            'coincidence_samples', int, params.get('coincidence_samples', 5))
-        self._validate_params()
+        cfg = SeamExtractorOCCTParams.from_dict(params)
+        self.num_smooth_points = cfg.num_smooth_points
+        self.tolerance = cfg.epsilon
+        self.coincidence_samples = cfg.coincidence_samples
 
         # Centroids for geometry-based main/secondary determination
         self.centroid_1 = self._compute_shape_centroid(shape_1)
@@ -116,28 +148,6 @@ class SeamExtractorOCCT:
             shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
         return edge_face_map
 
-    def _validate_params(self) -> None:
-        """Reject parameter values that fail late, or silently produce nothing.
-
-        Raises:
-            ValueError: If a parameter is out of range.
-        """
-        # Both sample counts divide by (count - 1); caught here rather than as a failed edge.
-        if self.coincidence_samples < 2:
-            raise ValueError(
-                'coincidence_samples must be >= 2 (a curve needs two ends), '
-                f'got {self.coincidence_samples}'
-            )
-
-        if self.num_smooth_points < 2:
-            raise ValueError(
-                'num_smooth_points must be >= 2 (a segment needs two ends), '
-                f'got {self.num_smooth_points}'
-            )
-
-        if not self.tolerance > 0.0:
-            raise ValueError(f'epsilon must be > 0, got {self.tolerance}')
-
     def extract_seams(self) -> list[Seam]:
         """Extract all weld seams from the two shapes.
 
@@ -152,9 +162,9 @@ class SeamExtractorOCCT:
             Empty list if no seams found.
 
         Raises:
-            RuntimeError: If any intersection edge cannot be processed. Every edge is attempted
-                first so the error names them all; a job missing a seam is the wrong job, not a
-                smaller one.
+            RuntimeError: If any face pair or intersection edge cannot be processed. Every edge
+                is attempted first so the error names them all; a job missing a seam is the
+                wrong job, not a smaller one.
         """
         logger.info('Starting OCCT seam extraction')
         contact_candidates = self._find_contact_face_pairs()
@@ -243,17 +253,19 @@ class SeamExtractorOCCT:
             boundary_A is not None, boundary_B is not None,
         )
 
-        is_edge_joint = (boundary_A is not None) and (boundary_B is not None)
+        on_edges = (boundary_A is not None, boundary_B is not None)
 
         geometry = self._detect_geometry(edge, points)
-        edge_seams = self._wrap_in_seams(geometry, is_edge_joint, normals_main, normals_secondary)
+        edge_seams = self._wrap_in_seams(geometry, on_edges, normals_main, normals_secondary)
 
         return edge_seams
 
     def _find_contact_face_pairs(self) -> list[dict]:
         """Find all face pairs within tolerance using BRepExtrema_DistShapeShape proximity check.
 
-        Uses BRepExtrema_DistShapeShape to find all face pairs within tolerance.
+        Raises:
+            RuntimeError: If the distance of any face pair cannot be computed. Every pair is
+                attempted first so the error names them all; a pair left out may be a seam.
         """
         faces_1 = []
         exp1 = TopExp_Explorer(self.shape_1, TopAbs_FACE)
@@ -268,30 +280,38 @@ class SeamExtractorOCCT:
             exp2.Next()
 
         contact_candidates = []
+        failures = []
 
         # Skips the exact distance solve for pairs whose inflated boxes are apart.
         boxes_1 = [self._bounding_box(face) for face in faces_1]
         boxes_2 = [self._bounding_box(face) for face in faces_2]
 
-        for face_A, box_A in zip(faces_1, boxes_1):
-            for face_B, box_B in zip(faces_2, boxes_2):
+        for i, (face_A, box_A) in enumerate(zip(faces_1, boxes_1)):
+            for j, (face_B, box_B) in enumerate(zip(faces_2, boxes_2)):
                 if box_A.IsOut(box_B):
                     continue
                 try:
                     dist_checker = BRepExtrema_DistShapeShape(face_A, face_B)
-
-                    if dist_checker.IsDone():
-                        min_dist = dist_checker.Value()
-
-                        if min_dist <= self.tolerance:
-                            contact_candidates.append({
-                                'face_A': face_A,
-                                'face_B': face_B,
-                                'distance': min_dist
-                            })
+                    if not dist_checker.IsDone():
+                        raise RuntimeError('distance solve did not finish')
                 except Exception as e:
-                    logger.debug(f'Failed to compute distance for face pair: {e}')
+                    failures.append(f'face pair ({i}, {j}): {e}')
+                    logger.error(f'Failed to compute distance for {failures[-1]}')
                     continue
+
+                min_dist = dist_checker.Value()
+                if min_dist <= self.tolerance:
+                    contact_candidates.append({
+                        'face_A': face_A,
+                        'face_B': face_B,
+                        'distance': min_dist
+                    })
+
+        if failures:
+            raise RuntimeError(
+                f'{len(failures)} face pair distance(s) could not be computed: '
+                + '; '.join(failures)
+            )
 
         logger.debug(
             f'Face-pair prefilter: {len(contact_candidates)} candidate(s) from '
@@ -307,10 +327,17 @@ class SeamExtractorOCCT:
         return box
 
     def _extract_intersection_edges(self, contact_candidates: list[dict]) -> list[dict]:
-        """Extract intersection edges from contact face pairs using BRepAlgoAPI_Common."""
-        intersection_data = []
+        """Extract intersection edges from contact face pairs using BRepAlgoAPI_Common.
 
-        for pair in contact_candidates:
+        Raises:
+            RuntimeError: If the intersection of any contact pair cannot be computed. Every pair
+                is attempted first so the error names them all; a pair within tolerance that
+                yields nothing may be a seam lost.
+        """
+        intersection_data = []
+        failures = []
+
+        for idx, pair in enumerate(contact_candidates):
             face_A = pair['face_A']
             face_B = pair['face_B']
 
@@ -322,23 +349,27 @@ class SeamExtractorOCCT:
                 common.Build()
 
                 if not common.IsDone() or common.Shape().IsNull():
-                    continue
-
-                result = common.Shape()
-
-                edge_exp = TopExp_Explorer(result, TopAbs_EDGE)
-                while edge_exp.More():
-                    edge = topods.Edge(edge_exp.Current())
-                    intersection_data.append({
-                        'edge': edge,
-                        'face_A': face_A,
-                        'face_B': face_B
-                    })
-                    edge_exp.Next()
-
+                    raise RuntimeError('boolean common did not finish')
             except Exception as e:
-                logger.debug(f'Failed to extract intersection edges from face pair: {e}')
+                failures.append(f'contact pair {idx + 1}/{len(contact_candidates)}: {e}')
+                logger.error(f'Failed to intersect {failures[-1]}')
                 continue
+
+            edge_exp = TopExp_Explorer(common.Shape(), TopAbs_EDGE)
+            while edge_exp.More():
+                edge = topods.Edge(edge_exp.Current())
+                intersection_data.append({
+                    'edge': edge,
+                    'face_A': face_A,
+                    'face_B': face_B
+                })
+                edge_exp.Next()
+
+        if failures:
+            raise RuntimeError(
+                f'{len(failures)} contact pair(s) could not be intersected: '
+                + '; '.join(failures)
+            )
 
         return self._drop_coincident_edges(intersection_data)
 
@@ -814,28 +845,25 @@ class SeamExtractorOCCT:
         elif curve_type == GeomAbs_Circle:
             circle = edge_adapted.Circle()
             center_gp = circle.Location()
-            normal_gp = circle.Axis().Direction()
 
             return {
                 'type': 'arc',
                 'points': points,
                 'center': np.array([center_gp.X(), center_gp.Y(), center_gp.Z()]),
                 'radius': circle.Radius(),
-                'normal': np.array([normal_gp.X(), normal_gp.Y(), normal_gp.Z()]),
-                'is_closed': edge_adapted.IsClosed()
             }
 
         else:
             # A false line or arc misleads the planner; PtP keeps the sampled points.
+            logger.debug(f'Curve type {curve_type} is neither line nor circle; kept as PtP')
             return {
                 'type': 'ptp',
                 'points': points,
-                'curve_type': str(curve_type),
             }
 
     def _wrap_in_seams(self,
                        geometry: dict,
-                       is_edge_joint: bool,
+                       on_edges: tuple[bool, bool],
                        normals_main: np.ndarray,
                        normals_secondary: np.ndarray
                        ) -> list[Seam]:
@@ -843,6 +871,9 @@ class SeamExtractorOCCT:
 
         A closed arc is split into two halves: the welder runs one Pilz CIRC per arc, from its
         first point to its last, and a full circle puts that goal on top of its start.
+
+        `on_edges` says, for shape_1 and shape_2 in that order, whether the seam follows a real
+        edge of that shape.
         """
         points = geometry['points']
         kind = geometry['type']
@@ -857,40 +888,43 @@ class SeamExtractorOCCT:
             halves = (slice(0, mid + 1), slice(mid, len(points)))
             return [
                 self._wrap_one_seam(
-                    dict(geometry, points=points[half], is_closed=False), is_edge_joint,
+                    dict(geometry, points=points[half]), on_edges,
                     normals_main[half], normals_secondary[half])
                 for half in halves
             ]
 
-        return [self._wrap_one_seam(geometry, is_edge_joint, normals_main, normals_secondary)]
+        return [self._wrap_one_seam(geometry, on_edges, normals_main, normals_secondary)]
 
     def _wrap_one_seam(self,
                        geometry: dict,
-                       is_edge_joint: bool,
+                       on_edges: tuple[bool, bool],
                        normals_main: np.ndarray,
                        normals_secondary: np.ndarray
                        ) -> Seam:
-        """Wrap geometry and normals into one Seam object with metadata."""
+        """Wrap geometry and normals into one Seam object with metadata.
+
+        The config keys match the mesh pipeline's (`PathCreator._wrap_in_seam`), since both end
+        up in the same welder JSON.
+        """
         points = geometry['points']
         kind = geometry['type']
-        extra: dict = {}
+        on_edge_1, on_edge_2 = on_edges
 
         if kind == 'line':
             seam = Seam(line_segment=LineSegment(start=geometry['start'], end=geometry['end']))
         elif kind == 'arc':
             seam = Seam(arc_segment=ArcSegment(
                 points=points, center=geometry['center'], radius=geometry['radius']))
-            extra = {'arc_normal': geometry['normal'], 'is_closed': geometry['is_closed']}
         else:
             seam = Seam(ptp_segment=PtPSegment(points=points))
-            extra = {'curve_type': geometry['curve_type']}
 
         seam.config.update({
-            'is_edge_joint': is_edge_joint,
+            'is_edge_joint': on_edge_1 and on_edge_2,
+            'on_edge_1': on_edge_1,
+            'on_edge_2': on_edge_2,
             'geometry_type': kind,
             'normals_main': normals_main,
             'normals_secondary': normals_secondary,
             'smoothed_points': points,
-            **extra,
         })
         return seam

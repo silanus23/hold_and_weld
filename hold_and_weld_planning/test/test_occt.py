@@ -14,6 +14,8 @@
 
 """Unit tests for the OCCT pipeline: loading, URDF assembly and seam extraction."""
 
+from hold_and_weld_planning.mesh.path_creator import PathCreator
+from hold_and_weld_planning.mesh.seam_point import SeamPoint
 from hold_and_weld_planning.occt.occt_generator import OCCTGenerator
 from hold_and_weld_planning.occt.occt_loader import OCCTLoader
 from hold_and_weld_planning.occt.seam_extractor_occt import SeamExtractorOCCT
@@ -181,3 +183,28 @@ class TestPlaneNormals:
         normal = extractor._evaluate_normal_at_point(np.zeros(3), face)
 
         np.testing.assert_allclose(normal, expected, atol=1e-12)
+
+
+class TestOutputParity:
+    """Both pipelines write the same seam config keys into the welder JSON."""
+
+    def test_occt_seams_carry_the_mesh_pipelines_keys(self):
+        mesh_points = [
+            SeamPoint(position=np.array([x, 0.0, 0.0]), normal_base=np.array([0.0, 0.0, 1.0]),
+                      normal_wall=np.array([1.0, 0.0, 0.0]), on_edge_1=False, on_edge_2=True,
+                      owner_side=2)
+            for x in np.linspace(0.0, 0.1, 20)
+        ]
+        mesh_keys = set(PathCreator().process_path(mesh_points)[0].config)
+
+        block = urdf(box_link('block', (0.1, 0.1, 0.1), (0.0, 0.0, 0.06)))
+        pin = urdf(
+            '<link name="pin"><collision><origin xyz="0 0 0.06" rpy="0 0 0"/>'
+            '<geometry><cylinder radius="0.05" length="0.1"/></geometry>'
+            '</collision></link>'
+        )
+        occt_seams = extract(PLATE, block) + extract(PLATE, pin)
+
+        assert {s.config['geometry_type'] for s in occt_seams} == {'line', 'arc'}
+        for seam in occt_seams:
+            assert set(seam.config) == mesh_keys

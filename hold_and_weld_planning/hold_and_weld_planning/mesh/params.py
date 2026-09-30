@@ -83,6 +83,24 @@ class ParamsBase:
 
 
 @dataclass
+class MeshLoadParams(ParamsBase):
+    """Tessellation for MeshLoader and ShellGenerator; every field is optional."""
+
+    # Manifold.refine splits every edge into this many pieces; 0 leaves the mesh as loaded.
+    refine_iterations: int = 16
+
+    def __post_init__(self) -> None:
+        """Reject a negative subdivision count.
+
+        Raises:
+            ValueError: If refine_iterations is negative.
+        """
+        if self.refine_iterations < 0:
+            raise ValueError(
+                f'refine_iterations must be >= 0, got {self.refine_iterations}')
+
+
+@dataclass
 class SeamExtractorMeshParams(ParamsBase):
     """Tuning for SeamExtractorMesh; every field is optional."""
 

@@ -58,8 +58,7 @@ class URDFProcessor:
             self.robot = URDF.from_xml_string(urdf_string)
             logger.info(f'Parsed URDF: {self.robot.name}')
         except Exception as e:
-            logger.error(f'Failed to parse URDF: {e}')
-            raise ValueError(f'Failed to parse URDF: {e}')
+            raise ValueError(f'Failed to parse URDF: {e}') from e
 
     def _process_xacro(self, xacro_path: Path) -> str:
         """Process xacro files; read plain .urdf files directly without xacro."""
@@ -78,5 +77,4 @@ class URDFProcessor:
                 'xacro module not installed - cannot process xacro files'
             )
         except Exception as e:
-            logger.error(f'Xacro processing failed: {e}')
-            raise ValueError(f"Failed to process xacro '{xacro_path}': {e}")
+            raise ValueError(f"Failed to process xacro '{xacro_path}': {e}") from e

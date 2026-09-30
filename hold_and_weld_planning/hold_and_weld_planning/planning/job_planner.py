@@ -25,12 +25,12 @@ import trimesh
 
 from .weld_planner import WeldPlanner, WeldPlannerParams
 from ..mesh.mesh_loader import MeshLoader
-from ..mesh.params import PathCreatorParams, SeamExtractorMeshParams
+from ..mesh.params import MeshLoadParams, PathCreatorParams, SeamExtractorMeshParams
 from ..mesh.seam_extractor_mesh import SeamExtractorMesh
 from ..mesh.shell_generator import ShellGenerator
 from ..occt.occt_generator import OCCTGenerator
 from ..occt.occt_loader import OCCTLoader
-from ..occt.seam_extractor_occt import SeamExtractorOCCT
+from ..occt.seam_extractor_occt import SeamExtractorOCCT, SeamExtractorOCCTParams
 from ..urdf.urdf_processor import URDFProcessor
 
 logger = logging.getLogger(__name__)
@@ -44,9 +44,10 @@ URDF_EXTENSIONS = {'.urdf', '.xacro'}
 # something checks it against the whole set.
 KNOWN_PARAMETERS = frozenset(
     spec.name
-    for params in (SeamExtractorMeshParams, PathCreatorParams, WeldPlannerParams)
+    for params in (MeshLoadParams, SeamExtractorMeshParams, PathCreatorParams,
+                   SeamExtractorOCCTParams, WeldPlannerParams)
     for spec in fields(params)
-) | {'epsilon', 'num_smooth_points', 'coincidence_samples', 'refine_iterations'}
+)
 
 
 class JobPlanner:
@@ -78,14 +79,14 @@ class JobPlanner:
             mode: 'auto', 'mesh', or 'occt'
 
         Raises:
-            ValueError: If parameters missing or mode invalid
+            ValueError: If the mode is invalid, or a parameter the resolved
+                pipeline reads is missing or out of range
         """
         self.main_path = main_path
         self.secondary_path = secondary_path
         self.main_world_transform = self._pose_to_matrix(main_world_pose)
         self.secondary_world_transform = self._pose_to_matrix(secondary_world_pose)
 
-        explicit_refine = 'refine_iterations' in (parameters or {})
         self.parameters = dict(parameters or {})
 
         unknown = sorted(set(self.parameters) - KNOWN_PARAMETERS)
@@ -112,21 +113,24 @@ class JobPlanner:
             # Epsilon must sit between the fit-up gap and about half the transverse face size.
             self.parameters.setdefault('epsilon', 0.002)
 
-        self.parameters.setdefault('num_smooth_points', 100)
+        # Every stage's parameters are validated here, before any geometry is loaded, so a bad
+        # value fails at once rather than after the shells are built and the seams extracted. The
+        # extractors rebuild theirs from the same dict.
+        self.weld_planner = WeldPlanner(self.parameters)
+        if self.mode == 'occt':
+            SeamExtractorOCCTParams.from_dict(self.parameters)
+        else:
+            self.refine_iterations = MeshLoadParams.from_dict(self.parameters).refine_iterations
+            SeamExtractorMeshParams.from_dict(self.parameters)
+            PathCreatorParams.from_dict(self.parameters)
 
-        self.parameters.setdefault('refine_iterations', 16)
-        if explicit_refine and self.parameters['refine_iterations'] == 0:
-            logger.warning(
-                'refine_iterations=0: seam points are mesh vertices, so a part whose edges '
-                'are long compared with the joint cannot represent where the seam starts and '
-                'ends on them, and that portion is silently dropped. Use 16-32 unless the '
-                'mesh is already fine at the joint.'
-            )
-
-        required = ['work_angle_deg', 'travel_angle_deg', 'gap_mm']
-        for param in required:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: '{param}'")
+            if 'refine_iterations' in self.parameters and self.refine_iterations == 0:
+                logger.warning(
+                    'refine_iterations=0: seam points are mesh vertices, so a part whose edges '
+                    'are long compared with the joint cannot represent where the seam starts '
+                    'and ends on them, and that portion is silently dropped. Use 16-32 unless '
+                    'the mesh is already fine at the joint.'
+                )
 
         logger.info(f'JobPlanner initialized in {self.mode.upper()} mode')
         logger.info(f'Parameters: work_angle={self.parameters["work_angle_deg"]}°, '
@@ -243,12 +247,11 @@ class JobPlanner:
                 names them all; a job missing a seam is the wrong job, not a smaller one.
         """
         logger.info('Generating weld poses...')
-        weld_planner = WeldPlanner(self.parameters)
 
         failures = []
         for idx, seam in enumerate(seams):
             try:
-                weld_planner.generate_seam(seam)
+                self.weld_planner.generate_seam(seam)
                 num_poses = len(seam.poses) if seam.poses else 0
                 logger.debug(f'Seam {idx}: {num_poses} pose(s) generated')
             except Exception as e:
@@ -300,7 +303,7 @@ class JobPlanner:
 
     def _load_input_mesh(self, path: str, world_transform: np.ndarray) -> trimesh.Trimesh:
         """Load URDF or STL as trimesh and apply world transform."""
-        refine_iterations = self.parameters['refine_iterations']
+        refine_iterations = self.refine_iterations
 
         if Path(path).suffix.lower() == '.stl':
             loader = MeshLoader(

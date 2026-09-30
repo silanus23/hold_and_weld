@@ -98,7 +98,8 @@ class OCCTGenerator:
                 workpiece, it is the wrong one: seam extraction would go on to
                 weld the hole the missing link left, so this cannot be
                 downgraded to a skip.
-            ValueError: If no link has collision geometry.
+            ValueError: If no link has collision geometry, or a collision
+                element is unsupported or malformed.
         """
         link_shapes = []
 
@@ -120,11 +121,13 @@ class OCCTGenerator:
 
             try:
                 link_shape = self.create_link_shape(link)
+            except (ValueError, RuntimeError):
+                # Already name the link; ValueError stays one so a malformed spec reads as config.
+                raise
             except Exception as e:
-                logger.error(f'Failed to create shape for link "{link.name}": {e}')
                 raise RuntimeError(
                     f'Failed to create shape for link "{link.name}": {e}'
-                )
+                ) from e
 
             link_shapes.append(link_shape)
             processed_links += 1
@@ -175,6 +178,7 @@ class OCCTGenerator:
 
         Raises:
             ValueError: If geometry type is unsupported or has invalid dimensions
+            RuntimeError: If the link's collision shapes cannot be fused
         """
         collisions = (
             link.collisions
@@ -247,11 +251,7 @@ class OCCTGenerator:
             shapes.append(transformed_shape)
 
         if len(shapes) == 0:
-            logger.warning(f'Link "{link.name}" produced no valid shapes')
             raise ValueError(f'Link "{link.name}" has no valid collision geometry')
 
         logger.debug(f'Fusing {len(shapes)} shape(s) for link "{link.name}"')
-        try:
-            return self._fuse(shapes, f'shapes for link "{link.name}"')
-        except RuntimeError as e:
-            raise ValueError(str(e))
+        return self._fuse(shapes, f'shapes for link "{link.name}"')

@@ -27,6 +27,7 @@ import numpy as np
 from numpy.typing import NDArray
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
 
+from .params import MeshLoadParams
 from ..utils.transforms import link_poses, origin_to_matrix
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class ShellGenerator:
         self,
         robot_object: Any,
         world_transform: NDArray | None = None,
-        refine_iterations: int = 32,
+        refine_iterations: int = MeshLoadParams.refine_iterations,
     ) -> None:
         """Initialize shell generator.
 
@@ -51,7 +52,7 @@ class ShellGenerator:
             robot_object: The self.robot object from URDFProcessor
             world_transform: The global starting pose matrix (4x4). Defaults
                 to identity.
-            refine_iterations: Number of mesh subdivision iterations (default: 32)
+            refine_iterations: Pieces each edge is split into; see MeshLoadParams
 
         Raises:
             ValueError: If world_transform is not 4x4, or the URDF's joint
@@ -68,8 +69,8 @@ class ShellGenerator:
                 f'world_transform must be 4x4, got {world_transform.shape}'
             )
 
-        if refine_iterations < 0:
-            raise ValueError(f'refine_iterations must be non-negative, got {refine_iterations}')
+        refine_iterations = MeshLoadParams.from_dict(
+            {'refine_iterations': refine_iterations}).refine_iterations
 
         self.robot = robot_object
         self.world_transform = world_transform
@@ -94,7 +95,8 @@ class ShellGenerator:
                 missing a link is not a smaller workpiece, it is the wrong
                 one: seam extraction would go on to weld the hole the
                 missing link left, so this cannot be downgraded to a skip.
-            ValueError: If no link has collision geometry.
+            ValueError: If no link has collision geometry, or a collision
+                element is unsupported or malformed.
         """
         logger.info(f'Creating shells for {len(self.robot.links)} links')
 
@@ -114,15 +116,7 @@ class ShellGenerator:
                 f"Processing link '{link.name}' with {len(collisions)} collision element(s)"
             )
 
-            try:
-                link_manifold = self.create_link_shell(link)
-            except Exception as e:
-                logger.error(f"Failed to create shell for link '{link.name}': {e}")
-                raise RuntimeError(
-                    f"Failed to create shell for link '{link.name}': {e}"
-                )
-
-            self.total_manifold += link_manifold
+            self.total_manifold += self.create_link_shell(link)
             processed_count += 1
 
         # An empty manifold is otherwise only caught downstream, as a misleading "not watertight".
@@ -224,9 +218,8 @@ class ShellGenerator:
                 # Raises.
                 raise
             except Exception as e:
-                logger.error(f"Failed to process collision {idx} in link '{link.name}': {e}")
                 raise RuntimeError(
                     f"Failed to process collision {idx} in link '{link.name}': {e}"
-                )
+                ) from e
 
         return link_combined

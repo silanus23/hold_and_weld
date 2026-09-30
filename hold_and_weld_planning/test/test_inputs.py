@@ -21,6 +21,7 @@ from hold_and_weld_planning.core.line_segment import LineSegment
 from hold_and_weld_planning.core.seam import Seam
 from hold_and_weld_planning.mesh.mesh_loader import MeshLoader
 from hold_and_weld_planning.mesh.shell_generator import ShellGenerator
+from hold_and_weld_planning.occt import seam_extractor_occt
 from hold_and_weld_planning.occt.occt_generator import OCCTGenerator
 from hold_and_weld_planning.occt.seam_extractor_occt import SeamExtractorOCCT
 from hold_and_weld_planning.planning import job_planner
@@ -108,14 +109,19 @@ class TestGenerators:
         with pytest.raises(ValueError, match='collision'):
             OCCTGenerator(NO_COLLISION).create_shape_for_all_links()
 
+    @pytest.mark.parametrize('build', [
+        lambda robot: ShellGenerator(robot, refine_iterations=0).create_shells_for_all_links(),
+        lambda robot: OCCTGenerator(robot).create_shape_for_all_links(),
+    ], ids=['mesh', 'occt'])
     @pytest.mark.parametrize('size', ['0 1 1', '1 -1 1'])
-    def test_occt_generator_refuses_a_non_positive_box(self, size):
+    def test_a_non_positive_box_is_a_value_error(self, build, size):
+        # ValueError is what the CLI reports as a configuration error rather than a crash.
         robot = URDF.from_xml_string(
             '<robot name="part"><link name="base"><collision><geometry>'
             f'<box size="{size}"/></geometry></collision></link></robot>'
         )
-        with pytest.raises(RuntimeError, match='positive'):
-            OCCTGenerator(robot).create_shape_for_all_links()
+        with pytest.raises(ValueError, match='positive'):
+            build(robot)
 
 
 class TestConfig:
@@ -175,6 +181,18 @@ class TestJobLevelFailures:
         def fail(edge_data):
             raise RuntimeError('boom')
         monkeypatch.setattr(extractor, '_process_single_edge', fail)
+
+        with pytest.raises(RuntimeError, match='boom'):
+            extractor.extract_seams()
+
+    def test_an_occt_face_pair_that_fails_fails_the_extraction(self, monkeypatch):
+        plate = BRepPrimAPI_MakeBox(1.0, 1.0, 0.1).Shape()
+        block = BRepPrimAPI_MakeBox(gp_Pnt(0.25, 0.25, 0.1), 0.5, 0.5, 0.5).Shape()
+        extractor = SeamExtractorOCCT(plate, block, {'epsilon': 1e-3})
+
+        def fail(*args):
+            raise RuntimeError('boom')
+        monkeypatch.setattr(seam_extractor_occt, 'BRepAlgoAPI_Common', fail)
 
         with pytest.raises(RuntimeError, match='boom'):
             extractor.extract_seams()
