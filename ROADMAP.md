@@ -109,6 +109,9 @@ to weld seams.
 ### Action Servers
 
 - Worker thread watchdog timeout.
+- Gripper settle from joint states instead of `finger_settle_sec`: after the controller
+  reports success, wait until the finger velocities are near zero (covers both reaching
+  the open limit and stalling on the part), with a timeout.
 - `detach_object` wiring in `run_job` once re-grasp workflow is defined.
 - ACM collision allowance per object instead of per link — required to handle complex
   multi-primitive objects correctly where per-link granularity is insufficient.
@@ -118,6 +121,9 @@ to weld seams.
 - Replace `move_to_pose` with proper implementation.
 - Limit extra axis movement by parameters.
 - Planning scene coordinator to make scene management event driven.
+- Seam-level resume for the welder: report completed seams in the result and accept an
+  optional start/skip field in the goal, so an interrupted job continues with a new goal
+  that re-approaches from standoff (a stop still ends the goal; no in-job pause).
 
 ### Coordinator
 

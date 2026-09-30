@@ -20,15 +20,17 @@ cartesian_path_threshold: 0.95
 cartesian_step_size: 0.01
 velocity_scaling: 0.3
 manipulability_threshold: 1e-6
+goal_position_tolerance: 0.001     # OMPL approach/retract pose goal [m]
+goal_orientation_tolerance: 0.01   # OMPL approach/retract pose goal [rad]
 
-# Retry parameters
-max_ompl_planning_attempts: 1
-max_approach_validation_retries: 3
-max_cartesian_retries: 2
-use_approach_validation: false
+# Retry parameters. Only planning is retried: once a motion has executed (or failed
+# executing) the torch is off the standoff, and the job moves on instead of replaying it.
+max_ompl_planning_attempts: 1  # OMPL plans per approach/retract goal
+max_cartesian_retries: 2       # planning attempts per Pilz LIN/CIRC motion (and ptp path)
+use_approach_validation: false  # LEGACY, superseded by use_configuration_finder below
 
-# Approach validator (used when use_approach_validation is true and the configuration
-# finder is off). Tolerances bound how far each IK solution may land from its seam
+# Approach validator (LEGACY; used only when use_approach_validation is true and the
+# configuration finder is off). Tolerances bound how far each IK solution may land from its seam
 # point. Defaults are the historical values and are loose for welding.
 approach_validator:
   first_point_tol_pos: 0.20    # first seam point, solved from the OMPL approach config [m]

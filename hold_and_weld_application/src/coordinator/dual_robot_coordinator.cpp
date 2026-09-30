@@ -36,29 +36,21 @@ DualRobotCoordinator::on_configure(const rclcpp_lifecycle::State & /*state*/)
   auto_start_ = this->get_parameter("auto_start").as_bool();
   RCLCPP_INFO(logger_, "Auto-start: %s", auto_start_ ? "enabled" : "disabled");
 
-  robot1_controller_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
-    this->get_node_base_interface(),
-    this->get_node_graph_interface(),
-    this->get_node_logging_interface(),
-    this->get_node_waitables_interface(),
-    "/robot1_arm_controller/follow_joint_trajectory");
-
-  robot2_controller_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
-    this->get_node_base_interface(),
-    this->get_node_graph_interface(),
-    this->get_node_logging_interface(),
-    this->get_node_waitables_interface(),
-    "/robot2_arm_controller/follow_joint_trajectory");
-
-  std::string gripper_controller_topic =
+  const std::string gripper_controller_topic =
     this->get_parameter("gripper_controller_topic").as_string();
+  const std::string gripper_controller =
+    hold_and_weld::controller_name_from_action_topic(gripper_controller_topic);
+  if (gripper_controller.empty()) {
+    RCLCPP_ERROR(logger_, "gripper_controller_topic '%s' names no controller "
+      "(expected /<controller>/<action>)", gripper_controller_topic.c_str());
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+  }
+  // An inactive JointTrajectoryController already serves its action (see
+  // is_controller_active() in utils.hpp), so readiness asks controller_manager for "active".
+  required_controllers_ = {"robot1_arm_controller", "robot2_arm_controller", gripper_controller};
 
-  gripper_controller_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
-    this->get_node_base_interface(),
-    this->get_node_graph_interface(),
-    this->get_node_logging_interface(),
-    this->get_node_waitables_interface(),
-    gripper_controller_topic);
+  list_controllers_client_ = this->create_client<controller_manager_msgs::srv::ListControllers>(
+    "/controller_manager/list_controllers");
 
   gripper_client_ = rclcpp_action::create_client<TriggerGripper>(
     this->get_node_base_interface(),
@@ -100,15 +92,18 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 DualRobotCoordinator::on_activate(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(logger_, "Activating dual robot coordinator");
-  is_active_ = true;
-  system_ready_ = false;
-  sequence_started_ = false;
-  sequence_running_ = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    is_active_ = true;
+    system_ready_ = false;
+    sequence_started_ = false;
+    sequence_running_ = false;
+  }
+  readiness_request_in_flight_ = false;
 
   readiness_timer_ = this->create_wall_timer(
     std::chrono::milliseconds(500),
     std::bind(&DualRobotCoordinator::check_readiness, this));
-
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
@@ -117,24 +112,7 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 DualRobotCoordinator::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(logger_, "Deactivating dual robot coordinator");
-  is_active_ = false;
-
-  if (readiness_timer_) {
-    readiness_timer_->cancel();
-    readiness_timer_.reset();
-  }
-
-  // Cancel any in-flight goals. Result callbacks guard against is_active_ being false.
-  if (gripper_client_) {
-    gripper_client_->async_cancel_all_goals();
-  }
-  if (welder_client_) {
-    welder_client_->async_cancel_all_goals();
-  }
-
-  sequence_running_ = false;
-  sequence_started_ = false;
-
+  stop_sequence();
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
@@ -144,9 +122,7 @@ DualRobotCoordinator::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   RCLCPP_INFO(logger_, "Cleaning up dual robot coordinator");
   try {
     if (readiness_timer_) {readiness_timer_.reset();}
-    if (robot1_controller_client_) {robot1_controller_client_.reset();}
-    if (robot2_controller_client_) {robot2_controller_client_.reset();}
-    if (gripper_controller_client_) {gripper_controller_client_.reset();}
+    if (list_controllers_client_) {list_controllers_client_.reset();}
     if (gripper_client_) {gripper_client_.reset();}
     if (welder_client_) {welder_client_.reset();}
     if (trigger_service_) {trigger_service_.reset();}
@@ -161,11 +137,11 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 DualRobotCoordinator::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(logger_, "Shutting down dual robot coordinator");
+  // Shutdown can come straight from ACTIVE; do not leave the arms running.
+  stop_sequence();
   try {
     if (readiness_timer_) {readiness_timer_.reset();}
-    if (robot1_controller_client_) {robot1_controller_client_.reset();}
-    if (robot2_controller_client_) {robot2_controller_client_.reset();}
-    if (gripper_controller_client_) {gripper_controller_client_.reset();}
+    if (list_controllers_client_) {list_controllers_client_.reset();}
     if (gripper_client_) {gripper_client_.reset();}
     if (welder_client_) {welder_client_.reset();}
     if (trigger_service_) {trigger_service_.reset();}
@@ -176,21 +152,95 @@ DualRobotCoordinator::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
+void DualRobotCoordinator::stop_sequence()
+{
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    is_active_ = false;
+    // Callbacks of the goals cancelled below now belong to an old generation.
+    ++sequence_generation_;
+    sequence_running_ = false;
+    sequence_started_ = false;
+  }
+
+  if (readiness_timer_) {
+    readiness_timer_->cancel();
+    readiness_timer_.reset();
+  }
+
+  if (gripper_client_) {
+    gripper_client_->async_cancel_all_goals();
+  }
+  if (welder_client_) {
+    welder_client_->async_cancel_all_goals();
+  }
+}
+
+bool DualRobotCoordinator::is_current(uint64_t generation, const char * what) const
+{
+  if (!is_active_) {
+    RCLCPP_WARN(logger_, "%s received after deactivation — ignoring", what);
+    return false;
+  }
+  if (generation != sequence_generation_) {
+    RCLCPP_WARN(logger_, "%s belongs to an earlier sequence — ignoring", what);
+    return false;
+  }
+  return true;
+}
+
+void DualRobotCoordinator::abort_sequence(uint64_t generation)
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (generation != sequence_generation_) {
+    return;
+  }
+  sequence_running_ = false;
+  sequence_started_ = false;
+}
+
 void DualRobotCoordinator::check_readiness()
 {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    if (!is_active_ || sequence_started_) {
+    if (!is_active_ || sequence_started_ || system_ready_) {
       return;
     }
   }
+  // One request at a time; the answer arrives in handle_controller_list(), so the timer
+  // never blocks the executor.
+  if (readiness_request_in_flight_.exchange(true)) {
+    return;
+  }
+  if (!list_controllers_client_->service_is_ready()) {
+    RCLCPP_DEBUG(logger_, "Waiting for controller_manager/list_controllers");
+    readiness_request_in_flight_ = false;
+    return;
+  }
+  auto request = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
+  list_controllers_client_->async_send_request(
+    request, std::bind(&DualRobotCoordinator::handle_controller_list, this,
+    std::placeholders::_1));
+}
 
-  bool controllers_ready = check_controllers_ready();
+void DualRobotCoordinator::handle_controller_list(
+  rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedFuture future)
+{
+  readiness_request_in_flight_ = false;
+  const auto response = future.get();
+
+  bool controllers_ready = true;
+  for (const auto & name : required_controllers_) {
+    if (!hold_and_weld::is_controller_active(response->controller, name)) {
+      RCLCPP_DEBUG(logger_, "Waiting for %s to become active", name.c_str());
+      controllers_ready = false;
+    }
+  }
 
   bool should_execute = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    if (controllers_ready && !system_ready_) {
+    if (is_active_ && controllers_ready && !system_ready_) {
       system_ready_ = true;
       RCLCPP_INFO(logger_, "All controllers are ready!");
 
@@ -210,28 +260,6 @@ void DualRobotCoordinator::check_readiness()
   }
 }
 
-bool DualRobotCoordinator::check_controllers_ready()
-{
-  bool robot1_ready =
-    robot1_controller_client_->wait_for_action_server(std::chrono::milliseconds(100));
-  bool robot2_ready =
-    robot2_controller_client_->wait_for_action_server(std::chrono::milliseconds(100));
-  bool gripper_ready =
-    gripper_controller_client_->wait_for_action_server(std::chrono::milliseconds(100));
-
-  if (!robot1_ready) {
-    RCLCPP_DEBUG(logger_, "Waiting for robot1_arm_controller");
-  }
-  if (!robot2_ready) {
-    RCLCPP_DEBUG(logger_, "Waiting for robot2_arm_controller");
-  }
-  if (!gripper_ready) {
-    RCLCPP_DEBUG(logger_, "Waiting for robot1_gripper_controller");
-  }
-
-  return robot1_ready && robot2_ready && gripper_ready;
-}
-
 void DualRobotCoordinator::handle_trigger_service(
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*request*/,
   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
@@ -248,7 +276,7 @@ void DualRobotCoordinator::handle_trigger_service(
 
     if (!system_ready_) {
       response->success = false;
-      response->message = "System is not ready yet (controllers not available)";
+      response->message = "System is not ready yet (controllers not active)";
       RCLCPP_WARN(logger_, "Trigger rejected: system not ready");
       return;
     }
@@ -277,6 +305,7 @@ void DualRobotCoordinator::handle_trigger_service(
 
 void DualRobotCoordinator::execute_sequence()
 {
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (sequence_started_) {
@@ -286,6 +315,7 @@ void DualRobotCoordinator::execute_sequence()
 
     sequence_started_ = true;
     sequence_running_ = true;
+    generation = ++sequence_generation_;
   }
 
   if (readiness_timer_) {
@@ -294,25 +324,36 @@ void DualRobotCoordinator::execute_sequence()
 
   RCLCPP_INFO(logger_, "Starting dual-robot coordinated sequence");
 
-  step_gripper_job();
+  step_gripper_job(generation);
 }
 
-void DualRobotCoordinator::step_gripper_job()
+void DualRobotCoordinator::step_gripper_job(uint64_t generation)
 {
   RCLCPP_INFO(logger_, "[Step 1/2] Executing gripper job");
 
   auto goal_msg = TriggerGripper::Goal();
   auto send_goal_options = rclcpp_action::Client<TriggerGripper>::SendGoalOptions();
 
+  // Without this, a rejected goal never produces a result and the sequence stays
+  // "running" forever.
+  send_goal_options.goal_response_callback =
+    [this, generation](const GoalHandleTriggerGripper::SharedPtr & goal_handle) {
+      if (!goal_handle && is_current(generation, "Gripper goal response")) {
+        RCLCPP_ERROR(logger_, "Gripper goal rejected — sequence aborted");
+        abort_sequence(generation);
+      }
+    };
+
   send_goal_options.feedback_callback = std::bind(
     &DualRobotCoordinator::gripper_feedback_callback, this,
     std::placeholders::_1, std::placeholders::_2);
 
-  send_goal_options.result_callback = std::bind(
-    &DualRobotCoordinator::gripper_result_callback, this,
-    std::placeholders::_1);
+  send_goal_options.result_callback =
+    [this, generation](const GoalHandleTriggerGripper::WrappedResult & result) {
+      gripper_result_callback(result, generation);
+    };
 
-  // Future discarded - continuation handled via result_callback.
+  // Future discarded - continuation handled via the callbacks.
   gripper_client_->async_send_goal(goal_msg, send_goal_options);
 }
 
@@ -326,21 +367,21 @@ void DualRobotCoordinator::gripper_feedback_callback(
 }
 
 void DualRobotCoordinator::gripper_result_callback(
-  const GoalHandleTriggerGripper::WrappedResult & result)
+  const GoalHandleTriggerGripper::WrappedResult & result, uint64_t generation)
 {
-  if (!is_active_) {
-    RCLCPP_WARN(logger_, "Gripper result received after deactivation — ignoring");
+  if (!is_current(generation, "Gripper result")) {
     return;
   }
 
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     RCLCPP_INFO(logger_, "Gripper job completed successfully");
-    step_welder_job();
+    step_welder_job(generation);
     return;
   }
 
+  const char * message = result.result ? result.result->message.c_str() : "";
   if (result.code == rclcpp_action::ResultCode::ABORTED) {
-    RCLCPP_ERROR(logger_, "Gripper job aborted: %s", result.result->message.c_str());
+    RCLCPP_ERROR(logger_, "Gripper job aborted: %s", message);
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
     RCLCPP_WARN(logger_, "Gripper job canceled");
   } else {
@@ -348,29 +389,34 @@ void DualRobotCoordinator::gripper_result_callback(
   }
 
   RCLCPP_ERROR(logger_, "Sequence aborted");
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    sequence_running_ = false;
-    sequence_started_ = false;
-  }
+  abort_sequence(generation);
 }
 
-void DualRobotCoordinator::step_welder_job()
+void DualRobotCoordinator::step_welder_job(uint64_t generation)
 {
   RCLCPP_INFO(logger_, "[Step 2/2] Executing welder job");
 
   auto goal_msg = TriggerWelder::Goal();
   auto send_goal_options = rclcpp_action::Client<TriggerWelder>::SendGoalOptions();
 
+  send_goal_options.goal_response_callback =
+    [this, generation](const GoalHandleTriggerWelder::SharedPtr & goal_handle) {
+      if (!goal_handle && is_current(generation, "Welder goal response")) {
+        RCLCPP_ERROR(logger_, "Welder goal rejected — sequence aborted");
+        abort_sequence(generation);
+      }
+    };
+
   send_goal_options.feedback_callback = std::bind(
     &DualRobotCoordinator::welder_feedback_callback, this,
     std::placeholders::_1, std::placeholders::_2);
 
-  send_goal_options.result_callback = std::bind(
-    &DualRobotCoordinator::welder_result_callback, this,
-    std::placeholders::_1);
+  send_goal_options.result_callback =
+    [this, generation](const GoalHandleTriggerWelder::WrappedResult & result) {
+      welder_result_callback(result, generation);
+    };
 
-  // Future discarded - completion handled via result_callback.
+  // Future discarded - completion handled via the callbacks.
   welder_client_->async_send_goal(goal_msg, send_goal_options);
 }
 
@@ -386,8 +432,13 @@ void DualRobotCoordinator::welder_feedback_callback(
 }
 
 void DualRobotCoordinator::welder_result_callback(
-  const GoalHandleTriggerWelder::WrappedResult & result)
+  const GoalHandleTriggerWelder::WrappedResult & result, uint64_t generation)
 {
+  if (!is_current(generation, "Welder result")) {
+    return;
+  }
+
+  const char * message = result.result ? result.result->message.c_str() : "";
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -395,31 +446,20 @@ void DualRobotCoordinator::welder_result_callback(
     }
     RCLCPP_INFO(logger_, "Welder job completed successfully");
     RCLCPP_INFO(logger_, "Dual-robot sequence completed successfully!");
-  } else if (result.code == rclcpp_action::ResultCode::ABORTED) {
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      sequence_running_ = false;
-      sequence_started_ = false;
-    }
-    RCLCPP_ERROR(logger_, "Welder job aborted: %s", result.result->message.c_str());
+    return;
+  }
+
+  if (result.code == rclcpp_action::ResultCode::ABORTED) {
+    RCLCPP_ERROR(logger_, "Welder job aborted: %s", message);
     RCLCPP_ERROR(logger_, "Sequence failed");
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      sequence_running_ = false;
-      sequence_started_ = false;
-    }
     RCLCPP_WARN(logger_, "Welder job canceled");
     RCLCPP_WARN(logger_, "Sequence aborted");
   } else {
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      sequence_running_ = false;
-      sequence_started_ = false;
-    }
     RCLCPP_ERROR(logger_, "Welder job failed with unknown result code");
     RCLCPP_ERROR(logger_, "Sequence failed");
   }
+  abort_sequence(generation);
 }
 
 }  // namespace application

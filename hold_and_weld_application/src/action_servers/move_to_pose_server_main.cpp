@@ -19,13 +19,30 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
-  auto move_to_pose_server = std::make_shared<hold_and_weld::application::MoveToPoseActionServer>();
+  std::shared_ptr<hold_and_weld::application::MoveToPoseActionServer> move_to_pose_server;
+  try {
+    move_to_pose_server = std::make_shared<hold_and_weld::application::MoveToPoseActionServer>();
+  } catch (const std::exception & e) {
+    RCLCPP_FATAL(rclcpp::get_logger("application"), "move_to_pose_server: %s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
+
+  // Ctrl-C shuts the context down, and only then does spin() return, so stopping the
+  // arm after spin() would be too late for stop() to reach the controller. Pre-shutdown
+  // callbacks run before the context is invalidated, while the executor still spins.
+  std::weak_ptr<hold_and_weld::application::MoveToPoseActionServer> weak_node =
+    move_to_pose_server;
+  rclcpp::contexts::get_global_default_context()->add_pre_shutdown_callback(
+    [weak_node]() {
+      if (auto locked = weak_node.lock()) {
+        locked->manual_shutdown();
+      }
+    });
 
   rclcpp::spin(move_to_pose_server);
 
-  // manual_shutdown() must be called while the ROS context is still valid:
-  // it calls stop() on all cached move groups so the controller can process
-  // the cancel before the context is torn down by rclcpp::shutdown().
+  // No-op after the pre-shutdown callback; covers spin() returning for another reason.
   move_to_pose_server->manual_shutdown();
 
   rclcpp::shutdown();

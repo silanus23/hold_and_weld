@@ -19,7 +19,7 @@
 
 #include <controller_manager_msgs/msg/controller_state.hpp>
 
-#include "hold_and_weld_application/action_servers/controller_readiness.hpp"
+#include "hold_and_weld_application/utils.hpp"
 
 using controller_manager_msgs::msg::ControllerState;
 using hold_and_weld::controller_name_from_action_topic;

@@ -21,6 +21,7 @@ find_package(moveit_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_eigen REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(urdf REQUIRED)
@@ -82,8 +83,6 @@ target_link_libraries(hold_and_weld_kinematics
 
 add_library(hold_and_weld_action_servers SHARED
   src/action_servers/gripper_action_server.cpp
-  src/action_servers/controller_readiness.cpp
-  src/action_servers/gripper_aperture.cpp
   src/action_servers/welder_action_server.cpp
   src/action_servers/move_to_pose_action_server.cpp
 )
@@ -101,6 +100,7 @@ ament_target_dependencies(hold_and_weld_action_servers
   moveit_ros_planning_interface
   tf2
   tf2_geometry_msgs
+  tf2_eigen
   ament_index_cpp
 )
 
@@ -247,6 +247,13 @@ if(BUILD_TESTING)
     test/gripper_aperture_test.cpp
   )
   target_link_libraries(gripper_aperture_test
+    hold_and_weld_action_servers
+  )
+
+  ament_add_gtest(weld_seam_loader_test
+    test/weld_seam_loader_test.cpp
+  )
+  target_link_libraries(weld_seam_loader_test
     hold_and_weld_action_servers
   )
 

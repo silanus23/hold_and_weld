@@ -61,6 +61,7 @@ enum class WalkFailure
   kJointLimit,
   kLowManipulability,
   kJointStep,
+  kStartOffPath,
 };
 
 /**
@@ -135,7 +136,9 @@ public:
    * @param segment_type "line", "arc", or anything else for the dense-waypoint fallback
    * @param approach_offset Standoff distance used by the approach move [m]
    * @param q_home Home configuration; seeds branch generation and the proximity term
-   * @return Feasible candidates by descending score, then infeasible ones by index
+   * @return Feasible candidates by descending score, then infeasible ones by index. A
+   *         start whose FK misses the approach pose (a wrist copy that is not an exact
+   *         twin, e.g. a non-spherical wrist) is infeasible with kStartOffPath.
    */
   std::vector<Candidate> find(
     const std::vector<Eigen::Isometry3d> & seam,

@@ -69,6 +69,7 @@ std::string to_string(WalkFailure failure)
     case WalkFailure::kJointLimit: return "joint limit";
     case WalkFailure::kLowManipulability: return "low manipulability";
     case WalkFailure::kJointStep: return "joint step (branch jump)";
+    case WalkFailure::kStartOffPath: return "start config not at approach pose";
   }
   return "unknown";
 }
@@ -405,7 +406,13 @@ std::vector<Candidate> ConfigurationFinder::find(
     Candidate c;
     c.index = i;
     c.q_start = starts[i];
-    c.walk = walk(starts[i], path);
+    try {
+      c.walk = walk(starts[i], path);
+    } catch (const std::invalid_argument &) {
+      // walk() rejects a start that is not at path[0]; that start cannot weld this seam.
+      c.walk.feasible = false;
+      c.walk.failure = WalkFailure::kStartOffPath;
+    }
     c.home_distance = (starts[i] - q_home).norm();
     candidates.push_back(c);
   }

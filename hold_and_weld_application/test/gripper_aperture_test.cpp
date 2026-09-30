@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -26,7 +27,9 @@ using hold_and_weld::resolve_gripper_apertures;
 
 namespace
 {
-/// Finger limits of a 2F-140 stand-in: 0.140 m stroke split across two fingers.
+/**
+ * Finger limits of a 2F-140 stand-in: 0.140 m stroke split across two fingers.
+ */
 std::vector<FingerJointBounds> robotiq_2f140_fingers()
 {
   return {
@@ -118,4 +121,30 @@ TEST(GripperAperture, RejectsEmptyFingerList)
 {
   EXPECT_THROW(
     resolve_gripper_apertures({}, std::nullopt, std::nullopt), std::invalid_argument);
+}
+
+// NaN compares false against both limits, so a range check written as "outside"
+// lets it through to the controller.
+TEST(GripperAperture, RejectsNaNPosition)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(
+    resolve_gripper_apertures(robotiq_2f140_fingers(), nan, std::nullopt),
+    std::invalid_argument);
+  EXPECT_THROW(
+    resolve_gripper_apertures(robotiq_2f140_fingers(), std::nullopt, nan),
+    std::invalid_argument);
+}
+
+// A gripper that "opens" to its closed position (or past it) never releases the part;
+// mirrored finger sign conventions produce exactly this from the tightest-bound rule.
+TEST(GripperAperture, RejectsOpenNotWiderThanClose)
+{
+  EXPECT_THROW(
+    resolve_gripper_apertures(robotiq_2f140_fingers(), 0.03, 0.05), std::invalid_argument);
+  const std::vector<FingerJointBounds> mirrored = {
+    {"left", 0.0, 0.07},
+    {"right", -0.07, 0.0}};
+  EXPECT_THROW(
+    resolve_gripper_apertures(mirrored, std::nullopt, std::nullopt), std::invalid_argument);
 }

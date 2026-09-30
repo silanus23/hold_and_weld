@@ -15,21 +15,27 @@
 #ifndef HOLD_AND_WELD_APPLICATION__UTILS_HPP_
 #define HOLD_AND_WELD_APPLICATION__UTILS_HPP_
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <controller_manager_msgs/msg/controller_state.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 
 namespace hold_and_weld
 {
 
 /**
  * @struct WeldSeam
- * @brief Represents a welding seam with geometric and pose information.
+ * @brief One seam of a weld path JSON, as parsed by parse_weld_seams().
+ *
+ * Every position is in the world (planning) frame, in metres.
  */
 struct WeldSeam
 {
@@ -39,11 +45,67 @@ struct WeldSeam
   std::array<double, 3> end = {0.0, 0.0, 0.0};
   std::vector<geometry_msgs::msg::Pose> poses;
   size_t num_poses = 0;
-  std::string segment_type;  // "line", "arc", "ptp", or "" if absent (legacy JSON)
+  std::string segment_type;
   std::array<double, 3> center = {0.0, 0.0, 0.0};
   double radius = 0.0;
-  bool has_arc_geometry = false;  // true only when center/radius were present in JSON
+  bool has_arc_geometry = false;
 };
+
+/**
+ * @brief End a goal the worker will not (or can no longer) run to completion.
+ *
+ * Reports CANCELED if the client asked to cancel, ABORTED otherwise, with
+ * @p message as the result message. A goal that already reached a terminal state is
+ * left alone. Never throws: it runs on error and shutdown paths.
+ *
+ * @tparam ActionT Action type; its Result must have `success` and `message`
+ * @param goal_handle Goal to end
+ * @param message Reason reported to the client
+ * @param logger ROS logger to use
+ */
+template<typename ActionT>
+void end_goal_early(
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> & goal_handle,
+  const std::string & message,
+  const rclcpp::Logger & logger)
+{
+  try {
+    if (!goal_handle || !goal_handle->is_active()) {
+      return;
+    }
+    auto result = std::make_shared<typename ActionT::Result>();
+    result->success = false;
+    result->message = message;
+    if (goal_handle->is_canceling()) {
+      goal_handle->canceled(result);
+    } else {
+      goal_handle->abort(result);
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger, "Failed to end goal (%s): %s", message.c_str(), e.what());
+  }
+}
+
+/**
+ * @brief Convert a duration parameter to a type wait_for() and sleep_for() accept.
+ * @param seconds Duration [s]
+ * @return The same duration in nanoseconds
+ */
+inline std::chrono::nanoseconds to_nanoseconds(double seconds)
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::duration<double>(seconds));
+}
+
+/**
+ * @brief Check an auto_trigger_delay_sec parameter value.
+ * @param delay_sec Delay before the auto-trigger fires [s]
+ * @return true if it is finite, non-negative and at most one hour
+ */
+inline bool is_valid_auto_trigger_delay(double delay_sec)
+{
+  return std::isfinite(delay_sec) && delay_sec >= 0.0 && delay_sec <= 3600.0;
+}
 
 /**
  * @brief Wait for a ROS2 service to become available with a timeout and periodic logging.
@@ -131,6 +193,44 @@ bool wait_for_action_server(
     }
   }
   return true;
+}
+
+/**
+ * @brief Controller name owning an action topic: the segment before the action name,
+ *        so namespaces are skipped, e.g.
+ *        "/cell/robot1_gripper_controller/follow_joint_trajectory" -> "robot1_gripper_controller".
+ * @param action_topic Action topic of a controller, "/<ns...>/<controller>/<action>".
+ * @return The controller name, or empty if the topic has no controller segment.
+ */
+inline std::string controller_name_from_action_topic(const std::string & action_topic)
+{
+  const auto action_slash = action_topic.find_last_of('/');
+  if (action_slash == std::string::npos || action_slash == 0) {
+    return "";
+  }
+  const auto name_slash = action_topic.find_last_of('/', action_slash - 1);
+  const auto start = name_slash == std::string::npos ? 0 : name_slash + 1;
+  return action_topic.substr(start, action_slash - start);
+}
+
+/**
+ * @brief Whether controller @p name is listed and in the "active" state.
+ *
+ * A configured but inactive JointTrajectoryController already serves its action
+ * and accepts goals, then reports them succeeded without moving, so goals must
+ * wait for "active".
+ *
+ * @param controllers Controllers as listed by controller_manager/list_controllers.
+ * @param name Controller to look for.
+ * @return true if @p name is listed with state "active".
+ */
+inline bool is_controller_active(
+  const std::vector<controller_manager_msgs::msg::ControllerState> & controllers,
+  const std::string & name)
+{
+  return std::any_of(controllers.begin(), controllers.end(), [&name](const auto & controller) {
+             return controller.name == name && controller.state == "active";
+           });
 }
 
 }  // namespace hold_and_weld

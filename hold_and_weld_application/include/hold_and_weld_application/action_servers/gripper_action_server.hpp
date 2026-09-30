@@ -16,8 +16,9 @@
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_ACTION_SERVER_HPP_
 
 #include <atomic>
-#include <condition_variable>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <functional>
 #include <future>
 #include <memory>
@@ -32,18 +33,17 @@
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
-
-#include <moveit_msgs/msg/planning_scene.hpp>
-#include <moveit_msgs/srv/apply_planning_scene.hpp>
-#include <moveit_msgs/srv/get_planning_scene.hpp>
-#include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit_msgs/msg/attached_collision_object.hpp>
-#include "hold_and_weld_application/action/trigger_gripper.hpp"
-
+#include <moveit_msgs/msg/planning_scene.hpp>
+#include <moveit_msgs/srv/apply_planning_scene.hpp>
+#include <moveit_msgs/srv/get_cartesian_path.hpp>
+#include <moveit_msgs/srv/get_planning_scene.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+
+#include "hold_and_weld_application/action/trigger_gripper.hpp"
 
 namespace hold_and_weld
 {
@@ -51,24 +51,10 @@ namespace application
 {
 
 /**
- * @brief Timing constants for gripper operations and action handling.
- */
-namespace timing
-{
-constexpr double GRIPPER_MOTION_DURATION_SEC = 2.0;
-constexpr int ACTION_SERVER_TIMEOUT_SEC = 5;
-constexpr int GRIPPER_RESULT_TIMEOUT_SEC = 10;
-constexpr int GRIPPER_CONTROLLER_TIMEOUT_SEC = 60;
-constexpr int ATTACH_SETTLE_TIME_MS = 500;
-constexpr int DETACH_SETTLE_TIME_MS = 250;
-constexpr int MOTION_SETTLE_TIME_MS = 250;
-constexpr int PLANNING_SCENE_SERVICE_TIMEOUT_SEC = 2;
-constexpr int PLANNING_SCENE_RESPONSE_TIMEOUT_SEC = 2;
-}  // namespace timing
-
-/**
  * @struct GripperJob
- * @brief Represents a complete gripper operation job with target and motion poses.
+ * @brief One pick-and-place job from the positions YAML.
+ *
+ * Poses are end-effector goals for the arm group, in MoveIt's planning frame.
  */
 struct GripperJob
 {
@@ -83,9 +69,25 @@ struct GripperJob
  * @class GripperActionServer
  * @brief ROS2 lifecycle action server for controlling gripper operations with MoveIt integration.
  *
- * This class implements a lifecycle action server that handles gripper motion planning and execution,
- * including object attachment/detachment, collision object management, and synchronized
- * gripper control through follow joint trajectory actions.
+ * Runs the pick-and-place pipeline (open, approach, pick, close, attach, retract, place)
+ * for one goal at a time; a goal arriving while another is queued or running is rejected.
+ *
+ * Threading model:
+ * - Main executor thread: lifecycle transitions and the action server's goal, cancel and
+ *   accepted callbacks. Only it creates or resets move_group_, the clients and the action
+ *   server, and only while no job is running (transitions wait for the job first).
+ * - Worker thread (worker_thread_func): runs execute_job() for one goal at a time; the
+ *   only thread that plans or executes with move_group_ or calls the clients below.
+ * - moveit_executor_ thread: spins the internal node, which owns MoveGroupInterface and
+ *   every client the worker waits on (gripper controller action, list_controllers,
+ *   planning scene services). The worker therefore never depends on the main executor,
+ *   which may be blocked in a transition waiting for the worker.
+ * - execution_mutex_ guards pending_goal_, execution_future_ and shutdown_requested_;
+ *   move_group_mutex_ guards the move_group_ pointer against request_stop() on the
+ *   pre-shutdown thread. The job, the apertures and base_link_id_ take no lock: they are
+ *   written only in on_configure before the worker starts and in on_cleanup after it is
+ *   joined.
+ *   stop_requested_ is atomic and checked by the job before every step and retry.
  */
 class GripperActionServer : public rclcpp_lifecycle::LifecycleNode {
 public:
@@ -100,7 +102,7 @@ public:
   explicit GripperActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   /**
-   * @brief Destroy the GrippperActionServer object, ensuring proper cleanup of worker thread.
+   * @brief Destroy the GripperActionServer object, ensuring proper cleanup of worker thread.
    */
   ~GripperActionServer() override;
 
@@ -146,15 +148,19 @@ public:
   on_shutdown(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Clean shutdown called from main() after spin() returns, before rclcpp::shutdown().
+   * @brief Stop the arm and the worker before the ROS context goes away.
    *
-   * Sets shutdown_requested_, calls stop() while the ROS context is still valid,
-   * then waits up to 2 s for execute() to return naturally before giving up.
-   * This must be called while move_group is still reachable on the network.
+   * Meant to run from a context pre-shutdown callback (see gripper_server_main.cpp), when
+   * the context is still valid, so stop() reaches the controller. Waits up to
+   * shutdown_wait_sec for the running job to end, then joins the worker; if the
+   * job does not end in time the worker is detached, as the process is exiting anyway.
+   * Idempotent; the destructor calls it too.
    */
   void manual_shutdown();
 
 private:
+  static constexpr int kGripperResultMarginSec = 8;
+
   /**
    * @brief Handle incoming goal requests from action clients.
    * @param uuid Unique identifier for the goal.
@@ -174,10 +180,16 @@ private:
     const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
-   * @brief Handle accepted goals by spawning execution thread.
+   * @brief Handle accepted goals by queuing them for the persistent worker thread.
    * @param goal_handle Handle to the accepted goal.
    */
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
+
+  /**
+   * @brief Auto-trigger timer callback: fires once, sending an empty goal to our own
+   * trigger_gripper action and logging its result.
+   */
+  void send_auto_trigger_goal();
 
   /**
    * @brief Persistent worker thread loop — waits for queued goals and executes them.
@@ -185,13 +197,24 @@ private:
   void worker_thread_func();
 
   /**
-   * @brief Signal the worker thread to stop and join it.
+   * @brief Stop the worker thread and join it.
    *
-   * Sets shutdown_requested_, wakes the worker via execution_cv_, then joins
-   * worker_thread_.  Must only be called after any in-flight execute() has
-   * already returned (i.e. after waiting on execution_future_).
+   * Ends a still-queued goal, then joins. Callers must have made the running job end
+   * first (request_stop()), or the join waits for it.
    */
   void shutdown_worker();
+
+  /**
+   * @brief Ask the running job to stop: sets stop_requested_ and calls move_group_->stop().
+   */
+  void request_stop();
+
+  /**
+   * @brief Block until the running job (if any) has returned.
+   * @param timeout How long to wait; none waits forever.
+   * @return false if the job is still running when the timeout expires.
+   */
+  bool wait_for_running_job(std::optional<std::chrono::nanoseconds> timeout = std::nullopt);
 
   /**
    * @brief Execute the gripper job for a given goal (with action server feedback).
@@ -200,39 +223,45 @@ private:
   void execute_job(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
-   * @brief Execute the core gripper job sequence with optional feedback reporting.
-   *
-   * This method is the single implementation entry-point for gripper execution.
-   * It is called both from the action-server path (where @p feedback_callback
-   * publishes ROS 2 feedback) and from the auto-trigger path (where a no-op
-   * callback is supplied).
-   *
-   * @param feedback_callback Callable invoked at each step with
-   *        (step_name, completion_percentage).  Must be non-null.
+   * @brief Publish feedback for the current goal.
+   * @param goal_handle Handle to the goal.
+   * @param step Current step description.
+   * @param percentage Completion percentage.
+   */
+  void publish_feedback(
+    const std::shared_ptr<GoalHandleTriggerGripper> goal_handle,
+    const std::string & step,
+    float percentage);
+
+  /**
+   * @brief Execute the pick-and-place sequence.
+   * @param feedback_callback Called at each step with (step_name, completion_percentage).
+   * @param should_stop Returns true once the job must stop (cancel or transition); checked
+   *        before every step and every retry, so no new motion starts after it.
    * @return true if the entire job completed successfully, false otherwise.
    */
-  bool run_job(std::function<void(const std::string &, float)> feedback_callback);
+  bool run_job(
+    const std::function<void(const std::string &, float)> & feedback_callback,
+    const std::function<bool()> & should_stop);
 
   /**
-   * @brief Initialize MoveIt interface and planning scene.
-   */
-  void initialize_moveit();
-
-  /**
-   * @brief Load job configuration from YAML file.
+   * @brief Load the job and gripper positions from the positions YAML.
    * @param yaml_path Path to the YAML configuration file.
+   * @return false (with the reason logged) if the file or any pose in it is invalid;
+   *         the previously loaded job is then cleared, never half-overwritten.
    */
-  void load_job_from_yaml(const std::string & yaml_path);
+  bool load_job_from_yaml(const std::string & yaml_path);
+
   /**
-   * @brief Load object configuration (base_link, child_link) from shared objects.yaml.
+   * @brief Load base_link_id_ from the shared objects.yaml; keeps the default if absent.
    */
   void load_object_config();
 
   /**
    * @brief Resolve open_position_/close_position_ from the gripper joints' limits in
-   * the robot model and the optional open_position configured in the positions YAML.
-   * @return false (with the reason logged) if a finger joint is missing from the model
-   *         or the configured open_position is outside its limits.
+   * the robot model and the optional positions configured in the positions YAML.
+   * @return false (with the reason logged) if a finger joint is missing from the model,
+   *         a configured position is outside its limits, or open is not wider than close.
    */
   bool resolve_finger_apertures();
 
@@ -241,25 +270,31 @@ private:
    *
    * The gripper spawner can still be loading when a job starts, and a configured
    * but inactive controller reports goals succeeded without moving the fingers.
+   * @param should_stop Returns true once the job must stop; ends the wait early.
    * @return false (with the reason logged) if it is not active within
-   *         timing::GRIPPER_CONTROLLER_TIMEOUT_SEC.
+   *         controller_timeout_sec, or the job was stopped.
    */
-  bool wait_for_gripper_controller();
+  bool wait_for_gripper_controller(const std::function<bool()> & should_stop);
 
   /**
-   * @brief Set the gripper to a specific position.
+   * @brief Command every finger joint to the same position and wait for the controller.
    * @param position Target finger position [m], within the finger joint limits.
-   * @return true if position was successfully set, false otherwise.
+   * @param should_stop Returns true once the job must stop; cancels the controller goal.
+   * @return true if the controller reported success within finger_motion_sec plus
+   *         kGripperResultMarginSec, false otherwise.
    */
-  bool set_finger_aperture(double position);
+  bool set_finger_aperture(double position, const std::function<bool()> & should_stop);
 
   /**
-   * @brief Move the arm to a specified pose.
-   * @param pose Target pose for the arm.
+   * @brief Plan and execute an arm motion to a pose, retrying up to max_planning_retries.
+   * @param pose Target end-effector pose, planning frame.
    * @param step_name Name of the motion step for logging/feedback.
+   * @param should_stop Returns true once the job must stop; checked before each retry.
    * @return true if motion was successful, false otherwise.
    */
-  bool move_to_pose(const geometry_msgs::msg::Pose & pose, const std::string & step_name);
+  bool move_to_pose(
+    const geometry_msgs::msg::Pose & pose, const std::string & step_name,
+    const std::function<bool()> & should_stop);
 
   // Collision objects
   /**
@@ -277,28 +312,26 @@ private:
   bool detach_object(const std::string & object_id);
 
   /**
-   * @brief Normalize a quaternion to unit length.
-   * @param q Quaternion to normalize (modified in-place).
+   * @brief Send a planning-scene diff through /apply_planning_scene.
+   * @param diff Scene diff; is_diff must be set.
+   * @return true once MoveIt has applied it, false if the service is unavailable, times out
+   *         or reports failure.
    */
-  void normalize_quaternion(geometry_msgs::msg::Quaternion & q);
+  bool apply_scene_diff(const moveit_msgs::msg::PlanningScene & diff);
 
   /**
-   * @brief Wait for planning scene updates to be processed.
-   * @param millis Timeout duration in milliseconds.
-   * @return true if update was received within timeout, false otherwise.
-   */
-  bool wait_for_planning_scene_update(int millis);
-
-  /**
-   * @brief Allow collision between child_link (cube) and base_link (workpiece) for placement.
+   * @brief Allow collision between the held object and base_link (workpiece) for placement.
+   * @param target_id Planning-scene id of the held object.
    * @return true if collision matrix was updated successfully, false otherwise.
    */
-  bool allow_collision_for_placement();
+  bool allow_collision_for_placement(const std::string & target_id);
 
   rclcpp_action::Server<TriggerGripper>::SharedPtr action_server_;
+  rclcpp_action::Client<TriggerGripper>::SharedPtr self_trigger_client_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
-  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> moveit_executor_;
+  std::mutex move_group_mutex_;
+  rclcpp::executors::SingleThreadedExecutor::SharedPtr moveit_executor_;
   std::thread moveit_thread_;
 
   rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr planning_scene_client_;
@@ -307,19 +340,16 @@ private:
   rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedPtr
     list_controllers_client_;
   std::string gripper_controller_name_;
-  rclcpp_lifecycle::LifecyclePublisher<moveit_msgs::msg::AttachedCollisionObject>::SharedPtr
-    attached_collision_pub_;
 
   std::thread worker_thread_;
-  std::shared_ptr<GoalHandleTriggerGripper> pending_goal_;
-  std::condition_variable execution_cv_;
   std::mutex execution_mutex_;
-  std::atomic<bool> shutdown_requested_{false};
+  std::condition_variable worker_cv_;
+  std::shared_ptr<GoalHandleTriggerGripper> pending_goal_;
+  bool shutdown_requested_ = false;
   std::shared_future<void> execution_future_;
-  std::mutex execution_future_mutex_;
-  std::mutex move_group_mutex_;
+  std::atomic<bool> stop_requested_{false};
+  std::atomic<bool> manual_shutdown_done_{false};
 
-  std::mutex config_mutex_;
   GripperJob job_;
   bool job_loaded_ = false;
   std::string base_link_id_ = "base_link";
@@ -334,10 +364,17 @@ private:
     "robot1_gripper_base", "robot1_left_finger", "robot1_right_finger"};
   std::string attach_link_ = "robot1_link_6";
   int max_planning_retries_ = 3;
+  std::chrono::nanoseconds service_timeout_{0};
+  std::chrono::nanoseconds controller_timeout_{0};
+  std::chrono::nanoseconds shutdown_wait_time_{0};
+  std::chrono::nanoseconds finger_motion_time_{0};
+  std::chrono::nanoseconds finger_settle_time_{0};
+  std::chrono::nanoseconds motion_settle_time_{0};
   std::string arm_group_name_;
   std::string yaml_path_;
   bool auto_trigger_ = false;
   double auto_trigger_delay_sec_ = 3.0;
+  bool auto_trigger_fired_ = false;
 
   rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
   rclcpp::Logger logger_;

@@ -34,7 +34,8 @@ namespace kinematics
  * @brief Kinematics solver for 6-DOF manipulators
  *
  * Provides forward kinematics, Jacobian computation, and manipulability
- * analysis for a specific robot configuration parsed from URDF.
+ * analysis for a specific robot configuration parsed from URDF. Immutable after
+ * construction, so concurrent calls from several threads are safe.
  */
 class KinematicsSolver
 {

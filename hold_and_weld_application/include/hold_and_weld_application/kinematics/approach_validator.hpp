@@ -53,6 +53,10 @@ struct ApproachValidatorParams
  * trajectory from an OMPL-generated approach configuration, warm-starting IK from each
  * solved waypoint to the next and checking reachability and manipulability. Does not
  * check the joint step between waypoints (ConfigurationFinder does).
+ *
+ * Legacy: superseded by ConfigurationFinder, which picks the approach configuration
+ * before OMPL runs instead of checking OMPL's pick afterwards. Kept working and tested,
+ * but only used when use_approach_validation is on and use_configuration_finder is off.
  */
 class ApproachValidator
 {

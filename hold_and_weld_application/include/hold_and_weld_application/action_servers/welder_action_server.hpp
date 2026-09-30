@@ -17,16 +17,17 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <nlohmann/json.hpp>
 
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -39,6 +40,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include "hold_and_weld_application/action/trigger_welder.hpp"
+#include "hold_and_weld_application/action_servers/weld_seam_loader.hpp"
 #include "hold_and_weld_application/kinematics/approach_validator.hpp"
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 #include "hold_and_weld_application/kinematics/configuration_finder.hpp"
@@ -54,7 +56,7 @@ namespace application
 
 /**
  * @struct WelderConfig
- * @brief Configuration parameters for the welder action server.
+ * @brief Welder settings from welding.yaml; see validate() for the accepted ranges.
  */
 struct WelderConfig
 {
@@ -64,28 +66,47 @@ struct WelderConfig
   double cartesian_step_size = 0.01;
   double velocity_scaling = 0.3;
   int max_ompl_planning_attempts = 3;
-  int max_approach_validation_retries = 3;
+  double goal_position_tolerance = 0.001;
+  double goal_orientation_tolerance = 0.01;
   int max_cartesian_retries = 2;
   bool use_approach_validator = true;
   std::string json_file;
   double manipulability_threshold = 1e-6;
   bool use_configuration_finder = true;
-  /// Joint name -> position. Empty in YAML means safety_pose.joint_positions.
   std::map<std::string, double> home_configuration;
-  /// Feasible start configurations handed to OMPL before giving up on a seam.
   int finder_max_ompl_candidates = 5;
   hold_and_weld::kinematics::ConfigurationFinderParams finder;
-  /// manipulability_threshold is overwritten from the top-level key.
   hold_and_weld::kinematics::ApproachValidatorParams approach_validator;
+
+  /**
+   * @brief Check every field this struct owns (the finder and validator sub-structs are
+   * checked by their constructors).
+   * @return Empty if valid, otherwise a description of the first bad field.
+   */
+  std::string validate() const;
 };
 
 /**
  * @class WelderActionServer
  * @brief ROS2 lifecycle action server for controlling welding operations with MoveIt integration.
  *
- * This class implements a lifecycle action server that handles welding seam execution,
- * including approach/retract motions, cartesian path planning, and feedback updates
- * during the welding process.
+ * Handles welding seam execution: approach/retract motions, Pilz LIN/CIRC weld motions,
+ * and feedback during the welding process. One goal at a time: a goal arriving while
+ * another is queued or running is rejected.
+ *
+ * Threading model:
+ * - Main executor thread: lifecycle transitions and the action server's goal, cancel and
+ *   accepted callbacks. Only it creates or resets move_group_, the solvers and the action
+ *   server, and only while no job is running (transitions wait for the job first).
+ * - Worker thread (worker_thread_func): runs execute_weld() for one goal at a time and is
+ *   the only thread that plans or executes with move_group_ and uses the solvers.
+ * - moveit_executor_ thread: spins the internal node, mainly feeding /joint_states to
+ *   MoveGroupInterface's current-state monitor (plan/execute replies use its own thread).
+ * - execution_mutex_ guards pending_goal_, execution_future_ and shutdown_requested_;
+ *   move_group_mutex_ guards the move_group_ pointer against request_stop() on the
+ *   pre-shutdown thread (the worker reads it unlocked: it is only swapped while no job
+ *   runs). stop_requested_ is atomic; handle_cancel and the transitions set it together with
+ *   move_group_->stop(), and the worker checks it before every new motion.
  */
 class WelderActionServer : public rclcpp_lifecycle::LifecycleNode {
 public:
@@ -137,7 +158,7 @@ public:
   on_cleanup(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Shutdown lifecycle transition callback.
+   * @brief Shutdown lifecycle transition callback; releases everything via on_cleanup().
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -145,10 +166,13 @@ public:
   on_shutdown(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Clean shutdown called from main() after spin() returns, before rclcpp::shutdown().
+   * @brief Stop the arm and the worker before the ROS context goes away.
    *
-   * Sets shutdown_requested_, calls stop() while the ROS context is still valid,
-   * then waits up to 2 s for the current execute() to return before giving up.
+   * Meant to run from a context pre-shutdown callback (see welder_server_main.cpp), when
+   * the context is still valid, so stop() reaches the controller. Waits up to
+   * shutdown_wait_sec for the running job to end, then joins the worker; if the job does
+   * not end in time the worker is detached, as the process is exiting anyway.
+   * Idempotent; the destructor calls it too.
    */
   void manual_shutdown();
 
@@ -178,14 +202,12 @@ private:
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
   /**
-   * @brief Initialize MoveIt interface and planning scene.
+   * @brief Load and validate welding.yaml.
+   * @param yaml_path Path to welding.yaml.
+   * @param config Output; written only when the whole file is valid.
+   * @return false (with the reason logged) if the file is missing, unparsable or invalid.
    */
-  void initialize_moveit();
-
-  /**
-   * @brief Load welder configuration from YAML file.
-   */
-  void load_config_from_yaml();
+  bool load_config_from_yaml(const std::string & yaml_path, WelderConfig & config) const;
 
   /**
    * @brief Find the latest JSON file containing weld seam data.
@@ -196,9 +218,11 @@ private:
   /**
    * @brief Load weld seams from a JSON file.
    * @param filepath Path to the JSON file containing seam definitions.
-   * @return Vector of WeldSeam structures loaded from the file.
+   * @return The usable seams plus the skipped/partial ones, best effort (see
+   *         parse_weld_seams()); no seams, with the reason logged, if the file cannot be
+   *         read or is not a weld JSON document.
    */
-  std::vector<WeldSeam> load_seams_from_json(const std::string & filepath) const;
+  WeldJob load_seams_from_json(const std::string & filepath) const;
 
   /**
    * @brief Worker thread function for asynchronous goal execution.
@@ -206,9 +230,30 @@ private:
   void worker_thread_func();
 
   /**
-   * @brief Shutdown the worker thread gracefully.
+   * @brief Stop the worker thread and join it.
+   *
+   * Ends a still-queued goal, then joins. Callers must have made the running job end
+   * first (stop(), then wait on execution_future_), or the join waits for it.
    */
   void shutdown_worker();
+
+  /**
+   * @brief Ask the running job to stop: sets stop_requested_ and calls move_group_->stop().
+   */
+  void request_stop();
+
+  /**
+   * @brief Auto-trigger timer callback: fires once, sending an empty goal to our own
+   * trigger_welder action and logging its result.
+   */
+  void send_auto_trigger_goal();
+
+  /**
+   * @brief Block until the running job (if any) has returned.
+   * @param timeout How long to wait; none waits forever.
+   * @return false if the job is still running when the timeout expires.
+   */
+  bool wait_for_running_job(std::optional<std::chrono::nanoseconds> timeout = std::nullopt);
 
   /**
    * @brief Execute welding operation for a given goal.
@@ -226,14 +271,17 @@ private:
    * Approach with use_configuration_finder: OMPL gets the finder's chosen start
    * configuration as a joint goal. Approach otherwise: OMPL pose goal, optionally
    * checked by the ApproachValidator. Retract: always a plain OMPL pose goal.
+   * Only planning is retried; an execution failure ends the move.
    *
    * @param seam        The weld seam.
-   * @param ref_pose    Boundary pose to offset from (poses.front() or poses.back()).
+   * @param ref_pose    Boundary pose to offset from (poses.front() or poses.back()), world frame.
    * @param is_approach true before the weld, false for the retract after it.
+   * @param should_stop Returns true once the job must stop (cancel or transition).
    * @return true if the motion was planned, validated and executed successfully.
    */
   bool move_to_seam_boundary(
-    const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose, bool is_approach);
+    const WeldSeam & seam, const geometry_msgs::msg::Pose & ref_pose, bool is_approach,
+    const std::function<bool()> & should_stop);
 
   /**
    * @brief Approach a seam by choosing the Pilz start configuration first.
@@ -241,12 +289,12 @@ private:
    * Ranks start configurations with the ConfigurationFinder, then tries OMPL joint
    * goals in rank order and executes the first plan found.
    *
-   * @param seam The weld seam (world frame).
-   * @param current_state Current robot state, used for the world -> base transform.
+   * @param seam The weld seam, in the robot2_base_link frame.
+   * @param should_stop Returns true once the job must stop (cancel or transition).
    * @return true if a ranked configuration was reached.
    */
   bool approach_via_configuration_finder(
-    const WeldSeam & seam, const moveit::core::RobotStatePtr & current_state);
+    const WeldSeam & seam, const std::function<bool()> & should_stop);
 
   /**
    * @brief Execute the weld motion along a seam, dispatching on segment type.
@@ -254,15 +302,18 @@ private:
    * "line" and "arc" seams are driven through the Pilz industrial motion
    * planner (LIN / CIRC respectively) for deterministic constant-velocity /
    * true-circular motion, after a LIN plunge from the approach standoff onto
-   * the seam start. CIRC uses the middle seam pose as its interim point. "ptp"/unknown/legacy seams fall back to the
-   * existing dense-waypoint `computeCartesianPath()` behavior.
+   * the seam start. CIRC uses the middle seam pose as its interim point.
+   * "ptp"/unknown/legacy seams fall back to the dense-waypoint
+   * `computeCartesianPath()` behavior.
    *
-   * @param seam The weld seam to execute (poses, segment_type, and — for
-   *             arcs — center/radius).
+   * @param seam The weld seam to execute (poses and segment_type).
    * @param goal_handle Handle to the goal for sending feedback and results.
    * @param feedback Feedback message to update with progress.
-   * @param points_before_seam Number of waypoints in approach phase.
+   * @param points_before_seam Waypoints of the seams already processed, for progress.
    * @param total_waypoints Total number of waypoints in the complete path.
+   * @param should_stop Returns true once the job must stop (cancel or transition).
+   * @param torch_left_standoff Output; true once any motion was executed (or started),
+   *        so a failure leaves the torch on or near the part rather than at the standoff.
    * @return true if the weld motion was successful, false otherwise.
    */
   bool execute_cartesian_path(
@@ -270,91 +321,62 @@ private:
     const std::shared_ptr<GoalHandleTriggerWelder> & goal_handle,
     std::shared_ptr<TriggerWelder::Feedback> & feedback,
     int32_t points_before_seam,
-    int32_t total_waypoints);
+    int32_t total_waypoints,
+    const std::function<bool()> & should_stop,
+    bool & torch_left_standoff);
 
   /**
-   * @brief Plan and execute one Pilz motion from the current state to a pose.
+   * @brief Outcome of one planned-and-executed motion.
+   */
+  enum class MotionOutcome
+  {
+    kSucceeded,
+    kPlanningFailed,
+    kExecutionFailed,
+  };
+
+  /**
+   * @brief Plan (retrying up to max_cartesian_retries) and execute one Pilz motion from
+   * the current state to a pose.
    * @param planner_id Pilz planner ("LIN" or "CIRC").
-   * @param target Goal pose for the end effector.
+   * @param target Goal pose for the end effector, planning frame.
    * @param path_constraints CIRC auxiliary point constraint, or nullptr for none.
    * @param seam_id Seam id, for log messages.
-   * @return true if planning and execution both succeeded, false otherwise.
+   * @param should_stop Returns true once the job must stop; checked before each attempt.
+   * @return Whether planning failed, execution failed, or both succeeded.
    */
-  bool plan_and_execute_pilz(
+  MotionOutcome plan_and_execute_pilz(
     const std::string & planner_id,
     const geometry_msgs::msg::Pose & target,
     const moveit_msgs::msg::Constraints * path_constraints,
-    const std::string & seam_id);
+    const std::string & seam_id,
+    const std::function<bool()> & should_stop);
 
   /**
-   * @brief Convert a JSON pose object to a geometry_msgs::msg::Pose message.
-   * TODO(@silanus23): Put controls over this
-   * @param pose_data JSON object containing position and quaternion arrays.
-   * @return Converted Pose message.
+   * @brief Back the torch off the part after a failed weld: Pilz LIN from the current
+   * end-effector pose to its standoff (approach_offset_z along the tool Z axis), so the
+   * next seam's approach does not start with the torch on the workpiece.
+   * @param seam_id Seam id, for log messages.
+   * @param should_stop Returns true once the job must stop (cancel or transition).
+   * @return true if the retreat was executed.
    */
-  geometry_msgs::msg::Pose json_to_pose(const nlohmann::json & pose_data) const
-  {
-    // Validate required fields
-    if (!pose_data.contains("position") || !pose_data.contains("quaternion")) {
-      throw std::runtime_error("Pose missing 'position' or 'quaternion' key");
-    }
-
-    if (pose_data["position"].size() != 3) {
-      throw std::runtime_error("Position array must have exactly 3 elements");
-    }
-
-    if (pose_data["quaternion"].size() != 4) {
-      throw std::runtime_error("Quaternion array must have exactly 4 elements");
-    }
-
-    geometry_msgs::msg::Pose pose;
-    pose.position.x = pose_data["position"][0];
-    pose.position.y = pose_data["position"][1];
-    pose.position.z = pose_data["position"][2];
-
-    // Load into Eigen for normalization and manipulation
-    // Note: Eigen::Quaterniond constructor takes (w, x, y, z)
-    Eigen::Quaterniond q(
-      pose_data["quaternion"][3],
-      pose_data["quaternion"][0],
-      pose_data["quaternion"][1],
-      pose_data["quaternion"][2]
-    );
-    q.normalize();
-
-    // WARNING: Hardcoded 180° flip around X-axis for specific welding torch orientation
-    // DO NOT MODIFY unless torch or torch mounting changes
-    Eigen::Quaterniond flip_rotation(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX()));
-    q = q * flip_rotation;
-
-    pose.orientation.x = q.x();
-    pose.orientation.y = q.y();
-    pose.orientation.z = q.z();
-    pose.orientation.w = q.w();
-
-    return pose;
-  }
-  /**
-   * @return The pose in the robot's base frame.
-   */
-  geometry_msgs::msg::Pose transform_pose_to_base_frame(
-    const geometry_msgs::msg::Pose & world_pose,
-    const Eigen::Isometry3d & base_to_world_transform) const;
+  bool retreat_from_part(const std::string & seam_id, const std::function<bool()> & should_stop);
 
   rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
+  std::mutex move_group_mutex_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr moveit_executor_;
   std::thread moveit_thread_;
 
   std::thread worker_thread_;
   std::mutex execution_mutex_;
-  std::condition_variable execution_cv_;
+  std::condition_variable worker_cv_;
   std::shared_ptr<GoalHandleTriggerWelder> pending_goal_;
-  std::atomic<bool> shutdown_requested_{false};
+  bool shutdown_requested_ = false;
   std::shared_future<void> execution_future_;
-  std::mutex execution_future_mutex_;
-  std::mutex move_group_mutex_;
+  std::atomic<bool> stop_requested_{false};
+  std::atomic<bool> manual_shutdown_done_{false};
 
   std::shared_ptr<hold_and_weld::kinematics::CeresIKSolver> ceres_solver_;
   std::shared_ptr<hold_and_weld::kinematics::KinematicsSolver> kinematics_solver_;
@@ -366,8 +388,12 @@ private:
   WelderConfig config_;
   rclcpp::Logger logger_;
 
+  std::chrono::nanoseconds shutdown_wait_time_{0};
   bool auto_trigger_ = false;
   double auto_trigger_delay_sec_ = 3.0;
+  bool auto_trigger_fired_ = false;
+  std::string trajectory_directory_;
+  bool auto_load_latest_ = true;
 
   rclcpp::TimerBase::SharedPtr auto_trigger_timer_;
   rclcpp_action::Client<TriggerWelder>::SharedPtr self_trigger_client_;

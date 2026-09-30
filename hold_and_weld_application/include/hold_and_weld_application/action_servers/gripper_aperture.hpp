@@ -15,7 +15,9 @@
 #ifndef HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_APERTURE_HPP_
 #define HOLD_AND_WELD_APPLICATION__ACTION_SERVERS__GRIPPER_APERTURE_HPP_
 
+#include <algorithm>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -41,22 +43,75 @@ struct GripperApertures
   double close;
 };
 
+namespace detail
+{
+
+/**
+ * @brief Replace @p resolved with @p requested if given; throws if it is outside any
+ * finger's limits. @p yaml_key names the request in the error message.
+ */
+inline void apply_requested_position(
+  const std::vector<FingerJointBounds> & fingers,
+  const std::optional<double> & requested,
+  const char * yaml_key,
+  double & resolved)
+{
+  if (!requested) {
+    return;
+  }
+  for (const auto & finger : fingers) {
+    // Written as "not inside" so NaN counts as out of limits.
+    if (!(finger.lower <= *requested && *requested <= finger.upper)) {
+      throw std::invalid_argument(
+              std::string(yaml_key) + " " + std::to_string(*requested) + " m is outside joint '" +
+              finger.joint_name + "' limits [" + std::to_string(finger.lower) + ", " +
+              std::to_string(finger.upper) + "]");
+    }
+  }
+  resolved = *requested;
+}
+
+}  // namespace detail
+
 /**
  * @brief Resolve the open/close finger commands against the gripper's joint limits.
  *
  * Every finger receives the same position command, so the tightest finger bounds
  * both states. Open is @p requested_open when given, otherwise the tightest upper
  * bound; close is @p requested_close when given, otherwise the tightest lower bound.
+ * Throws std::invalid_argument if a request is NaN or outside any finger's limits,
+ * or if the resolved open position is not greater than the close position.
  *
  * @param fingers Bounds of every finger joint the gripper controller drives.
  * @param requested_open Configured open position [m], or std::nullopt to use the limit.
  * @param requested_close Configured close position [m], or std::nullopt to use the limit.
  * @return The open and close positions to command.
  */
-GripperApertures resolve_gripper_apertures(
+inline GripperApertures resolve_gripper_apertures(
   const std::vector<FingerJointBounds> & fingers,
   const std::optional<double> & requested_open,
-  const std::optional<double> & requested_close);
+  const std::optional<double> & requested_close)
+{
+  if (fingers.empty()) {
+    throw std::invalid_argument("No gripper finger joints given");
+  }
+
+  GripperApertures apertures{fingers.front().upper, fingers.front().lower};
+  for (const auto & finger : fingers) {
+    apertures.open = std::min(apertures.open, finger.upper);
+    apertures.close = std::max(apertures.close, finger.lower);
+  }
+
+  detail::apply_requested_position(fingers, requested_open, "open_position", apertures.open);
+  detail::apply_requested_position(fingers, requested_close, "close_position", apertures.close);
+  if (!(apertures.open > apertures.close)) {
+    throw std::invalid_argument(
+            "open position " + std::to_string(apertures.open) +
+            " m must be greater than close position " + std::to_string(apertures.close) +
+            " m (check open_position/close_position and the finger joint limits)");
+  }
+  return apertures;
+}
 
 }  // namespace hold_and_weld
 

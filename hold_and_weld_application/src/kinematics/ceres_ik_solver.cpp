@@ -195,8 +195,10 @@ bool CeresIKSolver::solve(
     q_solution[i] = q_params[i];
   }
 
+  // Failures below are DEBUG: the configuration finder and approach validator probe
+  // many poses and expect most to fail; they report the outcome themselves.
   if (!summary.IsSolutionUsable()) {
-    RCLCPP_WARN(logger, "IK failed to converge: %s", summary.message.c_str());
+    RCLCPP_DEBUG(logger, "IK failed to converge: %s", summary.message.c_str());
     return false;
   }
 
@@ -209,7 +211,7 @@ bool CeresIKSolver::solve(
   try {
     achieved_pose = fk_solver_->compute_fk(solution_vec);
   } catch (const std::exception & e) {
-    RCLCPP_WARN(logger, "IK post-solve FK check failed: %s", e.what());
+    RCLCPP_DEBUG(logger, "IK post-solve FK check failed: %s", e.what());
     return false;
   }
   double position_error = (achieved_pose.translation() - target_pose.translation()).norm();
@@ -218,7 +220,7 @@ bool CeresIKSolver::solve(
   double orientation_error = std::abs(rot_err_aa.angle());
 
   if (position_error > position_tolerance || orientation_error > orientation_tolerance) {
-    RCLCPP_WARN(
+    RCLCPP_DEBUG(
       logger, "IK Accuracy Failed: Pos Err: %.6f m, Rot Err: %.6f rad",
       position_error, orientation_error);
     return false;

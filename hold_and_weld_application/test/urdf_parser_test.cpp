@@ -28,8 +28,10 @@ namespace
 constexpr double WIRE_TIP_OFFSET_MIN = 0.05;  // meters
 constexpr double WIRE_TIP_OFFSET_MAX = 0.5;   // meters
 
-/// Minimal 6-joint serial chain base -> l1 ... l6 -> tip (fixed). The fourth joint
-/// gets type `j4_type` and `j4_body` as its <axis>/<limit> children.
+/**
+ * Minimal 6-joint serial chain base -> l1 ... l6 -> tip (fixed). The fourth joint
+ * gets type `j4_type` and `j4_body` as its <axis>/<limit> children.
+ */
 std::string six_joint_urdf(const std::string & j4_type, const std::string & j4_body)
 {
   const std::string revolute_body =

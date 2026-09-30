@@ -23,7 +23,7 @@ flowchart LR
 
 ### Welder Action Server
 
-Handles weld seam execution. Reads weld path `JSON` produced by `hold_and_weld_planning`, approaches each seam, executes the Cartesian path via MoveIt, and retracts. Approach validation via the kinematics stack runs before each seam execution to ensure the approach configuration can walk the full seam without singularities or joint flips.
+Handles weld seam execution. Reads weld path `JSON` produced by `hold_and_weld_planning`, approaches each seam, executes the Cartesian path via MoveIt, and retracts. `ConfigurationFinder` picks the approach configuration before each seam so the full seam can be walked without singularities or joint flips. Loading is best effort: a malformed pose is dropped (its seam is reported as partial), a seam left without enough poses is skipped, and the rest of the file is welded; the result message lists skipped and partial seams. Seams run in seam-id string order (`seam_10` before `seam_2`).
 
 ## Kinematics
 
@@ -35,13 +35,13 @@ A custom kinematics stack built independently of MoveIt's IK infrastructure to s
 
 `CeresIKSolver` wraps Google Ceres to solve inverse kinematics numerically with warm starting. A seed penalty term keeps solutions near the previous configuration, preventing joint flips along a trajectory. Hard joint limits are enforced via Ceres parameter bounds.
 
-`ApproachValidator` uses the above three components to perform a static walk along the weld seam from a candidate approach configuration. Starting from an OMPL-generated approach joint state, it incrementally solves IK for each seam waypoint using the previous solution as seed, checking manipulability at each step. Phase one uses relaxed tolerances since the OMPL result may be far from the first seam point in joint space. Phase two uses tight tolerances since it warm starts from the previous solution. If any waypoint fails IK convergence or falls below the manipulability threshold, the approach configuration is rejected and OMPL replans.
+`ApproachValidator` (legacy, superseded by `ConfigurationFinder`; only used when `use_approach_validation` is on and the finder is off) uses the above three components to perform a static walk along the weld seam from a candidate approach configuration. Starting from an OMPL-generated approach joint state, it incrementally solves IK for each seam waypoint using the previous solution as seed, checking manipulability at each step. Phase one uses relaxed tolerances since the OMPL result may be far from the first seam point in joint space. Phase two uses tight tolerances since it warm starts from the previous solution. If any waypoint fails IK convergence or falls below the manipulability threshold, the approach configuration is rejected and OMPL replans.
 
 `ConfigurationFinder` (welder, on by default via `use_configuration_finder`) picks the joint configuration the Pilz weld starts from *before* OMPL runs. It enumerates the IK solutions at the approach standoff: Ceres multi-start from the home configuration, then the exact wrist flip and every in-limit J4/J6 2π copy. For each one it simulates the path Pilz will execute (LIN plunge, then LIN/CIRC or the dense-waypoint fallback), with warm-started IK. A candidate is rejected on IK failure, joint limits, low manipulability, or a joint step large enough to trip Pilz's velocity check. Survivors are ranked by limit margin, manipulability, and distance from home, and OMPL plans to the best one as a joint goal. The same seam therefore always welds from the same configuration. Tunables live under `finder:` in `hold_and_weld_bringup/config/tasks/welding.yaml`. When the finder is enabled, `ApproachValidator` is not used on the approach.
 
 ## Known Limitations
 
 - MoveIt 2 does not currently support lifecycle node interfaces. Both action servers require an internal node bridge layer as a workaround. Shutdown produces error output from MoveIt 2's internal nodes as the ROS 2 context tears down — this originates inside MoveIt 2 and is not suppressible from the application layer.
-- Single goal queue per server. A second goal arriving during active execution will be queued in the single slot. Explicit rejection of concurrent goals is planned.
+- One goal at a time per server. A goal arriving while another is queued or running is rejected.
 - Gripper action server uses a fixed 7-stage linear pipeline with no error recovery between stages. A flexible state machine approach is planned as part of the behavior tree transition.
-- Approach validator has been tested on GP25 geometry. Validation behavior on significantly different manipulator geometries has not been verified.
+- Approach validator (legacy) has been tested on GP25 geometry. Validation behavior on significantly different manipulator geometries has not been verified.

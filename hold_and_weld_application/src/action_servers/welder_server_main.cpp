@@ -25,11 +25,20 @@ int main(int argc, char ** argv)
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
 
+  // Ctrl-C shuts the context down, and only then does spin() return, so stopping the
+  // arm after spin() would be too late for stop() to reach the controller. Pre-shutdown
+  // callbacks run before the context is invalidated, while both executors still spin.
+  std::weak_ptr<hold_and_weld::application::WelderActionServer> weak_node = node;
+  rclcpp::contexts::get_global_default_context()->add_pre_shutdown_callback(
+    [weak_node]() {
+      if (auto locked = weak_node.lock()) {
+        locked->manual_shutdown();
+      }
+    });
+
   executor.spin();
 
-  // manual_shutdown() must be called while the ROS context is still valid:
-  // it calls stop() (a topic publish) so move_group can process the cancel
-  // before the context is torn down by rclcpp::shutdown().
+  // No-op after the pre-shutdown callback; covers spin() returning for another reason.
   node->manual_shutdown();
 
   rclcpp::shutdown();

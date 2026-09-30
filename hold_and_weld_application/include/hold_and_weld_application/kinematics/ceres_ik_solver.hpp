@@ -81,7 +81,8 @@ private:
  * convergence (1-5ms with good seed), enforces hard joint limits via parameter bounds,
  * and applies a seed penalty for configuration continuity. Designed for validation
  * pipelines where IK is called sequentially along a trajectory, each solution seeding
- * the next.
+ * the next. solve() changes no members, so concurrent solves are safe as long as no
+ * thread calls a setter at the same time.
  */
 class CeresIKSolver
 {
