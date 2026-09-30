@@ -120,22 +120,18 @@ class WeldPlanner:
             seam: Seam object with geometry data in config
 
         Raises:
-            RuntimeError: If required data missing from seam.config
-            ValueError: If arrays have invalid lengths, no point has a usable
-                normal, or every point coincides so there is no tangent
+            ValueError: If required data is missing from seam.config, arrays
+                have invalid lengths, no point has a usable normal, or every
+                point coincides so there is no tangent
 
         Side Effects:
             - Sets seam.poses to list of pose dictionaries
             - Sets seam.is_generated to True
         """
-        if 'smoothed_points' not in seam.config:
-            raise RuntimeError('Seam missing smoothed_points in config')
-        if 'normals_main' not in seam.config:
-            raise RuntimeError('Seam missing normals_main in config')
-        if 'normals_secondary' not in seam.config:
-            raise RuntimeError('Seam missing normals_secondary in config')
-        if 'is_edge_joint' not in seam.config:
-            raise RuntimeError('Seam missing is_edge_joint in config')
+        required = ('smoothed_points', 'normals_main', 'normals_secondary', 'is_edge_joint')
+        missing = [key for key in required if key not in seam.config]
+        if missing:
+            raise ValueError(f'Seam config is missing key(s): {missing}')
 
         points = seam.config['smoothed_points']
         normals_main = seam.config['normals_main']

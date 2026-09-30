@@ -71,7 +71,7 @@ def resolve_package_path(path_str: str | Path) -> Path:
         try:
             package_dir = get_package_share_directory(package_name)
         except Exception as e:
-            raise FileNotFoundError(f"Package '{package_name}' not found: {e}")
+            raise FileNotFoundError(f"Package '{package_name}' not found: {e}") from e
 
         resolved = Path(package_dir) / relative_path
     else:
@@ -108,7 +108,10 @@ def load_urdf_config(
     logger.info(f'Loading URDF-based config from: {yaml_path}')
 
     with open(yaml_path, 'r') as f:
-        config = yaml.safe_load(f)
+        try:
+            config = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ValueError(f'Config is not valid YAML: {yaml_path}: {e}') from e
 
     # An empty file, or a key with nothing under it, loads as None; checked here so it is named
     # rather than surfacing as a TypeError on the first lookup.

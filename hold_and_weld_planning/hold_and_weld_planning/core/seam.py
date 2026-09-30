@@ -71,10 +71,9 @@ class Seam:
             self.segment = ptp_segment
         elif seam_dict is not None:
             # Legacy dict format: construct LineSegment from start/end
-            if 'start' not in seam_dict:
-                raise KeyError("seam_dict must contain 'start' key")
-            if 'end' not in seam_dict:
-                raise KeyError("seam_dict must contain 'end' key")
+            missing = [key for key in ('start', 'end') if key not in seam_dict]
+            if missing:
+                raise ValueError(f'seam_dict is missing key(s): {missing}')
             self.segment = LineSegment(seam_dict['start'], seam_dict['end'])
 
         self.poses = None

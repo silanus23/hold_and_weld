@@ -69,12 +69,13 @@ class URDFProcessor:
         logger.debug(f'Processing file through xacro: {xacro_path}')
         try:
             import xacro
-
-            doc = xacro.process_file(str(xacro_path))
-            return doc.toxml()
-        except ModuleNotFoundError:
+        except ModuleNotFoundError as e:
             raise ValueError(
                 'xacro module not installed - cannot process xacro files'
-            )
+            ) from e
+
+        try:
+            doc = xacro.process_file(str(xacro_path))
+            return doc.toxml()
         except Exception as e:
             raise ValueError(f"Failed to process xacro '{xacro_path}': {e}") from e

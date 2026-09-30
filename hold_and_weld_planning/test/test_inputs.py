@@ -17,6 +17,7 @@
 import contextlib
 import logging
 
+from hold_and_weld_planning import seam_generator
 from hold_and_weld_planning.core.line_segment import LineSegment
 from hold_and_weld_planning.core.seam import Seam
 from hold_and_weld_planning.mesh.mesh_loader import MeshLoader
@@ -139,10 +140,19 @@ class TestConfig:
         'workpiece:\n  main_part:\n  secondary_part:\n',
         WORKPIECE + 'parameters:\n',
         WORKPIECE + 'parameters: [1, 2]\n',
+        'workpiece: [\n',
     ])
     def test_malformed_config_is_a_value_error(self, tmp_path, text):
         with pytest.raises(ValueError):
             load_urdf_config(write_yaml(tmp_path, text))
+
+    def test_verbose_reports_a_missing_parameter_as_configuration(self, tmp_path, monkeypatch):
+        path = write_yaml(tmp_path, WORKPIECE + 'parameters:\n  gap_mm: 1.0\n')
+        monkeypatch.setattr('sys.argv', ['seam_generator', '-i', str(path), '-v'])
+        monkeypatch.setattr(seam_generator, 'setup_logging', lambda verbose: None)
+        with warnings_logged(logging.getLogger(seam_generator.__name__)) as records:
+            assert seam_generator.main() == 1
+        assert 'Invalid configuration' in text(records)
 
 
 class TestTransforms:

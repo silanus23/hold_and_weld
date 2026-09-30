@@ -275,9 +275,9 @@ class JobPlanner:
         )
 
         if not mesh_main.is_watertight:
-            raise RuntimeError('Main mesh is not watertight')
+            raise ValueError('Main mesh is not watertight')
         if not mesh_secondary.is_watertight:
-            raise RuntimeError('Secondary mesh is not watertight')
+            raise ValueError('Secondary mesh is not watertight')
 
         logger.info(f'Main mesh: {len(mesh_main.vertices)} vertices, {len(mesh_main.faces)} faces')
         logger.info(
@@ -295,9 +295,9 @@ class JobPlanner:
         )
 
         if shape_main.IsNull():
-            raise RuntimeError('Main OCCT shape is null after loading')
+            raise ValueError('Main OCCT shape is null after loading')
         if shape_secondary.IsNull():
-            raise RuntimeError('Secondary OCCT shape is null after loading')
+            raise ValueError('Secondary OCCT shape is null after loading')
 
         return shape_main, shape_secondary
 

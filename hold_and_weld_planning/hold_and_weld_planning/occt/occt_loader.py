@@ -65,6 +65,7 @@ class OCCTLoader:
         Raises:
             ValueError: If file format unsupported or loading fails
             FileNotFoundError: If file doesn't exist
+            RuntimeError: If world_transform cannot be applied to the shape
         """
         # Built here rather than in the signature: a default argument is one array shared by every
         # caller, and a caller that transforms it in place moves every later part that took the

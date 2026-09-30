@@ -67,9 +67,9 @@ class ParamsBase:
         """Coerce one config value to a finite number of its declared type."""
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
             raise ValueError(
-                f'{name} must be a number, got {value!r}')
+                f'{name} must be a number, got {value!r}') from e
         # YAML's .nan and .inf coerce cleanly, and nan passes every `< 0` style check, so they
         # would otherwise switch features off silently.
         if not np.isfinite(number):
@@ -140,11 +140,11 @@ class SeamExtractorMeshParams(ParamsBase):
                 )
             try:
                 return tuple(ParamsBase._coerce(name, float, f) for f in value)
-            except TypeError:
+            except TypeError as e:
                 raise ValueError(
                     'eps_stability_factors must be a list of probe factors, '
                     f'e.g. [0.75, 1.5]; got {value!r}'
-                )
+                ) from e
         return ParamsBase._coerce(name, declared, value)
 
     def __post_init__(self) -> None:

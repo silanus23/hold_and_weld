@@ -130,6 +130,16 @@ def main():
         # Extract mode from workpiece config
         mode = workpiece_config.get('mode', 'auto')
 
+        planner = JobPlanner(
+            main_path=main_path,
+            secondary_path=secondary_path,
+            main_world_pose=main_world_pose,
+            secondary_world_pose=secondary_world_pose,
+            parameters=parameters,
+            mode=mode,
+        )
+
+        # After JobPlanner, which is what validates the keys read here.
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
             print(f'  Points per seam: {parameters.get("num_smooth_points", 100)}')
@@ -141,15 +151,6 @@ def main():
             print(f'  Secondary part URDF: {secondary_path}')
             print(f'  Mode: {mode}')
             print()
-
-        planner = JobPlanner(
-            main_path=main_path,
-            secondary_path=secondary_path,
-            main_world_pose=main_world_pose,
-            secondary_world_pose=secondary_world_pose,
-            parameters=parameters,
-            mode=mode,
-        )
 
         logger.info('Starting weld job planning')
 
