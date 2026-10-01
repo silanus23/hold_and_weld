@@ -48,14 +48,17 @@ namespace sampling
 namespace
 {
 
-const rclcpp::Logger logger_ = rclcpp::get_logger("face_sampler");
+const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 constexpr int kMaxKnotSpans = 256;
 constexpr int kTileProbeSteps = 3;
 constexpr int kMaxRefineDepth = 4;
 constexpr double kMinDerivative = 1e-9;
+constexpr double kMinSampleDensity = 1e-9;
+constexpr double kMinTotalArea = 1e-9;
+constexpr double kMinUvSpan = 1e-9;
 
-// Distinct knot values strictly inside (lo, hi); empty unless surf is a B-spline.
+// Knot values strictly inside (lo, hi), so the span ends themselves are excluded.
 std::vector<double> interior_knots(
   const Handle(Geom_Surface) & surf, bool along_u, double lo, double hi)
 {
@@ -194,6 +197,8 @@ SampleAxis uniform_axis(double lo, double hi, int steps, bool cell_centres)
   return axis;
 }
 
+}  // namespace
+
 bool passes_wire_restrictions(
   const gp_Pnt2d & point_2d,
   const std::vector<RegionClassifier> & wire_classifiers)
@@ -210,7 +215,32 @@ bool passes_wire_restrictions(
   return true;
 }
 
-}  // namespace
+std::optional<std::vector<RegionClassifier>> build_region_classifiers(
+  const TopoDS_Face & face,
+  const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags,
+  double tolerance)
+{
+  std::vector<RegionClassifier> wire_classifiers;
+  wire_classifiers.reserve(wires_with_flags.size());
+  for (const auto & [wire, is_excl] : wires_with_flags) {
+    const TopoDS_Face wire_face = face_bounded_by_wire(face, wire);
+    if (wire_face.IsNull()) {
+      RCLCPP_WARN(logger_, "Region wire: failed to build its face");
+      return std::nullopt;
+    }
+
+    try {
+      RegionClassifier entry;
+      entry.classifier = std::make_unique<BRepTopAdaptor_FClass2d>(wire_face, tolerance);
+      entry.is_exclusion_zone = is_excl;
+      wire_classifiers.push_back(std::move(entry));
+    } catch (const Standard_Failure & e) {
+      RCLCPP_WARN(logger_, "Region wire: classifier failed to build (%s)", e.GetMessageString());
+      return std::nullopt;
+    }
+  }
+  return wire_classifiers;
+}
 
 std::vector<FaceSample> sample_face_region(
   const TopoDS_Face & face,
@@ -244,7 +274,7 @@ std::vector<FaceSample> sample_face_region(
     u_axis = uniform_axis(u_min, u_max, config.grid_steps, cell_centres);
     v_axis = uniform_axis(v_min, v_max, config.grid_steps, cell_centres);
   } else {
-    const double density = std::max(config.sample_density, kMinDerivative);
+    const double density = std::max(config.sample_density, kMinSampleDensity);
     const int max_cells = std::max(1, config.max_cells_per_tile);
 
     u_axis = build_axis(
@@ -268,38 +298,16 @@ std::vector<FaceSample> sample_face_region(
   const int u_count = static_cast<int>(u_axis.coords.size());
   const int v_count = static_cast<int>(v_axis.coords.size());
 
-  std::vector<RegionClassifier> wire_classifiers;
-  wire_classifiers.reserve(wires_with_flags.size());
-  for (const auto & [wire, is_excl] : wires_with_flags) {
-    // An unusable wire rejects the face, for the reason given in the catch below.
-    const TopoDS_Face wire_face = face_bounded_by_wire(face, wire);
-    if (wire_face.IsNull()) {
-      RCLCPP_WARN(logger_,
-        "sample_face_region: failed to build face for region wire, "
-        "rejecting this face's samples conservatively");
-      return samples;
-    }
-
-    try {
-      RegionClassifier entry;
-      entry.classifier =
-        std::make_unique<BRepTopAdaptor_FClass2d>(wire_face, config.classifier_tolerance);
-      entry.is_exclusion_zone = is_excl;
-      wire_classifiers.push_back(std::move(entry));
-    } catch (const Standard_Failure & e) {
-      // A region wire whose in/out state cannot be determined must not be
-      // silently treated as "no restriction" — that would let samples through
-      // an exclusion zone or contact area a bad wire happens to shadow. Reject
-      // the whole face's samples instead, matching the other structural
-      // early-outs above (no surface, degenerate UV bounds).
-      RCLCPP_WARN(
-        logger_,
-        "sample_face_region: region classifier failed to build (%s), "
-        "rejecting this face's samples conservatively",
-        e.GetMessageString());
-      return samples;
-    }
+  // A region wire whose in/out state cannot be determined must not be silently
+  // treated as "no restriction" — that would let samples through an exclusion zone
+  // or contact area a bad wire happens to shadow. Reject the whole face's samples
+  // instead, matching the other structural early-outs above.
+  auto built = build_region_classifiers(face, wires_with_flags, config.classifier_tolerance);
+  if (!built.has_value()) {
+    RCLCPP_WARN(logger_, "sample_face_region: rejecting this face's samples conservatively");
+    return samples;
   }
+  const std::vector<RegionClassifier> wire_classifiers = std::move(*built);
 
   std::unique_ptr<BRepTopAdaptor_FClass2d> face_classifier;
   try {
@@ -382,7 +390,7 @@ double area_fraction(
     }
   }
 
-  if (total <= kMinDerivative) {
+  if (total <= kMinTotalArea) {
     return 0.0;
   }
   return matched / total;
@@ -454,7 +462,7 @@ TopoDS_Wire bounding_wire_in_uv(
   v_lo = std::max(v_lo, static_cast<double>(face_v_min));
   v_hi = std::min(v_hi, static_cast<double>(face_v_max));
 
-  if (u_hi - u_lo < kMinDerivative || v_hi - v_lo < kMinDerivative) {
+  if (u_hi - u_lo < kMinUvSpan || v_hi - v_lo < kMinUvSpan) {
     RCLCPP_DEBUG(logger_, "bounding_wire_in_uv: region is degenerate in UV");
     return TopoDS_Wire();
   }
@@ -473,14 +481,14 @@ TopoDS_Wire bounding_wire_in_uv(
         GCE2d_MakeSegment(corners[i], corners[(i + 1) % 4]).Value();
       BRepBuilderAPI_MakeEdge edge_maker(segment, surf);
       if (!edge_maker.IsDone()) {
-        RCLCPP_WARN(logger_, "bounding_wire_in_uv: edge %d could not be built", i);
+        RCLCPP_DEBUG(logger_, "bounding_wire_in_uv: edge %d could not be built", i);
         return TopoDS_Wire();
       }
       wire_builder.Add(edge_maker.Edge());
     }
 
     if (!wire_builder.IsDone()) {
-      RCLCPP_WARN(logger_, "bounding_wire_in_uv: MakeWire failed");
+      RCLCPP_DEBUG(logger_, "bounding_wire_in_uv: MakeWire failed");
       return TopoDS_Wire();
     }
 
@@ -489,7 +497,7 @@ TopoDS_Wire bounding_wire_in_uv(
     BRepLib::BuildCurves3d(wire);
     return TopoDS::Wire(wire.Moved(location));
   } catch (const Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "bounding_wire_in_uv: %s", e.GetMessageString());
+    RCLCPP_DEBUG(logger_, "bounding_wire_in_uv: %s", e.GetMessageString());
     return TopoDS_Wire();
   }
 }

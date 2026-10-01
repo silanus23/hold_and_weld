@@ -28,8 +28,10 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 
+#include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 
+using hold_and_weld_gripper_sampler::geometry::GeometryMapper;  // NOLINT
 using hold_and_weld_gripper_sampler::io::ShapeLoader;  // NOLINT
 using hold_and_weld_gripper_sampler::io::ShapeLoaderConfig;  // NOLINT
 
@@ -478,6 +480,56 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoRobotElement_ThrowsRuntimeError
   EXPECT_THROW(
     loader_->load_from_urdf_string(urdf_string),
     std::runtime_error);
+}
+
+// Joint origins place child links; both URDF consumers must see the same chained pose.
+TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithJointChain_PlacesChildLinksAtJointOrigins)
+{
+  // tip frame = Rz(90°) at (0, 0, 0.5), then +0.1 along the rotated x → (0, 0.1, 0.5);
+  // the collision origin adds another +0.1 along that x → tip box centre (0, 0.2, 0.5).
+  std::string urdf_string =
+    R"(
+    <robot name="chain">
+      <link name="tip">
+        <collision>
+          <origin xyz="0.1 0 0"/>
+          <geometry><box size="0.02 0.02 0.02"/></geometry>
+        </collision>
+      </link>
+      <link name="mid"/>
+      <link name="base">
+        <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision>
+      </link>
+      <joint name="base_to_mid" type="revolute">
+        <parent link="base"/><child link="mid"/>
+        <origin xyz="0 0 0.5" rpy="0 0 1.5707963267948966"/>
+      </joint>
+      <joint name="mid_to_tip" type="fixed">
+        <parent link="mid"/><child link="tip"/>
+        <origin xyz="0.1 0 0"/>
+      </joint>
+    </robot>
+  )";
+
+  const auto expect_tip_placed = [](const Bnd_Box & box) {
+      double x_min, y_min, z_min, x_max, y_max, z_max;
+      box.Get(x_min, y_min, z_min, x_max, y_max, z_max);
+      EXPECT_NEAR(x_max, 0.05, test_constants::kCurvedGeometryTolerance);
+      EXPECT_NEAR(y_max, 0.21, test_constants::kCurvedGeometryTolerance);
+      EXPECT_NEAR(z_max, 0.51, test_constants::kCurvedGeometryTolerance);
+    };
+
+  Bnd_Box loader_box;
+  BRepBndLib::AddOptimal(loader_->load_from_urdf_string(urdf_string), loader_box, false, false);
+  expect_tip_placed(loader_box);
+
+  GeometryMapper mapper;
+  mapper.load_from_urdf_string(urdf_string);
+  Bnd_Box mapper_box;
+  for (int i = 1; i <= mapper.get_face_map().Extent(); ++i) {
+    BRepBndLib::AddOptimal(mapper.get_face_map()(i), mapper_box, false, false);
+  }
+  expect_tip_placed(mapper_box);
 }
 
 int main(int argc, char ** argv)

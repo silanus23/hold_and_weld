@@ -32,12 +32,21 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 
+#include <rclcpp/rclcpp.hpp>
+
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
+
 namespace hold_and_weld_gripper_sampler
 {
 namespace geometry
 {
 
-static void check_embree_error(RTCDevice device, const char * context)
+namespace
+{
+
+const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
+
+void check_embree_error(RTCDevice device, const char * context)
 {
   RTCError err = rtcGetDeviceError(device);
   if (err != RTC_ERROR_NONE) {
@@ -57,6 +66,8 @@ static void check_embree_error(RTCDevice device, const char * context)
   }
 }
 
+}  // namespace
+
 EmbreeMeshQuery::EmbreeMeshQuery(
   const TopoDS_Shape & shape,
   double linear_deflection)
@@ -68,11 +79,7 @@ EmbreeMeshQuery::EmbreeMeshQuery(
     throw std::runtime_error("EmbreeMeshQuery: linear_deflection must be > 0");
   }
 
-  IMeshTools_Parameters mesh_params;
-  mesh_params.Deflection = linear_deflection;
-  mesh_params.Angle = 0.5;
-  mesh_params.DeflectionInterior = linear_deflection * 10.0;
-  mesh_params.InParallel = false;
+  IMeshTools_Parameters mesh_params = geometry::collision_mesh_parameters(linear_deflection);
   // Standard_Failure is not a std::exception; rethrow as one so callers'
   // std::exception handlers see OCCT meshing failures too.
   try {
@@ -82,11 +89,17 @@ EmbreeMeshQuery::EmbreeMeshQuery(
             std::string("EmbreeMeshQuery: meshing failed — ") + e.GetMessageString());
   }
 
+  size_t total_faces = 0;
+  size_t untriangulated_faces = 0;
   for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
+    total_faces++;
     TopoDS_Face face = TopoDS::Face(exp.Current());
     TopLoc_Location loc;
     Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
-    if (tri.IsNull()) {continue;}
+    if (tri.IsNull()) {
+      untriangulated_faces++;
+      continue;
+    }
 
     const gp_Trsf & trsf = loc.Transformation();
     const bool is_identity = loc.IsIdentity();
@@ -111,6 +124,14 @@ EmbreeMeshQuery::EmbreeMeshQuery(
             offset + static_cast<unsigned int>(n2 - 1),
             offset + static_cast<unsigned int>(n3 - 1)});
     }
+  }
+
+  // A missing face is a hole in the mesh: rays leak through it and
+  // point_inside parity flips for points behind it.
+  if (untriangulated_faces > 0) {
+    RCLCPP_WARN(
+      logger_, "EmbreeMeshQuery: %zu of %zu faces have no triangulation; "
+      "collision mesh has holes", untriangulated_faces, total_faces);
   }
 
   if (vertex_buf_.empty() || index_buf_.empty()) {
@@ -206,7 +227,7 @@ void EmbreeMeshQuery::commit_scene()
     geom = rtcNewGeometry(device_, RTC_GEOMETRY_TYPE_TRIANGLE);
     check_embree_error(device_, "rtcNewGeometry");
 
-    // Share the host buffers with Embree — vertex_buf_ and index_buf_ must
+    // Share the host buffers with Embree. Vertex_buf_ and index_buf_ must
     // remain alive for the scene lifetime (they are members of this class).
     rtcSetSharedGeometryBuffer(
       geom,
@@ -270,7 +291,7 @@ std::optional<gp_Pnt> EmbreeMeshQuery::ray_intersect(
   rayhit.ray.dir_y = static_cast<float>(direction.Y());
   rayhit.ray.dir_z = static_cast<float>(direction.Z());
 
-  rayhit.ray.tnear = 1e-6f;                               // small epsilon to skip self-hit
+  rayhit.ray.tnear = 1e-6f;
   rayhit.ray.tfar = static_cast<float>(max_distance);
   rayhit.ray.mask = 0xFFFFFFFF;
   rayhit.ray.flags = 0;
@@ -294,7 +315,7 @@ std::optional<gp_Pnt> EmbreeMeshQuery::ray_intersect(
 }
 
 // Hits are counted via repeated rtcIntersect1 because RTCFilterFunctionNArguments
-// uses a packet type; casting it to a scalar hit struct is UB.  Odd count = inside.
+// uses a packet type; casting it to a scalar hit struct is UB.
 bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
 {
   if (!valid_) {return false;}
@@ -306,7 +327,7 @@ bool EmbreeMeshQuery::point_inside(const gp_Pnt & point) const
   constexpr float kDirZ = 0.2672612f;  // (3, 2, 1) / sqrt(14)
   // Advance past each hit by this much. Walls thinner than it would be counted
   // once instead of twice, so it stays far below any real wall thickness.
-  constexpr float kEps = 1e-6f;  // 1 µm
+  constexpr float kEps = 1e-6f;
   constexpr int kMaxIter = 256;
 
   float tnear = kEps;

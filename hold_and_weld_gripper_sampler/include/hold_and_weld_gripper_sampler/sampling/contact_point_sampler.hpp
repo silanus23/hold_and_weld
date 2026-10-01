@@ -30,6 +30,7 @@
 
 #include "hold_and_weld_gripper_sampler/core/region_filter.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
+#include "hold_and_weld_gripper_sampler/sampling/face_sampler.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -47,6 +48,9 @@ struct SamplingConfig
   double min_angle_deg = 160.0;
   double max_angle_deg = 180.0;
   double normal_sample_density = 1.0;
+  // Bounds on the per-face normal sample count that normal_sample_density gives.
+  int min_normal_samples = 10;
+  int max_normal_samples = 100;
   double alignment_threshold = 0.95;
   double max_lateral_deviation = 0.02;
 };
@@ -56,8 +60,8 @@ struct SamplingConfig
  */
 struct SurfacePair
 {
-  int surface_id_1;
-  int surface_id_2;
+  int surface_id_1 = -1;
+  int surface_id_2 = -1;
   TopoDS_Face face_1;
   TopoDS_Face face_2;
   gp_Vec normal_1;
@@ -71,13 +75,13 @@ struct ContactPair
 {
   gp_Pnt contact_1;
   gp_Pnt contact_2;
-  int surface_id_1;
-  int surface_id_2;
+  int surface_id_1 = -1;
+  int surface_id_2 = -1;
   TopoDS_Face face_1;
   TopoDS_Face face_2;
   gp_Vec normal_1;
   gp_Vec normal_2;
-  double grip_distance;
+  double grip_distance = 0.0;
 };
 
 /**
@@ -90,10 +94,10 @@ struct RejectionStats
   size_t total_samples = 0;
   size_t no_opposing = 0;
   size_t exclusion = 0;
-  size_t not_in_allowed_area = 0;
   size_t diagonal = 0;
   size_t internal_grip = 0;
   size_t grip_distance = 0;
+  size_t no_normal = 0;
   size_t duplicate = 0;
 };
 
@@ -108,7 +112,11 @@ struct RejectionStats
 class ContactPointSampler
 {
 public:
-  /** @brief Constructor with optional configuration */
+  /**
+   * @brief Constructor with optional configuration
+   *
+   * @param config Sampling configuration; alignment_threshold is clamped to [0, 1]
+   */
   explicit ContactPointSampler(const SamplingConfig & config = SamplingConfig{});
 
   /**
@@ -128,6 +136,8 @@ public:
    * @brief Rejection counters from the most recent generate_contact_pairs call.
    *
    * All counters are zero before the first call.
+   *
+   * @return Counters of the last call
    */
   const RejectionStats & last_rejection_stats() const {return last_stats_;}
 
@@ -203,30 +213,28 @@ private:
    *
    * @param point_3d Point to test
    * @param face Face the point belongs to
-   * @param surface_id Surface ID for exclusion lookup
-   * @param exclusion_areas Exclusion wires
+   * @param regions The face's region classifiers; std::nullopt if they failed to build
    * @return true if point is in an exclusion zone, or could not be classified
    */
   bool is_point_in_exclusion(
     const gp_Pnt & point_3d,
     const TopoDS_Face & face,
-    int surface_id,
-    const std::vector<core::SampleArea> & exclusion_areas) const;
+    const std::optional<std::vector<RegionClassifier>> & regions) const;
 
   /**
    * @brief Check if a 3D point falls within the allowed sampling area on a surface.
    *
+   * Exact negation of is_point_in_exclusion.
+   *
    * @param point_3d Point to test
    * @param face Face the point belongs to
-   * @param surface_id Surface ID for area lookup
-   * @param exclusion_areas Sample area wires
+   * @param regions The face's region classifiers; std::nullopt if they failed to build
    * @return true if point is in an allowed area
    */
   bool is_point_in_allowed_area(
     const gp_Pnt & point_3d,
     const TopoDS_Face & face,
-    int surface_id,
-    const std::vector<core::SampleArea> & exclusion_areas) const;
+    const std::optional<std::vector<RegionClassifier>> & regions) const;
 
   /**
    * @brief Project a contact point onto the opposing face to find the antipodal contact.

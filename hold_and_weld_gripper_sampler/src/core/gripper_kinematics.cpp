@@ -27,10 +27,12 @@
 namespace hold_and_weld_gripper_sampler
 {
 
+static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
+
 TopoDS_Shape ParsedGripper::configure(double grip_distance) const
 {
   if (finger_1.IsNull() || finger_2.IsNull() || base.IsNull()) {
-    throw std::runtime_error("configure_gripper: Input shapes are null");
+    throw std::runtime_error("ParsedGripper::configure: Input shapes are null");
   }
 
   const double finger_travel = std::max(0.0,
@@ -41,12 +43,11 @@ TopoDS_Shape ParsedGripper::configure(double grip_distance) const
       const double mag = ax.norm();
       if (mag < 1e-9) {
         throw std::runtime_error(
-        std::string("configure_gripper: ") + name + " has zero magnitude");
+        std::string("ParsedGripper::configure: ") + name + " has zero magnitude");
       }
       if (std::abs(mag - 1.0) > 1e-3) {
-        RCLCPP_WARN(
-        rclcpp::get_logger("gripper_sampler"),
-        "configure_gripper: %s has non-unit magnitude %.6f, normalising", name, mag);
+        RCLCPP_WARN(logger_,
+        "ParsedGripper::configure: %s has non-unit magnitude %.6f, normalising", name, mag);
       }
       return gp_Vec(ax.x() / mag, ax.y() / mag, ax.z() / mag);
     };
@@ -62,17 +63,17 @@ TopoDS_Shape ParsedGripper::configure(double grip_distance) const
 
     BRepBuilderAPI_Transform f1_transformer(finger_1, f1_trsf, Standard_True);
     if (!f1_transformer.IsDone()) {
-      throw std::runtime_error("configure_gripper: BRepBuilderAPI_Transform failed for finger_1");
+      throw std::runtime_error("ParsedGripper::configure: transform failed for finger_1");
     }
     BRepBuilderAPI_Transform f2_transformer(finger_2, f2_trsf, Standard_True);
     if (!f2_transformer.IsDone()) {
-      throw std::runtime_error("configure_gripper: BRepBuilderAPI_Transform failed for finger_2");
+      throw std::runtime_error("ParsedGripper::configure: transform failed for finger_2");
     }
     TopoDS_Shape f1_opened = f1_transformer.Shape();
     TopoDS_Shape f2_opened = f2_transformer.Shape();
 
     if (f1_opened.IsNull() || f2_opened.IsNull()) {
-      throw std::runtime_error("configure_gripper: Transformation yielded null shape");
+      throw std::runtime_error("ParsedGripper::configure: Transformation yielded null shape");
     }
 
     BRep_Builder builder;

@@ -35,9 +35,6 @@ namespace core
 class SurfaceFilter
 {
 public:
-  /**
-   * @brief Virtual destructor
-   */
   virtual ~SurfaceFilter() = default;
 
   /**

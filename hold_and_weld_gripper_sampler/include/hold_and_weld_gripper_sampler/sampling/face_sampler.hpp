@@ -17,6 +17,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -108,6 +109,31 @@ struct RegionClassifier
 };
 
 /**
+ * @brief Build one classifier per region wire of a face, to reuse across many points.
+ *
+ * @param face Face the wires lie on
+ * @param wires_with_flags Each a wire plus an is_exclusion flag, as for sample_face_region
+ * @param tolerance UV classification tolerance
+ * @return One RegionClassifier per wire in the same order, or std::nullopt if any
+ *   wire cannot be classified; callers must then treat the whole face as unusable
+ */
+std::optional<std::vector<RegionClassifier>> build_region_classifiers(
+  const TopoDS_Face & face,
+  const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags,
+  double tolerance);
+
+/**
+ * @brief Whether a UV point satisfies every region restriction.
+ *
+ * @param point_2d UV point on the face the classifiers were built for
+ * @param wire_classifiers From build_region_classifiers
+ * @return false if the point is inside an exclusion wire or outside a required one
+ */
+bool passes_wire_restrictions(
+  const gp_Pnt2d & point_2d,
+  const std::vector<RegionClassifier> & wire_classifiers);
+
+/**
  * @brief Walk the allowed region of a face on a UV grid.
  *
  * Single implementation behind every face-region walk in the package (contact
@@ -148,7 +174,7 @@ double area_fraction(
 /**
  * @brief Face on the surface of @p face, bounded by @p wire, for UV classification.
  *
- * The one place a region wire becomes something BRepClass_FaceClassifier can
+ * The one place a region wire becomes something BRepTopAdaptor_FClass2d can
  * test. Built on the face's untransformed surface so wires from
  * bounding_wire_in_uv keep their pcurves when the face is located (STEP
  * assemblies, the loader's transform); a wire without pcurves only works on
@@ -187,6 +213,9 @@ TopoDS_Wire bounding_wire_in_uv(
  * error is first order, bounded by h * P / sqrt(2) (h = cell size, P = trim
  * perimeter); see FaceSamplerTest.TrimBoundaryErrorStaysWithinFirstOrderBound.
  * The same bound applies to area_fraction.
+ *
+ * @param samples Samples from sample_face_region
+ * @return Summed cell area [m^2]
  */
 double sampled_area(const std::vector<FaceSample> & samples);
 

@@ -81,147 +81,107 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
 
   auto surface_pairs = find_surface_pairs(topology, valid_surface_ids, exclusion_areas);
 
-  RCLCPP_INFO(logger_, "Found %zu valid surface pairs", surface_pairs.size());
-
   if (surface_pairs.empty()) {
     RCLCPP_WARN(logger_, "No valid surface pairs found - check min/max_angle_deg "
       "and the sample-area wires");
     return contact_pairs;
   }
 
+  // Each face's region classifiers are built once and shared by every point tested on it.
+  std::unordered_map<int, std::optional<std::vector<RegionClassifier>>> region_cache;
+  const FaceSamplingConfig classifier_defaults;
+  const auto regions_of = [&](int surface_id, const TopoDS_Face & face)
+    -> const std::optional<std::vector<RegionClassifier>> & {
+      auto it = region_cache.find(surface_id);
+      if (it == region_cache.end()) {
+        std::vector<std::pair<TopoDS_Wire, bool>> wires;
+        for (const auto & area : exclusion_areas) {
+          if (area.surface_id == surface_id) {
+            wires.emplace_back(area.wire, area.is_exclusion);
+          }
+        }
+        it = region_cache.emplace(
+          surface_id,
+          build_region_classifiers(face, wires, classifier_defaults.classifier_tolerance)).first;
+      }
+      return it->second;
+    };
+
   for (const auto & pair : surface_pairs) {
-    auto contacts_1 = sample_surface(pair.face_1, pair.surface_id_1, exclusion_areas);
+    // Sample each face of the pair in turn and look for the opposing contact on the other.
+    for (const bool sample_first : {true, false}) {
+      const TopoDS_Face & sampled_face = sample_first ? pair.face_1 : pair.face_2;
+      const TopoDS_Face & opposing_face = sample_first ? pair.face_2 : pair.face_1;
+      const int sampled_id = sample_first ? pair.surface_id_1 : pair.surface_id_2;
+      const int opposing_id = sample_first ? pair.surface_id_2 : pair.surface_id_1;
 
-    RCLCPP_DEBUG(logger_, "Surface pair %d-%d: sampled %zu points on surface 1",
-      pair.surface_id_1, pair.surface_id_2, contacts_1.size());
+      auto samples = sample_surface(sampled_face, sampled_id, exclusion_areas);
 
-    for (const auto & contact_1 : contacts_1) {
-      last_stats_.total_samples++;
-      gp_Pnt contact_2;
+      RCLCPP_DEBUG(logger_, "Surface pair %d-%d: sampled %zu points on surface %d",
+        pair.surface_id_1, pair.surface_id_2, samples.size(), sampled_id);
 
-      if (!find_opposing_contact(contact_1, pair.face_1, pair.face_2, contact_2)) {
-        last_stats_.no_opposing++;
-        continue;
+      for (const auto & sample : samples) {
+        last_stats_.total_samples++;
+        gp_Pnt opposing;
+
+        if (!find_opposing_contact(sample, sampled_face, opposing_face, opposing)) {
+          last_stats_.no_opposing++;
+          continue;
+        }
+
+        if (is_point_in_exclusion(opposing, opposing_face,
+              regions_of(opposing_id, opposing_face)))
+        {
+          last_stats_.exclusion++;
+          continue;
+        }
+
+        const gp_Pnt & contact_1 = sample_first ? sample : opposing;
+        const gp_Pnt & contact_2 = sample_first ? opposing : sample;
+
+        PairingVerdict verdict = is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2);
+        if (verdict == PairingVerdict::InternalGrip) {
+          last_stats_.internal_grip++;
+          continue;
+        }
+        if (verdict != PairingVerdict::Valid) {
+          last_stats_.diagonal++;
+          continue;
+        }
+
+        double grip_distance = contact_1.Distance(contact_2);
+
+        if (grip_distance < config_.min_gripper_opening ||
+          grip_distance > config_.max_gripper_opening)
+        {
+          last_stats_.grip_distance++;
+          continue;
+        }
+
+        auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
+        auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
+
+        if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
+          last_stats_.no_normal++;
+          continue;
+        }
+
+        ContactPair cp;
+        cp.contact_1 = contact_1;
+        cp.contact_2 = contact_2;
+        cp.surface_id_1 = pair.surface_id_1;
+        cp.surface_id_2 = pair.surface_id_2;
+        cp.face_1 = pair.face_1;
+        cp.face_2 = pair.face_2;
+        cp.normal_1 = normal_1_opt.value();
+        cp.normal_2 = normal_2_opt.value();
+        cp.grip_distance = grip_distance;
+
+        contact_pairs.push_back(cp);
       }
-
-      if (is_point_in_exclusion(contact_2, pair.face_2, pair.surface_id_2, exclusion_areas)) {
-        last_stats_.exclusion++;
-        continue;
-      }
-
-      if (!is_point_in_allowed_area(contact_2, pair.face_2, pair.surface_id_2, exclusion_areas)) {
-        last_stats_.not_in_allowed_area++;
-        continue;
-      }
-
-      PairingVerdict verdict = is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2);
-      if (verdict == PairingVerdict::InternalGrip) {
-        last_stats_.internal_grip++;
-        continue;
-      }
-      if (verdict != PairingVerdict::Valid) {
-        last_stats_.diagonal++;
-        continue;
-      }
-
-      double grip_distance = contact_1.Distance(contact_2);
-
-      if (grip_distance < config_.min_gripper_opening ||
-        grip_distance > config_.max_gripper_opening)
-      {
-        last_stats_.grip_distance++;
-        continue;
-      }
-
-      auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
-      auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
-
-      if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
-        last_stats_.no_opposing++;
-        continue;
-      }
-
-      ContactPair cp;
-      cp.contact_1 = contact_1;
-      cp.contact_2 = contact_2;
-      cp.surface_id_1 = pair.surface_id_1;
-      cp.surface_id_2 = pair.surface_id_2;
-      cp.face_1 = pair.face_1;
-      cp.face_2 = pair.face_2;
-      cp.normal_1 = normal_1_opt.value();
-      cp.normal_2 = normal_2_opt.value();
-      cp.grip_distance = grip_distance;
-
-      contact_pairs.push_back(cp);
-    }
-
-    auto contacts_2 = sample_surface(pair.face_2, pair.surface_id_2, exclusion_areas);
-
-    RCLCPP_DEBUG(logger_, "Surface pair %d-%d: sampled %zu points on surface 2",
-      pair.surface_id_1, pair.surface_id_2, contacts_2.size());
-
-    for (const auto & contact_2 : contacts_2) {
-      last_stats_.total_samples++;
-      gp_Pnt contact_1;
-
-      if (!find_opposing_contact(contact_2, pair.face_2, pair.face_1, contact_1)) {
-        last_stats_.no_opposing++;
-        continue;
-      }
-
-      if (is_point_in_exclusion(contact_1, pair.face_1, pair.surface_id_1, exclusion_areas)) {
-        last_stats_.exclusion++;
-        continue;
-      }
-
-      if (!is_point_in_allowed_area(contact_1, pair.face_1, pair.surface_id_1, exclusion_areas)) {
-        last_stats_.not_in_allowed_area++;
-        continue;
-      }
-
-      PairingVerdict verdict = is_valid_pairing(contact_1, contact_2, pair.face_1, pair.face_2);
-      if (verdict == PairingVerdict::InternalGrip) {
-        last_stats_.internal_grip++;
-        continue;
-      }
-      if (verdict != PairingVerdict::Valid) {
-        last_stats_.diagonal++;
-        continue;
-      }
-
-      double grip_distance = contact_1.Distance(contact_2);
-
-      if (grip_distance < config_.min_gripper_opening ||
-        grip_distance > config_.max_gripper_opening)
-      {
-        last_stats_.grip_distance++;
-        continue;
-      }
-
-      auto normal_1_opt = geometry::surface_normal_at_point(contact_1, pair.face_1);
-      auto normal_2_opt = geometry::surface_normal_at_point(contact_2, pair.face_2);
-
-      if (!normal_1_opt.has_value() || !normal_2_opt.has_value()) {
-        last_stats_.no_opposing++;
-        continue;
-      }
-
-      ContactPair cp;
-      cp.contact_1 = contact_1;
-      cp.contact_2 = contact_2;
-      cp.surface_id_1 = pair.surface_id_1;
-      cp.surface_id_2 = pair.surface_id_2;
-      cp.face_1 = pair.face_1;
-      cp.face_2 = pair.face_2;
-      cp.normal_1 = normal_1_opt.value();
-      cp.normal_2 = normal_2_opt.value();
-      cp.grip_distance = grip_distance;
-
-      contact_pairs.push_back(cp);
     }
   }
 
-  // Deduplicate contact pairs using grid-based bucketing
   size_t pairs_before_dedup = contact_pairs.size();
   contact_pairs = deduplicate_contact_pairs(contact_pairs, config_.sample_density / 2.0);
   last_stats_.duplicate = pairs_before_dedup - contact_pairs.size();
@@ -232,10 +192,10 @@ std::vector<ContactPair> ContactPointSampler::generate_contact_pairs(
 
   if (last_stats_.total_samples > 0) {
     RCLCPP_DEBUG(logger_, "Rejection breakdown: no_opposing=%zu, exclusion=%zu, "
-      "not_allowed=%zu, diagonal=%zu, internal_grip=%zu, grip_distance=%zu, duplicates=%zu",
-      last_stats_.no_opposing, last_stats_.exclusion, last_stats_.not_in_allowed_area,
+      "diagonal=%zu, internal_grip=%zu, grip_distance=%zu, no_normal=%zu, duplicates=%zu",
+      last_stats_.no_opposing, last_stats_.exclusion,
       last_stats_.diagonal, last_stats_.internal_grip, last_stats_.grip_distance,
-          last_stats_.duplicate);
+      last_stats_.no_normal, last_stats_.duplicate);
   }
 
   if (contact_pairs.empty()) {
@@ -259,7 +219,7 @@ std::vector<SurfacePair> ContactPointSampler::find_surface_pairs(
   size_t total_pairs_checked = 0;
   size_t rejected_normals_not_antiparallel = 0;
 
-  RCLCPP_INFO(logger_, "Surface pair analysis: %zu surfaces, angle [%.1f°, %.1f°]",
+  RCLCPP_DEBUG(logger_, "Surface pair analysis: %zu surfaces, angle [%.1f°, %.1f°]",
     valid_surface_ids.size(), config_.min_angle_deg, config_.max_angle_deg);
 
   for (size_t i = 0; i < valid_surface_ids.size(); i++) {
@@ -302,9 +262,6 @@ std::vector<gp_Pnt> ContactPointSampler::sample_surface(
   int surface_id,
   const std::vector<core::SampleArea> & exclusion_areas) const
 {
-  RCLCPP_DEBUG(logger_, "Sampling surface %d with density %.4f m",
-    surface_id, config_.sample_density);
-
   std::vector<std::pair<TopoDS_Wire, bool>> wires_with_flags;
   for (const auto & area : exclusion_areas) {
     if (area.surface_id == surface_id) {
@@ -354,21 +311,16 @@ std::optional<bool> ContactPointSampler::is_point_inside_wire(
 bool ContactPointSampler::is_point_in_exclusion(
   const gp_Pnt & point_3d,
   const TopoDS_Face & face,
-  int surface_id,
-  const std::vector<core::SampleArea> & exclusion_areas) const
+  const std::optional<std::vector<RegionClassifier>> & regions) const
 {
-  std::vector<std::pair<TopoDS_Wire, bool>> wires_with_flags;
-  for (const auto & area : exclusion_areas) {
-    if (area.surface_id == surface_id) {
-      wires_with_flags.emplace_back(area.wire, area.is_exclusion);
-    }
+  // Anything that stops the point being classified counts as excluded.
+  if (!regions.has_value()) {
+    return true;
   }
-
-  if (wires_with_flags.empty()) {
+  if (regions->empty()) {
     return false;
   }
 
-  // Anything that stops the point being classified counts as excluded.
   try {
     Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
     GeomAPI_ProjectPointOnSurf projector(point_3d, surf);
@@ -379,75 +331,19 @@ bool ContactPointSampler::is_point_in_exclusion(
 
     double u, v;
     projector.LowerDistanceParameters(u, v);
-    gp_Pnt2d point_2d(u, v);
-
-    for (const auto & [wire, is_exclusion_zone] : wires_with_flags) {
-      const auto inside_wire = is_point_inside_wire(point_2d, wire, face);
-      if (!inside_wire.has_value()) {
-        return true;
-      }
-
-      if (is_exclusion_zone && *inside_wire) {
-        return true;
-      } else if (!is_exclusion_zone && !*inside_wire) {
-        return true;
-      }
-    }
+    return !passes_wire_restrictions(gp_Pnt2d(u, v), *regions);
   } catch (const Standard_Failure & e) {
     RCLCPP_DEBUG(logger_, "Projection failed in exclusion check: %s", e.GetMessageString());
     return true;
   }
-
-  return false;
 }
 
 bool ContactPointSampler::is_point_in_allowed_area(
   const gp_Pnt & point_3d,
   const TopoDS_Face & face,
-  int surface_id,
-  const std::vector<core::SampleArea> & exclusion_areas) const
+  const std::optional<std::vector<RegionClassifier>> & regions) const
 {
-  std::vector<std::pair<TopoDS_Wire, bool>> wires_with_flags;
-  for (const auto & area : exclusion_areas) {
-    if (area.surface_id == surface_id) {
-      wires_with_flags.emplace_back(area.wire, area.is_exclusion);
-    }
-  }
-
-  if (wires_with_flags.empty()) {
-    return true;
-  }
-
-  try {
-    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-    GeomAPI_ProjectPointOnSurf projector(point_3d, surf);
-
-    if (projector.NbPoints() == 0) {
-      return false;
-    }
-
-    double u, v;
-    projector.LowerDistanceParameters(u, v);
-    gp_Pnt2d point_2d(u, v);
-
-    for (const auto & [wire, is_exclusion_zone] : wires_with_flags) {
-      const auto inside_wire = is_point_inside_wire(point_2d, wire, face);
-      if (!inside_wire.has_value()) {
-        return false;
-      }
-
-      if (is_exclusion_zone && *inside_wire) {
-        return false;
-      } else if (!is_exclusion_zone && !*inside_wire) {
-        return false;
-      }
-    }
-  } catch (const Standard_Failure & e) {
-    RCLCPP_DEBUG(logger_, "Projection failed in allowed area check: %s", e.GetMessageString());
-    return false;
-  }
-
-  return true;
+  return !is_point_in_exclusion(point_3d, face, regions);
 }
 
 bool ContactPointSampler::find_opposing_contact(
@@ -612,7 +508,7 @@ bool ContactPointSampler::has_antiparallel_local_normals(
   BRepGProp::SurfaceProperties(face_1, area_props_1);
   BRepGProp::SurfaceProperties(face_2, area_props_2);
   double max_area_cm2 = std::max(area_props_1.Mass(), area_props_2.Mass()) * 10000.0;
-  int target_samples = std::max(10, std::min(100,
+  int target_samples = std::max(config_.min_normal_samples, std::min(config_.max_normal_samples,
     static_cast<int>(max_area_cm2 * config_.normal_sample_density)));
 
   auto normals_1 = sample_normals_from_allowed_region(face_1, wires_1, target_samples);

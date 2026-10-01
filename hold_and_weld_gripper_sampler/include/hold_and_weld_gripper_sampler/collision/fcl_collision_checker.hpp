@@ -129,13 +129,17 @@ public:
     double thickness = 1.0);
 
   /**
-   * @brief True if the ground is modelled as a finite footprint rather than an
+   * @brief Whether the ground is modelled as a finite footprint rather than an
    *        infinite plane.
+   *
+   * @return true for a finite footprint
    */
   bool has_finite_ground() const;
 
   /**
-   * @brief Returns true if a ground plane BVH has been added to this checker.
+   * @brief Whether a ground plane has been added to this checker.
+   *
+   * @return true once add_ground_plane() has been called
    */
   bool has_ground_plane() const;
 
@@ -212,32 +216,43 @@ public:
     double length) const;
 
   /**
-   * @brief Get minimum distance from gripper to primary shape
-   *
-   * @param gripper_transform Transform placing gripper in world frame
-   * @param grip_distance Distance between finger contact points
-   * @return Minimum distance (negative if penetrating)
-   */
-  double distance_to_primary(
-    const gp_Trsf & gripper_transform,
-    double grip_distance) const;
-
-
-  /**
    * @brief Check if collision checker is properly initialized
    *
-   * @return true if all BVH models were built successfully
+   * Exclusion and secondary BVHs are not part of this; a failed one is only
+   * reported by get_unchecked_exclusions() / get_unchecked_secondaries().
+   *
+   * @return true if the primary and all gripper BVH models were built
    */
   bool is_valid() const;
+
+  /**
+   * @brief Indices (into add_exclusion_volumes() input) whose BVH failed to build
+   *
+   * @return Those volumes are never collision-checked
+   */
+  std::vector<size_t> get_unchecked_exclusions() const;
+
+  /**
+   * @brief Indices (into add_secondary_shapes() input) whose BVH failed to build
+   *
+   * @return Those obstacles are never collision-checked
+   */
+  std::vector<size_t> get_unchecked_secondaries() const;
 
 private:
   /**
    * @brief Convert OCCT shape to FCL BVH model
+   *
+   * @param shape Shape to triangulate at linear_deflection_
+   * @return The model, or null if the shape is null or fails to mesh
    */
   std::shared_ptr<BVHModel> shape_to_bvh(const TopoDS_Shape & shape) const;
 
   /**
    * @brief Convert gp_Trsf to FCL Transform3
+   *
+   * @param trsf Transform to convert
+   * @return Equivalent FCL transform
    */
   Transform3 to_fcl_transform(const gp_Trsf & trsf) const;
 
@@ -258,8 +273,14 @@ private:
   /**
    * @brief Check collision between gripper components and a target BVH
    *
+   * @param gripper_transform Base pose in world frame
+   * @param grip_distance Jaw opening [m]
+   * @param target_bvh Obstacle mesh, in world frame
+   * @param tolerance Near-miss distance that still counts as a collision [m]
+   * @param kind Which obstacle list target_bvh belongs to; selects the stats counters
    * @param target_index For Exclusion and Secondary targets, the obstacle's index
    *                     in the matching list; selects its stats and Embree scene
+   * @return true on collision
    */
   bool check_gripper_collision(
     const gp_Trsf & gripper_transform,
@@ -274,19 +295,16 @@ private:
    *
    * Handles both ground models: the finite footprint box and the infinite
    * halfspace fallback.
+   *
+   * @param gripper_transform Base pose in world frame
+   * @param grip_distance Jaw opening [m]
+   * @param tolerance Near-miss distance that still counts as a collision [m]
+   * @return true on collision
    */
   bool check_gripper_collision_ground(
     const gp_Trsf & gripper_transform,
     double grip_distance,
     double tolerance) const;
-
-  /**
-   * @brief Compute minimum distance between gripper components and target
-   */
-  double compute_gripper_distance(
-    const gp_Trsf & gripper_transform,
-    double grip_distance,
-    const std::shared_ptr<BVHModel> & target_bvh) const;
 
   std::shared_ptr<BVHModel> finger_1_bvh_;
   std::shared_ptr<BVHModel> finger_2_bvh_;
@@ -363,16 +381,22 @@ public:
 
   /**
    * @brief Get the Embree primary query engine (for reuse in orientation finder)
+   *
+   * @return The engine, or null if it failed to build
    */
   std::shared_ptr<EmbreeMeshQuery> get_embree_primary() const {return embree_primary_;}
 
   /**
    * @brief Get the primary shape BVH model (for diagnostics only)
+   *
+   * @return The model, or null if not built
    */
   std::shared_ptr<BVHModel> get_primary_bvh() const {return primary_bvh_;}
 
   /**
    * @brief Get the base BVH model (for diagnostics only)
+   *
+   * @return The model, or null if not built
    */
   std::shared_ptr<BVHModel> get_base_bvh() const {return base_bvh_;}
 };

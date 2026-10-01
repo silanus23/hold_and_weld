@@ -57,9 +57,6 @@ struct SampleArea
    *
    * Exclusion zone:  points inside the wire boundary are rejected.
    * Inclusion zone:  points outside the wire boundary are rejected.
-   *
-   * Replaces the previous convention of encoding zone type via wire orientation
-   * (TopAbs_REVERSED = exclusion, TopAbs_FORWARD = inclusion).
    */
   bool is_exclusion = false;
 };
@@ -74,19 +71,13 @@ struct SampleArea
 class RegionFilter
 {
 public:
-  /**
-   * @brief Default constructor
-   */
   RegionFilter() = default;
-
-  /**
-   * @brief Virtual destructor
-   */
   virtual ~RegionFilter() = default;
 
   /**
    * @brief Evaluate surfaces and return valid sampling areas
    *
+   * @param shape The primary shape the topology was extracted from
    * @param topology The object topology containing surface geometry
    * @param valid_surface_ids List of surface IDs to process (from surface filters)
    * @return Vector of SampleArea objects defining where grasps can be sampled

@@ -1,6 +1,6 @@
 # hold_and_weld_gripper_sampler
 
-A deterministic, constraint-aware grasp sampling library for parallel jaw grippers.
+A constraint-aware grasp sampling library for parallel jaw grippers.
 Built on OpenCASCADE (OCCT) for geometrically exact CAD surface operations with FCL
 and Embree for collision checking. Unlike conventional samplers, sampling areas are
 defined and constrained before the sampling phase, allowing solutions with hard
@@ -60,7 +60,10 @@ Phase four performs self-collision checks against secondary shapes as a separate
 Candidates surviving all four phases are returned as grasp candidates for downstream
 processing.
 
-## Plugin System
+## Filters and Constraints
+
+Concrete classes wired together by `GraspFinder`; there is no common plugin
+interface yet (see ROADMAP.md).
 
 ### Filters
 
@@ -83,7 +86,7 @@ specific forbidden zones like weld seams and screw holes.
 
 ## Jaw Clearance
 
-Not a plugin and not a constraint — it owns no geometry and contributes nothing to
+Not a constraint — it owns no geometry and contributes nothing to
 the sampling regions. It is a pose-time collision test: `JawClearanceCheck`, in
 `collision/`, beside the FCL checker it calls.
 
@@ -121,8 +124,10 @@ Two things are deliberately left out:
 ros2 run hold_and_weld_gripper_sampler grasp_finder_node --config <path_to_yaml>
 ```
 
-See `config/grasp_finder_example.yaml` for a fully documented configuration example
-covering all supported workpiece types and constraint configurations.
+Without `--config` the node runs `config/grasp_finder_example.yaml`: the shipped test
+cube with one of every secondary and exclusion-zone type. Every key is documented in
+`PARAMS.md`. Output goes to `--output`, else `output.json_path`, else
+`<hold_and_weld_application share>/grasps/grasps.json`.
 
 The output JSON carries visualization geometry alongside the grasps themselves: a
 top-level `constraint_geometry` block (exclusion zones only — secondary/fixture
@@ -138,7 +143,8 @@ fields" section for the exact layout. `hold_and_weld_application`'s
 - Parallel jaw grippers only. Other gripper types are not supported.
 - Tested on box, prism, and small cylinder workpieces. Complex organic geometry
   is not yet validated.
-- Ground plane rejection uses a halfspace model. Smart ground detection based on
+- The ground is a finite box over the `ground_plane` footprint (an infinite
+  halfspace only when no footprint is set). Smart ground detection based on
   workpiece topology is planned.
 - Filter pipeline is defined but not yet wired into the active pipeline.
 - Asymmetric gripper opening not supported. Both fingers are assumed to travel

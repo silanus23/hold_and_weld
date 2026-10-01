@@ -124,17 +124,23 @@ public:
   bool point_inside(const gp_Pnt & point) const;
 
   /**
-   * @brief Returns true if the scene was built successfully and is ready to query.
+   * @brief Whether the scene was built successfully and is ready to query.
+   *
+   * @return true if queries can be made
    */
   bool is_valid() const;
 
   /**
    * @brief Number of triangles loaded into the Embree scene.
+   *
+   * @return Triangle count
    */
   unsigned int num_triangles() const;
 
   /**
    * @brief Number of vertices loaded into the Embree scene.
+   *
+   * @return Vertex count
    */
   unsigned int num_vertices() const;
 

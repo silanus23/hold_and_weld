@@ -19,9 +19,10 @@
  * Usage:
  *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node --config <path_to_yaml>
  *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node --output <path_to_json>
- *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node  # uses default config
+ *   ros2 run hold_and_weld_gripper_sampler grasp_finder_node  # config/grasp_finder_example.yaml
  *
- * -c/--config and -o/--output can be combined. Without --output, results go to
+ * -c/--config and -o/--output can be combined. The output goes to --output, else to the
+ * config's output.json_path (relative to the working directory), else to
  * <hold_and_weld_application share>/grasps/grasps.json. Unknown arguments are rejected.
  */
 
@@ -93,7 +94,7 @@ int run(const std::vector<std::string> & args)
     }
 
     if (config_path.empty()) {
-      config_path = sampler_pkg_share + "/config/grasp_finder.yaml";
+      config_path = sampler_pkg_share + "/config/grasp_finder_example.yaml";
       RCLCPP_INFO(logger, "Using default config: %s", config_path.c_str());
     } else {
       RCLCPP_INFO(logger, "Using config: %s", config_path.c_str());
@@ -114,11 +115,10 @@ int run(const std::vector<std::string> & args)
     auto mapper = std::make_shared<geometry::GeometryMapper>();
     geometry::Topology topology;
     TopoDS_Shape primary_shape;
-    TopoDS_Shape fcl_primary_shape;  // pre-refiner copy for FCL collision checking
+    TopoDS_Shape fcl_primary_shape;
+    io::ShapeLoader loader;
 
     try {
-      io::ShapeLoader loader;
-
       if (!config.primary.step_path.empty()) {
         primary_shape = loader.load_from_step(
         config.primary.step_path,
@@ -140,8 +140,6 @@ int run(const std::vector<std::string> & args)
         return 1;
       }
 
-      // Save raw shape for FCL before any refinement — ShapeRefiner can introduce
-      // face orientation artifacts that cause BVH holes in collision meshes.
       fcl_primary_shape = primary_shape;
 
       // Refine shape before mapping — ShapeRefiner must run on the raw shape
@@ -155,14 +153,10 @@ int run(const std::vector<std::string> & args)
           sr.enclave_area_ratio,
           sr.enclave_angle_threshold,
           sr.max_face_area_ratio,
-          sr.planarity_tolerance_deg);
-        TopoDS_Shape refined = refiner.refine(primary_shape);
-        if (!refined.IsNull()) {
-          primary_shape = refined;
-          RCLCPP_INFO(logger, "Shape refinement complete");
-        } else {
-          RCLCPP_WARN(logger, "ShapeRefiner returned null shape - using original");
-        }
+          sr.planarity_tolerance_deg,
+          sr.inflection_samples);
+        // Falls back to the unrefined shape (and logs why) if refinement fails.
+        primary_shape = refiner.refine(primary_shape);
       }
 
       topology = mapper->load_from_shape(primary_shape, "workpiece");
@@ -214,14 +208,13 @@ int run(const std::vector<std::string> & args)
     gripper.gripper_type.c_str(), gripper.max_opening);
 
     std::vector<TopoDS_Shape> secondary_shapes;
-    io::ShapeLoader shape_loader;
 
     for (const auto & sec_config : config.secondaries) {
       try {
         TopoDS_Shape shape;
 
         if (sec_config.type == "ground_plane") {
-          shape = shape_loader.make_ground_plane(
+          shape = loader.make_ground_plane(
               sec_config.size_x,
               sec_config.size_y,
               sec_config.z_position,
@@ -231,27 +224,27 @@ int run(const std::vector<std::string> & args)
 
           // Override the FCL ground plane Z with the explicit YAML z_position.
           // ConfigParser allows only one ground_plane, so nothing is overwritten here.
-          config.finder_config.ground_bottom_z = sec_config.z_position;
+          config.finder_config.ground_surface_z = sec_config.z_position;
           config.finder_config.ground_center_x = sec_config.translation.x();
           config.finder_config.ground_center_y = sec_config.translation.y();
           config.finder_config.ground_size_x = sec_config.size_x;
           config.finder_config.ground_size_y = sec_config.size_y;
         } else if (sec_config.type == "box") {
-          shape = shape_loader.make_box(
+          shape = loader.make_box(
           sec_config.dimensions, sec_config.translation, sec_config.rotation);
         } else if (sec_config.type == "cylinder") {
-          shape = shape_loader.make_cylinder(
+          shape = loader.make_cylinder(
           sec_config.radius, sec_config.height,
           sec_config.translation, sec_config.rotation);
         } else if (sec_config.type == "step") {
-          shape = shape_loader.load_from_step(
+          shape = loader.load_from_step(
           sec_config.file_path, sec_config.translation, sec_config.rotation);
         } else if (sec_config.type == "urdf") {
-          shape = shape_loader.load_from_urdf(sec_config.file_path);
+          shape = loader.load_from_urdf(sec_config.file_path);
           if (sec_config.translation.norm() > 1e-9 ||
             !sec_config.rotation.isApprox(Eigen::Quaterniond::Identity()))
           {
-            shape = shape_loader.apply_transform(
+            shape = loader.apply_transform(
             shape, sec_config.translation, sec_config.rotation);
           }
         } else {
@@ -283,26 +276,8 @@ int run(const std::vector<std::string> & args)
       }
     }
 
-    RCLCPP_INFO(logger, "Secondary shapes loaded: %zu / %zu",
-      secondary_shapes.size() + config.finder_config.ground_shapes.size(),
-      config.secondaries.size());
-
-    RCLCPP_INFO(logger, "Shapes split: %zu secondary, %zu ground_plane",
+    RCLCPP_INFO(logger, "Secondaries loaded: %zu obstacle(s), %zu ground_plane",
     secondary_shapes.size(), config.finder_config.ground_shapes.size());
-
-    std::optional<std::vector<constraints::exclusion_circle>> circles_opt;
-    std::optional<std::vector<constraints::exclusion_polygon>> polygons_opt;
-    std::optional<std::vector<constraints::exclusion_line>> lines_opt;
-
-    if (!config.exclusion_circles.empty()) {
-      circles_opt = config.exclusion_circles;
-    }
-    if (!config.exclusion_polygons.empty()) {
-      polygons_opt = config.exclusion_polygons;
-    }
-    if (!config.exclusion_lines.empty()) {
-      lines_opt = config.exclusion_lines;
-    }
 
     RCLCPP_INFO(logger, "Exclusion zones: circles=%zu, polygons=%zu, lines=%zu",
     config.exclusion_circles.size(),
@@ -321,9 +296,9 @@ int run(const std::vector<std::string> & args)
       topology,
       gripper,
       secondary_shapes,
-      circles_opt,
-      polygons_opt,
-      lines_opt,
+      config.exclusion_circles,
+      config.exclusion_polygons,
+      config.exclusion_lines,
       config.finder_config,
       fcl_primary_shape
     );
@@ -334,6 +309,25 @@ int run(const std::vector<std::string> & args)
 
     auto end_time = std::chrono::steady_clock::now();
     double elapsed_seconds = std::chrono::duration<double>(end_time - start_time).count();
+
+    std::vector<std::string> skipped = loader.get_skipped();
+    skipped.insert(
+      skipped.end(), result.skipped_constraints.begin(), result.skipped_constraints.end());
+    result.skipped_constraints = skipped;
+    if (skipped.empty()) {
+      RCLCPP_INFO(logger, "All constraints and obstacles enforced");
+    } else {
+      std::string joined;
+      for (const auto & entry : skipped) {
+        joined += "\n  - " + entry;
+      }
+      RCLCPP_WARN(logger, "%zu constraint(s)/obstacle(s) NOT fully enforced; grasps may "
+        "violate them:%s", skipped.size(), joined.c_str());
+      if (config.output.fail_on_skipped_constraint) {
+        RCLCPP_ERROR(logger, "output.fail_on_skipped_constraint is set; no output written");
+        return 1;
+      }
+    }
 
     if (!result.success) {
       RCLCPP_ERROR(logger, "Grasp finding failed: %s", result.error_message.c_str());
@@ -352,39 +346,29 @@ int run(const std::vector<std::string> & args)
     std::string output_path;
     if (!output_path_arg.empty()) {
       output_path = output_path_arg;
-      RCLCPP_INFO(logger, "Output path: %s", output_path.c_str());
+    } else if (!config.output.json_path.empty()) {
+      output_path = config.output.json_path;
     } else {
-      // Looked up only here so --output works without hold_and_weld_application installed.
-      std::string app_pkg_share;
+      // Looked up only here so the other two work without hold_and_weld_application installed.
       try {
-        app_pkg_share = ament_index_cpp::get_package_share_directory("hold_and_weld_application");
+        output_path = ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
+          "/grasps/grasps.json";
       } catch (const std::exception & e) {
-        RCLCPP_ERROR(logger, "No --output given and default output package not found: %s",
-          e.what());
+        RCLCPP_ERROR(logger, "No --output or output.json_path given and default output "
+          "package not found: %s", e.what());
         return 1;
       }
-      std::string output_dir = app_pkg_share + "/grasps";
+    }
+    RCLCPP_INFO(logger, "Output path: %s", output_path.c_str());
+
+    std::filesystem::path parent = std::filesystem::path(output_path).parent_path();
+    if (!parent.empty()) {
       try {
-        std::filesystem::create_directories(output_dir);
+        std::filesystem::create_directories(parent);
       } catch (const std::filesystem::filesystem_error & e) {
         RCLCPP_ERROR(logger, "Failed to create output directory '%s': %s",
-        output_dir.c_str(), e.what());
-        return 1;
-      }
-      output_path = output_dir + "/grasps.json";
-      RCLCPP_INFO(logger, "Output path: %s", output_path.c_str());
-    }
-
-    if (!output_path_arg.empty()) {
-      std::filesystem::path parent = std::filesystem::path(output_path).parent_path();
-      if (!parent.empty()) {
-        try {
-          std::filesystem::create_directories(parent);
-        } catch (const std::filesystem::filesystem_error & e) {
-          RCLCPP_ERROR(logger, "Failed to create output directory '%s': %s",
           parent.c_str(), e.what());
-          return 1;
-        }
+        return 1;
       }
     }
 

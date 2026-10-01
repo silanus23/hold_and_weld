@@ -29,9 +29,6 @@ namespace hold_and_weld_gripper_sampler
 
 /**
  * @brief Represents a single grasp configuration in the world frame.
- *
- * Pre-filters use surface_id_2 = -1 as a marker for allowed-surface encoding.
- * Generator fills both contact points; post-filters validate and score them.
  */
 struct Grasp
 {
@@ -75,17 +72,14 @@ struct Grasp
   /**
    * @brief Surface ID for first contact point (0-indexed)
    *
-   * References Topology::Surface index.
-   * Special value: -1 indicates this is a pre-filter marker grasp.
+   * References Topology::Surface index; -1 when unset.
    */
   int surface_id_1;
 
   /**
    * @brief Surface ID for second contact point (0-indexed)
    *
-   * References Topology::Surface index.
-   * Special value: -1 indicates this is a pre-filter marker grasp
-   * (only surface_id_1 is valid in that case).
+   * References Topology::Surface index; -1 when unset.
    */
   int surface_id_2;
 
@@ -110,6 +104,16 @@ struct Grasp
 
   /**
    * @brief Factory method to create a Grasp from pre-converted Eigen values.
+   *
+   * @param tcp_pos TCP position in world frame [m]
+   * @param tcp_orient TCP orientation in world frame
+   * @param opening Gripper opening [m]
+   * @param contact_1 First contact point in world frame [m]
+   * @param contact_2 Second contact point in world frame [m]
+   * @param surf_id_1 Surface ID of the first contact
+   * @param surf_id_2 Surface ID of the second contact
+   * @param quality Quality score [0, 1]
+   * @return The populated Grasp
    */
   static Grasp create(
     const Eigen::Vector3d & tcp_pos,
@@ -136,13 +140,13 @@ struct Grasp
 
 
 /**
- * @brief Sort grasps by quality score descending (best first)
+ * @brief Sort grasps by quality score descending (best first); equal scores keep their order
  *
  * @param grasps Vector of grasps to sort in place
  */
 inline void sort_by_quality(std::vector<Grasp> & grasps)
 {
-  std::sort(
+  std::stable_sort(
     grasps.begin(), grasps.end(),
     [](const Grasp & a, const Grasp & b) {
       return a.quality_score > b.quality_score;

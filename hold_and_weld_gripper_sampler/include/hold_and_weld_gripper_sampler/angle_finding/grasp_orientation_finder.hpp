@@ -15,8 +15,10 @@
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__ANGLE_FINDING__GRASP_ORIENTATION_FINDER_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__ANGLE_FINDING__GRASP_ORIENTATION_FINDER_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <random>
 #include <vector>
 
 #include <gp_Dir.hxx>
@@ -140,14 +142,40 @@ struct GraspCandidate
   gp_Vec approach_direction;
   gp_Trsf gripper_transform;
   gp_Pnt base_position;
-  int surface_id_1;
-  int surface_id_2;
-  double grip_distance;
-  double quality_score;
+  int surface_id_1 = -1;
+  int surface_id_2 = -1;
+  double grip_distance = 0.0;
+  double quality_score = 0.0;
+};
+
+/**
+ * @brief Per-run counts of contact pairs and orientations, by outcome.
+ *
+ * Populated by every call to find_valid_grasps; reflects the most recent call.
+ */
+struct OrientationStats
+{
+  size_t total_orientations_tested = 0;
+  size_t rejected_by_jaw_clearance = 0;
+  size_t rejected_by_primary = 0;
+  size_t rejected_by_exclusion = 0;
+  size_t rejected_by_ground = 0;
+  size_t rejected_by_secondary = 0;
+  size_t pairs_skipped_flat = 0;
+  size_t pairs_no_seeds = 0;
+  size_t pairs_merged_empty = 0;
+  size_t pairs_killed_cluster = 0;
+  // Degenerate geometry (zero normal, coincident contacts) or an exception.
+  size_t pairs_failed = 0;
+  size_t total_seeds_before_cap = 0;
+  size_t total_seeds_after_cap = 0;
 };
 
 /**
  * @brief Convert GraspCandidate (OCCT types) to Grasp (Eigen types)
+ *
+ * @param candidate Candidate to convert; the TCP is the midpoint of its contacts
+ * @return Equivalent Grasp
  */
 inline Grasp to_grasp(const GraspCandidate & candidate)
 {
@@ -264,6 +292,15 @@ public:
   );
 
   /**
+   * @brief Counters from the most recent find_valid_grasps call.
+   *
+   * All counters are zero before the first call.
+   *
+   * @return Counters of the last call
+   */
+  const OrientationStats & last_stats() const {return last_stats_;}
+
+  /**
    * @brief Build a RadialMaps for one contact point using Embree raycasting.
    *
    * Rays are cast in the local tangent plane defined by lx/ly (built from
@@ -299,8 +336,18 @@ private:
   std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker_;
   std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker_;
   rclcpp::Logger logger_;
+  OrientationStats last_stats_;
 
-  /** @brief Classify a single ray hit by its elevation above the contact plane. */
+  /**
+   * @brief Classify a single ray hit by its elevation above the contact plane.
+   *
+   * @param hit_found  Whether the ray hit anything; a miss is LOW
+   * @param hit_point  Where the ray hit, world frame; ignored on a miss
+   * @param contact    The contact point the plane passes through, world frame
+   * @param normal_vec Unit outward surface normal at contact
+   * @param tol        Elevation band treated as FLAT [m]
+   * @return HIGH above the band, LOW below it or on a miss, FLAT within it
+   */
   SurfaceState classify_hit(
     bool hit_found,
     const gp_Pnt & hit_point,
@@ -309,7 +356,13 @@ private:
     double tol
   ) const;
 
-  /** @brief Intersect LOW segments from two contact RadialMaps. */
+  /**
+   * @brief Intersect LOW segments from two contact RadialMaps.
+   *
+   * @param maps_1 Radial maps around the first contact
+   * @param maps_2 Radial maps around the second contact
+   * @return Angular segments LOW around both contacts
+   */
   std::vector<RadialSegment> merge_low_segments(
     const RadialMaps & maps_1,
     const RadialMaps & maps_2
@@ -317,6 +370,9 @@ private:
 
   /**
    * @brief Group angularly close segments into clusters and discard narrow ones.
+   *
+   * @param segments Merged LOW segments
+   * @return Clusters wide enough to keep
    */
   std::vector<std::vector<RadialSegment>> cluster_and_filter(
     const std::vector<RadialSegment> & segments
@@ -338,8 +394,42 @@ private:
     gp_Pnt & out_base
   ) const;
 
-  /** @brief Primary-shape collision check; true (reject) when no valid checker is attached. */
+  /**
+   * @brief Primary-shape collision check.
+   *
+   * @param transform     Gripper base pose in world frame
+   * @param grip_distance Jaw opening [m]
+   * @return true on collision, or when no valid checker is attached
+   */
   bool collides_with_primary(const gp_Trsf & transform, double grip_distance) const;
+
+  /**
+   * @brief Approach angles to try within each cluster, interleaved across clusters.
+   *
+   * Interleaving lets the per-pair cap take seeds from every cluster in turn.
+   *
+   * @param clusters Clusters from cluster_and_filter
+   * @param rng      Generator for randomize_seeds; unused otherwise
+   * @return Seed angles in the shared frame [rad]
+   */
+  std::vector<double> seeds_from_clusters(
+    const std::vector<std::vector<RadialSegment>> & clusters,
+    std::mt19937 & rng
+  ) const;
+
+  /**
+   * @brief Run every pose check, stopping at the first that rejects.
+   *
+   * @param transform     Gripper base pose in world frame
+   * @param grip_distance Jaw opening [m]
+   * @param stats         Receives one rejection count for the check that failed
+   * @return true if the pose passed every check
+   */
+  bool passes_pose_checks(
+    const gp_Trsf & transform,
+    double grip_distance,
+    OrientationStats & stats
+  ) const;
 };
 
 }  // namespace angle_finding

@@ -67,7 +67,7 @@ struct GraspCollisionStats
  * Performs three jobs:
  * 1. Identifies surfaces in full contact with secondaries (banned from sampling)
  * 2. Creates partial exclusion wires for surfaces partially touching secondaries
- * 3. Validates final gripper poses against secondary collision (Phase 5)
+ * 3. Validates final gripper poses against secondary collision
  */
 class KissingSurfaceConstraint
 {
@@ -195,7 +195,6 @@ private:
 
   mutable GraspCollisionStats collision_stats_;
 
-  // Logger
   rclcpp::Logger logger_;
 
   /**

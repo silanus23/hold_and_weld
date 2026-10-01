@@ -1,4 +1,3 @@
-```markdown
 # Parameters
 
 | Parameter | Type | Default | Description |
@@ -39,6 +38,8 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 
 **Type: `ground_plane`** (at most one per config)
 
+Without one, `implicit_ground` decides whether a ground is assumed anyway.
+
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `secondaries[].size_x` | double | 2.0 | Ground plane extent in X [m] |
@@ -67,6 +68,12 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 | `secondaries[].step_path` | string | — | Path to STEP file. Required for `step` type. |
 | `secondaries[].urdf_path` | string | — | Path to URDF file. Required for `urdf` type. |
 
+## Implicit Ground
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `implicit_ground` | bool | true | Only used when there is no `ground_plane` secondary. true: assume a 10 × 10 m ground with its surface at z = 0, centred on the origin — faces resting on it are banned from sampling and grasps reaching below it are rejected. false: no ground at all. |
+
 ## Exclusion Zones
 
 | Parameter | Type | Default | Description |
@@ -85,8 +92,8 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 | `exclusion_zones.circles[].normal.y` | double | — | Surface normal Y |
 | `exclusion_zones.circles[].normal.z` | double | — | Surface normal Z |
 | `exclusion_zones.circles[].radius` | double | — | Exclusion radius [m] |
-| `exclusion_zones.circles[].projection_depth` | double | — | Depth to project volume into surface [m] |
-| `exclusion_zones.circles[].clearance` | double | 0.01 | Additional safety margin [m] |
+| `exclusion_zones.circles[].projection_depth` | double | — | How far the zone volume reaches from the circle's plane along `normal` [m] |
+| `exclusion_zones.circles[].clearance` | double | 0.01 | Safety margin [m]. The volume also starts this far behind the plane, so a curved face falling away from the plane is still excluded; the pose-check volume is grown by it again in every direction. |
 
 ### Lines
 
@@ -104,8 +111,8 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 |---|---|---|---|
 | `exclusion_zones.polygons[].id` | string | — | Unique identifier |
 | `exclusion_zones.polygons[].corners` | list of x/y/z | — | Polygon corner points. Minimum 3. [m] |
-| `exclusion_zones.polygons[].projection_depth` | double | — | Depth to project volume into surface [m] |
-| `exclusion_zones.polygons[].clearance` | double | 0.01 | Additional safety margin [m] |
+| `exclusion_zones.polygons[].projection_depth` | double | — | How far the zone volume reaches from the corners' plane along the corner normal [m] |
+| `exclusion_zones.polygons[].clearance` | double | 0.01 | Safety margin [m]. As for circles: the volume starts this far behind the plane; the pose-check volume is grown by it again. |
 
 ## Sampling
 
@@ -114,9 +121,11 @@ Secondaries are defined as a sequence. Each secondary must have a `type` field.
 | `sampling.min_angle_deg` | double | 160.0 | Minimum angle between opposing surface normals [deg] |
 | `sampling.max_angle_deg` | double | 180.0 | Maximum angle between opposing surface normals [deg] |
 | `sampling.min_gripper_opening` | double | 0.02 | Minimum valid grip distance [m] |
-| `sampling.max_gripper_opening` | double | 0.15 | Maximum valid grip distance [m] |
+| `sampling.max_gripper_opening` | double | 0.15 | Maximum valid grip distance [m]. Capped at the gripper's `max_opening`. |
 | `sampling.sample_density` | double | 0.01 | Grid spacing for surface sampling [m] |
 | `sampling.normal_sample_density` | double | 1.0 | Samples per cm² for normal antiparallelism check |
+| `sampling.min_normal_samples` | int | 10 | Lower bound on the normal samples per face that `normal_sample_density` gives |
+| `sampling.max_normal_samples` | int | 100 | Upper bound on the normal samples per face that `normal_sample_density` gives |
 | `sampling.alignment_threshold` | double | 0.95 | Minimum dot product between grip axis and surface normal |
 | `sampling.max_lateral_deviation` | double | 0.02 | Maximum allowed lateral offset between contact points [m] |
 
@@ -157,7 +166,7 @@ vanishing `|dS/du|` at a cone apex or sphere pole.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `orientation.debug_full_sweep` | bool | false | Bypass radial map entirely and test all angles at uniform step. Use to diagnose collision checker behaviour across full 360°. |
+| `orientation.debug_full_sweep` | bool | false | Test every angle at a uniform step instead of the radial-map seeds, including pairs whose maps found no grippable direction. The maps are still built, for the quality score. Use to diagnose collision checker behaviour across full 360°. |
 | `orientation.debug_sweep_step_deg` | double | 10.0 | Angular step for debug full sweep [deg] |
 
 ## Shape Refiner
@@ -171,6 +180,7 @@ vanishing `|dS/du|` at a cone apex or sphere pole.
 | `shape_refiner.enclave_angle_threshold` | double | 45.0 | Maximum wall angle for enclave suppression [deg]. Walls steeper than this are kept as real features. Range [0, 90]. |
 | `shape_refiner.max_face_area_ratio` | double | 0.3 | A face larger than this fraction of the total area after arc-length splitting gets a WARN and one more edge-based split. Range (0, 1]. |
 | `shape_refiner.planarity_tolerance_deg` | double | 1.0 | Non-plane faces whose corner normals all stay within this angle of the centre normal are treated as flat and not split [deg]. Range (0, 90). |
+| `shape_refiner.inflection_samples` | int | 25 | Curvature samples per scan line when looking for inflection points to split curved faces at. Must be >= 2. |
 
 ## Jaw Clearance
 
@@ -189,8 +199,9 @@ test rather than a sampling constraint: `JawClearanceCheck`, in `collision/`.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `kissing.contact_threshold` | double | 0.8 | Surfaces with contact area ratio above this are banned from sampling |
+| `kissing.contact_threshold` | double | 0.8 | Surfaces with contact area ratio above this are banned from sampling. Also used as the ground constraint's support threshold. |
 | `kissing.contact_distance_threshold` | double | 0.005 | Maximum distance between primary and secondary surfaces to classify as kissing contact [m] |
+| `kissing.sample_density` | double | 0.005 | Spacing of the face samples that measure each surface's contact ratio with secondaries and with the ground [m]. A contact patch narrower than this can be missed. |
 | `kissing.collision_tolerance` | double | 1e-6 | Distance threshold for secondary and ground collision detection [m] |
 
 ## FCL
@@ -213,9 +224,20 @@ Controls OCCT triangulation quality for exclusion zone geometry.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `output.json_path` | string | grasps.json | Output JSON file path |
+| `output.json_path` | string | — | Output JSON file path, relative to the working directory. `--output` overrides it; unset → `<hold_and_weld_application share>/grasps/grasps.json`, the file the gripper server reads. |
 | `output.max_grasps` | size_t | 0 | Maximum grasps to output. 0 = all |
 | `output.min_quality` | double | 0.0 | Minimum quality score threshold for output |
+| `output.fail_on_skipped_constraint` | bool | false | Exit with an error, writing nothing, if any constraint or obstacle could not be enforced (see `skipped_constraints` below). Off: the run finishes and lists them. |
+
+### `metadata.skipped_constraints`
+
+Every constraint or obstacle the run could not (fully) enforce, one readable line each;
+the grasps written may violate these. Empty when everything was enforced. The same list is
+logged as one WARN at the end of the run. Entries come from: exclusion zones whose volume
+could not be built (not enforced at all) or whose footprint failed on a face (not excluded
+from sampling there), exclusion volumes and secondaries whose collision model failed to
+build (`secondary obstacle N` counts non-`ground_plane` secondaries in config order), and
+URDF `<mesh>` collision elements, which are not loaded yet.
 
 ### Visualization fields
 
@@ -244,6 +266,3 @@ They will become user facing in future versions.
 |---|---|
 | `ground_normal_z_threshold` | Auto-detection of ground-facing surfaces from workpiece topology |
 | `ground_safety_margin` | Z offset added to ground plane to avoid false positives at contact plane |
-| `ground_size_x` | Ground plane size in X for kissing surface contact analysis |
-| `ground_size_y` | Ground plane size in Y for kissing surface contact analysis |
-```

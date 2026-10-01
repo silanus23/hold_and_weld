@@ -37,13 +37,13 @@ namespace constraints
  * @brief The ground the workpiece rests on: a finite, axis-aligned footprint.
  *
  * A weld setup is a bounded thing, so the ground is modelled as a rectangle of
- * size_x by size_y centred on (center_x, center_y) at height bottom_z rather
+ * size_x by size_y centred on (center_x, center_y) at height surface_z rather
  * than as an infinite plane. Parts outside that rectangle are over open floor
  * and are not supported by it.
  */
 struct GroundConfig
 {
-  double bottom_z = 0.0;
+  double surface_z = 0.0;
   double center_x = 0.0;
   double center_y = 0.0;
   double size_x = 10.0;

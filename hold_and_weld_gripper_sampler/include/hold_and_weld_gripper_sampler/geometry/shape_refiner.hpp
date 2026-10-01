@@ -50,6 +50,8 @@ public:
    *        warning is emitted and an additional edge-based split is attempted (e.g. 0.3 = 30%).
    * @param planarity_tolerance_deg Maximum corner-normal deviation for a non-plane face to
    *        still count as flat and be left unsplit [degrees].
+   * @param inflection_samples Curvature samples per scan line when looking for inflection
+   *        points to split at. Must be >= 2.
    */
   ShapeRefiner(
     double max_cylinder_radius,
@@ -57,7 +59,8 @@ public:
     double enclave_area_ratio,
     double enclave_angle_threshold,
     double max_face_area_ratio = 0.3,
-    double planarity_tolerance_deg = 1.0);
+    double planarity_tolerance_deg = 1.0,
+    int inflection_samples = 25);
 
   /**
    * @brief Refine a shape by removing enclaves and splitting large surfaces.
@@ -78,6 +81,7 @@ private:
   double enclave_angle_threshold_;
   double max_face_area_ratio_;
   double planarity_tolerance_deg_;
+  int inflection_samples_;
 
   /**
    * @brief Identify enclave features (small pockets/holes) to remove.
@@ -220,7 +224,7 @@ private:
    * are included.
    *
    * @param shape Input shape (output of phase 1)
-   * @param global_total_area Total surface area used for diagnostics
+   * @param global_total_area Total surface area; currently unused
    * @return Shape with oversized/inflected faces split
    */
   TopoDS_Shape refine_phase2_arc_length_split(

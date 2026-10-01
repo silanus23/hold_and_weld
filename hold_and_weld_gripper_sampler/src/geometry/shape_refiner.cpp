@@ -44,8 +44,10 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 
-// TODO(@silanus23): Add a splitter that splits based on sudden normal trend changes.
-// TODO(@silanus23): Make heuristic approches adaptive instead strict sample based
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
+
+// TODO(silanus23): Add a splitter that splits based on sudden normal trend changes.
+// TODO(silanus23): Make heuristic approches adaptive instead strict sample based
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -201,13 +203,15 @@ ShapeRefiner::ShapeRefiner(
   double enclave_area_ratio,
   double enclave_angle_threshold,
   double max_face_area_ratio,
-  double planarity_tolerance_deg)
+  double planarity_tolerance_deg,
+  int inflection_samples)
 : max_cylinder_radius_(max_cylinder_radius),
   max_arc_length_(max_arc_length),
   enclave_area_ratio_(enclave_area_ratio),
   enclave_angle_threshold_(enclave_angle_threshold),
   max_face_area_ratio_(max_face_area_ratio),
-  planarity_tolerance_deg_(planarity_tolerance_deg)
+  planarity_tolerance_deg_(planarity_tolerance_deg),
+  inflection_samples_(inflection_samples)
 {
   // Negated comparisons so NaN is rejected too. max_arc_length divides split counts,
   // so 0 or infinity would turn into an undefined int conversion.
@@ -225,6 +229,9 @@ ShapeRefiner::ShapeRefiner(
   }
   if (!(planarity_tolerance_deg_ > 0.0 && planarity_tolerance_deg_ < 90.0)) {
     throw std::invalid_argument("ShapeRefiner: planarity_tolerance_deg must be in (0, 90)");
+  }
+  if (inflection_samples_ < 2) {
+    throw std::invalid_argument("ShapeRefiner: inflection_samples must be >= 2");
   }
 }
 
@@ -248,7 +255,7 @@ TopoDS_Shape ShapeRefiner::refine(const TopoDS_Shape & raw_shape) const
       return raw_shape;
     }
 
-    // TODO(@silanus23): Add enable_enclave_removal bool config parameter
+    // TODO(silanus23): Add enable_enclave_removal bool config parameter
     TopTools_ListOfShape faces_to_remove;
     identify_enclave_features(current_shape, global_total_area, faces_to_remove);
 
@@ -602,7 +609,7 @@ void ShapeRefiner::find_inflections(
     (surface.FirstVParameter() + surface.LastVParameter()) / 2.0 :
     (surface.FirstUParameter() + surface.LastUParameter()) / 2.0;
 
-  const int num_samples = 25;
+  const int num_samples = inflection_samples_;
   double step = (end - start) / num_samples;
   double prev_k = 0.0;
 
@@ -741,41 +748,12 @@ bool ShapeRefiner::is_physically_planar(const TopoDS_Face & face) const
 
 gp_Dir ShapeRefiner::calculate_safe_normal(const TopoDS_Face & face) const
 {
-  try {
-    BRepAdaptor_Surface surface(face);
-    double u_mid = (surface.FirstUParameter() + surface.LastUParameter()) / 2.0;
-    double v_mid = (surface.FirstVParameter() + surface.LastVParameter()) / 2.0;
-
-    // BRep_Tool::Surface applies the face location, so the normal is in the shape's frame.
-    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-    if (surf.IsNull()) {
-      RCLCPP_WARN(logger_, "Face has no surface, using Z-up fallback");
-      return gp_Dir(0, 0, 1);
-    }
-    GeomLProp_SLProps props(surf, u_mid, v_mid, 1, 1e-6);
-
-    if (!props.IsNormalDefined()) {
-      // Midpoint can land on a degenerate pole (sphere apex, cone tip) — retry at 10% offset.
-      u_mid = surface.FirstUParameter() +
-        (surface.LastUParameter() - surface.FirstUParameter()) * 0.1;
-      v_mid = surface.FirstVParameter() +
-        (surface.LastVParameter() - surface.FirstVParameter()) * 0.1;
-      props.SetParameters(u_mid, v_mid);
-    }
-
-    if (!props.IsNormalDefined()) {
-      RCLCPP_WARN(logger_, "Unable to compute face normal, using Z-up fallback");
-      return gp_Dir(0, 0, 1);
-    }
-
-    gp_Dir normal = props.Normal();
-    // geometric ≠ topological direction
-    if (face.Orientation() == TopAbs_REVERSED) {normal.Reverse();}
-    return normal;
-  } catch (const Standard_Failure &) {
-    RCLCPP_DEBUG(logger_, "Failed to calculate normal - using fallback");
+  const std::optional<gp_Vec> normal = face_centre_normal(face);
+  if (!normal.has_value()) {
+    RCLCPP_WARN(logger_, "Unable to compute face normal, using Z-up fallback");
     return gp_Dir(0, 0, 1);
   }
+  return gp_Dir(*normal);
 }
 
 }  // namespace geometry

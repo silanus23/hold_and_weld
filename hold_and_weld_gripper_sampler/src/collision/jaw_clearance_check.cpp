@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "hold_and_weld_gripper_sampler/collision/jaw_clearance_check.hpp"
+
 #include <memory>
 #include <string>
 
 #include <gp_Vec.hxx>
-
-#include "hold_and_weld_gripper_sampler/collision/jaw_clearance_check.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {

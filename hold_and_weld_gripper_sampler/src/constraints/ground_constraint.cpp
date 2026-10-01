@@ -35,7 +35,7 @@ GroundConstraint::GroundConstraint(const GroundConfig & config)
   RCLCPP_DEBUG(logger_,
     "GroundConstraint: z=%.4f m, footprint %.2f x %.2f m centred on (%.3f, %.3f), "
     "band=%.4f m, support_threshold=%.1f%%",
-    config_.bottom_z, config_.size_x, config_.size_y,
+    config_.surface_z, config_.size_x, config_.size_y,
     config_.center_x, config_.center_y,
     config_.contact_band, config_.support_threshold * 100.0);
 }
@@ -49,7 +49,7 @@ void GroundConstraint::analyze_constraints(const geometry::Topology & topology)
 
   RCLCPP_INFO(logger_,
     "Analyzing ground contact: %zu surface(s), z=%.4f m, footprint %.2f x %.2f m",
-    all_surfaces.size(), config_.bottom_z, config_.size_x, config_.size_y);
+    all_surfaces.size(), config_.surface_z, config_.size_x, config_.size_y);
 
   for (size_t i = 0; i < all_surfaces.size(); ++i) {
     const int surface_id = static_cast<int>(i);
@@ -107,7 +107,7 @@ double GroundConstraint::measure_ground_support(
   Standard_Real x_min, y_min, z_min, x_max, y_max, z_max;
   face_box.Get(x_min, y_min, z_min, x_max, y_max, z_max);
 
-  const double ceiling = config_.bottom_z + config_.contact_band;
+  const double ceiling = config_.surface_z + config_.contact_band;
   if (z_min > ceiling) {
     return 0.0;
   }
@@ -152,7 +152,7 @@ bool GroundConstraint::intersects_ground(
   const gp_Trsf & gripper_transform, double grip_distance) const
 {
   if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    RCLCPP_ERROR(logger_, "FCL checker not available — rejecting grasp conservatively");
+    RCLCPP_ERROR_ONCE(logger_, "FCL checker not available — rejecting every grasp conservatively");
     return true;
   }
   return fcl_checker_->collides_with_ground(

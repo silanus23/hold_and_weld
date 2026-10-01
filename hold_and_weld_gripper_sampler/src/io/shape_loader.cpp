@@ -14,8 +14,6 @@
 
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 
-#include <tinyxml2.h>
-
 #include <cmath>
 #include <fstream>
 #include <memory>
@@ -33,7 +31,6 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <gp_Ax2.hxx>
-#include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <IFSelect_ReturnStatus.hxx>
@@ -50,6 +47,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
+#include "hold_and_weld_gripper_sampler/io/urdf_collision_loader.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -321,7 +319,12 @@ TopoDS_Shape ShapeLoader::load_from_urdf(const std::string & urdf_path)
   buffer << file.rdbuf();
   file.close();
 
-  return load_from_urdf_string(buffer.str());
+  const size_t first_new_skip = skipped_.size();
+  TopoDS_Shape shape = load_from_urdf_string(buffer.str());
+  for (size_t i = first_new_skip; i < skipped_.size(); ++i) {
+    skipped_[i] = urdf_path + ": " + skipped_[i];
+  }
+  return shape;
 }
 
 std::string ShapeLoader::resolve_package_url(const std::string & url) const
@@ -370,127 +373,26 @@ TopoDS_Shape ShapeLoader::load_from_urdf_string(const std::string & urdf_string)
 {
   RCLCPP_DEBUG(logger_, "Parsing URDF string for collision geometry");
 
-  tinyxml2::XMLDocument doc;
-  if (doc.Parse(urdf_string.c_str()) != tinyxml2::XML_SUCCESS) {
-    throw std::runtime_error("Failed to parse URDF XML");
+  const UrdfCollisionModel model = load_urdf_collision(urdf_string);
+  for (const auto & skipped : model.skipped) {
+    RCLCPP_WARN(logger_, "Collision element skipped: %s", skipped.c_str());
+    skipped_.push_back(skipped);
   }
-
-  tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
-  if (!robot) {
-    throw std::runtime_error("No <robot> element found in URDF");
-  }
-
-  std::vector<TopoDS_Shape> collision_shapes;
-
-  for (tinyxml2::XMLElement * link = robot->FirstChildElement("link");
-    link != nullptr;
-    link = link->NextSiblingElement("link"))
-  {
-    const char * link_name = link->Attribute("name");
-    RCLCPP_DEBUG(logger_, "Processing link: %s", link_name ? link_name : "unnamed");
-
-    for (tinyxml2::XMLElement * collision = link->FirstChildElement("collision");
-      collision != nullptr;
-      collision = collision->NextSiblingElement("collision"))
-    {
-      tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
-      if (!geometry) {
-        continue;
-      }
-
-      Eigen::Vector3d origin_xyz = Eigen::Vector3d::Zero();
-      Eigen::Quaterniond origin_rot = Eigen::Quaterniond::Identity();
-
-      tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
-      if (origin) {
-        const char * xyz_str = origin->Attribute("xyz");
-        if (xyz_str) {
-          double x, y, z;
-          if (sscanf(xyz_str, "%lf %lf %lf", &x, &y, &z) == 3) {
-            origin_xyz = Eigen::Vector3d(x, y, z);
-          }
-        }
-
-        const char * rpy_str = origin->Attribute("rpy");
-        if (rpy_str) {
-          double r, p, yaw;
-          if (sscanf(rpy_str, "%lf %lf %lf", &r, &p, &yaw) == 3) {
-            gp_Quaternion q = geometry::rpy_to_quaternion(r, p, yaw);
-            origin_rot = Eigen::Quaterniond(q.W(), q.X(), q.Y(), q.Z()).normalized();
-          } else {
-            RCLCPP_WARN(logger_, "Failed to parse rpy attribute: %s", rpy_str);
-          }
-        }
-      }
-
-      TopoDS_Shape shape;
-      bool shape_created = false;
-
-      if (tinyxml2::XMLElement * box = geometry->FirstChildElement("box")) {
-        const char * size_str = box->Attribute("size");
-        if (size_str) {
-          double sx, sy, sz;
-          if (sscanf(size_str, "%lf %lf %lf", &sx, &sy, &sz) == 3) {
-            if (sx > 0 && sy > 0 && sz > 0) {
-              shape = make_box(Eigen::Vector3d(sx, sy, sz), origin_xyz, origin_rot);
-              shape_created = true;
-              RCLCPP_DEBUG(logger_, "Created box: %.3f x %.3f x %.3f", sx, sy, sz);
-            } else {
-              RCLCPP_WARN(logger_, "Invalid box dimensions (must be positive): %.3f x %.3f x %.3f",
-                sx, sy, sz);
-            }
-          } else {
-            RCLCPP_WARN(logger_, "Failed to parse box size attribute: %s", size_str);
-          }
-        }
-      } else if (tinyxml2::XMLElement * cylinder = geometry->FirstChildElement("cylinder")) {
-        double radius = 0.0, length = 0.0;
-        cylinder->QueryDoubleAttribute("radius", &radius);
-        cylinder->QueryDoubleAttribute("length", &length);
-        if (radius > 0 && length > 0) {
-          shape = make_cylinder(radius, length, origin_xyz, origin_rot);
-          shape_created = true;
-          RCLCPP_DEBUG(logger_, "Created cylinder: r=%.3f, h=%.3f", radius, length);
-        } else {
-          RCLCPP_WARN(logger_, "Invalid cylinder dimensions (must be positive): r=%.3f, h=%.3f",
-            radius, length);
-        }
-      } else if (tinyxml2::XMLElement * sphere = geometry->FirstChildElement("sphere")) {
-        double radius = 0.0;
-        sphere->QueryDoubleAttribute("radius", &radius);
-        if (radius > 0) {
-          shape = make_sphere(radius, origin_xyz);
-          shape_created = true;
-          RCLCPP_DEBUG(logger_, "Created sphere: r=%.3f", radius);
-        } else {
-          RCLCPP_WARN(logger_, "Invalid sphere radius (must be positive): r=%.3f", radius);
-        }
-      } else if (tinyxml2::XMLElement * mesh = geometry->FirstChildElement("mesh")) {
-        const char * filename = mesh->Attribute("filename");
-        if (filename) {
-          // TODO(@silanus23): Implement mesh loading from URDF
-          // - Support STL and STEP/STP formats
-          // - Handle scale attribute: mesh->Attribute("scale")
-          // - Use resolve_package_url() to resolve package:// URLs
-          // - Apply origin_xyz and origin_rot transforms after loading
-          RCLCPP_WARN(logger_, "Mesh geometry not yet implemented, skipping: %s", filename);
-          continue;
-        }
-      }
-
-      if (shape_created && !shape.IsNull()) {
-        collision_shapes.push_back(shape);
-      }
-    }
-  }
-
-  if (collision_shapes.empty()) {
+  if (model.links.empty()) {
     throw std::runtime_error("No collision geometry found in URDF");
   }
 
-  RCLCPP_INFO(logger_, "Loaded %zu collision shapes from URDF", collision_shapes.size());
+  std::vector<TopoDS_Shape> collision_shapes;
+  for (const auto & link : model.links) {
+    collision_shapes.push_back(link.shape);
+  }
+  TopoDS_Shape shape = combine_shapes(collision_shapes);
+  if (config_.auto_triangulate) {
+    triangulate(shape);
+  }
 
-  return combine_shapes(collision_shapes);
+  RCLCPP_INFO(logger_, "Loaded %zu collision link(s) from URDF", model.links.size());
+  return shape;
 }
 
 TopoDS_Shape ShapeLoader::make_box(

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -28,13 +29,28 @@ namespace hold_and_weld_gripper_sampler
 namespace io
 {
 
-static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
-
-// " 'id'" for error messages, or nothing when the zone has no id.
-static std::string id_suffix(const std::string & id)
+namespace
 {
-  return id.empty() ? "" : " '" + id + "'";
+
+const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
+
+// Below these a zone's direction (normal, line axis) or plane is numerically meaningless.
+constexpr double kMinDirectionNorm = 1e-6;
+constexpr double kPlanarityTolerance = 1e-6;
+
+// Every number in the config is read through this, so .nan / .inf never get in.
+double finite_double(const YAML::Node & node)
+{
+  const double value = node.as<double>();
+  if (!std::isfinite(value)) {
+    throw std::runtime_error(
+            "non-finite number '" + node.Scalar() + "' at line " +
+            std::to_string(node.Mark().line + 1));
+  }
+  return value;
 }
+
+}  // namespace
 
 std::optional<ParsedConfig> ConfigParser::parse_file(
   const std::string & yaml_path,
@@ -123,6 +139,10 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       }
     }
 
+    if (params["implicit_ground"]) {
+      config.finder_config.enable_ground_plane_check = params["implicit_ground"].as<bool>();
+    }
+
     if (params["exclusion_zones"]) {
       if (!parse_exclusion_zones(params["exclusion_zones"], config)) {
         return std::nullopt;
@@ -131,7 +151,7 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
 
     if (params["mesh_deflection"]) {
       if (params["mesh_deflection"]["linear"]) {
-        config.mesh_linear_deflection = params["mesh_deflection"]["linear"].as<double>();
+        config.mesh_linear_deflection = finite_double(params["mesh_deflection"]["linear"]);
         config.finder_config.mesh_linear_deflection = config.mesh_linear_deflection;
         if (!(config.mesh_linear_deflection > 0.0)) {
           set_error("mesh_deflection: 'linear' must be > 0");
@@ -139,7 +159,7 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
         }
       }
       if (params["mesh_deflection"]["angular"]) {
-        config.mesh_angular_deflection = params["mesh_deflection"]["angular"].as<double>();
+        config.mesh_angular_deflection = finite_double(params["mesh_deflection"]["angular"]);
         config.finder_config.mesh_angular_deflection = config.mesh_angular_deflection;
         if (!(config.mesh_angular_deflection > 0.0)) {
           set_error("mesh_deflection: 'angular' must be > 0");
@@ -163,15 +183,32 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
     if (params["kissing"]) {
       if (params["kissing"]["contact_threshold"]) {
         config.finder_config.kissing_contact_threshold =
-          params["kissing"]["contact_threshold"].as<double>();
+          finite_double(params["kissing"]["contact_threshold"]);
       }
       if (params["kissing"]["collision_tolerance"]) {
         config.finder_config.collision_tolerance =
-          params["kissing"]["collision_tolerance"].as<double>();
+          finite_double(params["kissing"]["collision_tolerance"]);
       }
       if (params["kissing"]["contact_distance_threshold"]) {
         config.finder_config.kissing_contact_distance_threshold =
-          params["kissing"]["contact_distance_threshold"].as<double>();
+          finite_double(params["kissing"]["contact_distance_threshold"]);
+      }
+      if (params["kissing"]["sample_density"]) {
+        config.finder_config.kissing_sample_density =
+          finite_double(params["kissing"]["sample_density"]);
+      }
+      const auto & fc = config.finder_config;
+      if (!(fc.kissing_contact_threshold >= 0.0 && fc.kissing_contact_threshold <= 1.0)) {
+        set_error("kissing.contact_threshold must be in [0, 1]");
+        return std::nullopt;
+      }
+      if (fc.collision_tolerance < 0.0 || fc.kissing_contact_distance_threshold < 0.0) {
+        set_error("kissing.collision_tolerance and contact_distance_threshold must be >= 0");
+        return std::nullopt;
+      }
+      if (!(fc.kissing_sample_density > 0.0)) {
+        set_error("kissing.sample_density must be > 0");
+        return std::nullopt;
       }
     }
 
@@ -182,7 +219,7 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
         ac.enabled = ac_node["enabled"].as<bool>();
       }
       if (ac_node["clearance_margin"]) {
-        ac.clearance_margin = ac_node["clearance_margin"].as<double>();
+        ac.clearance_margin = finite_double(ac_node["clearance_margin"]);
         if (ac.clearance_margin < 0.0) {
           set_error("jaw_clearance.clearance_margin must be >= 0");
           return std::nullopt;
@@ -197,22 +234,25 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
         sr.enabled = sr_node["enabled"].as<bool>();
       }
       if (sr_node["max_cylinder_radius"]) {
-        sr.max_cylinder_radius = sr_node["max_cylinder_radius"].as<double>();
+        sr.max_cylinder_radius = finite_double(sr_node["max_cylinder_radius"]);
       }
       if (sr_node["max_arc_length"]) {
-        sr.max_arc_length = sr_node["max_arc_length"].as<double>();
+        sr.max_arc_length = finite_double(sr_node["max_arc_length"]);
       }
       if (sr_node["enclave_area_ratio"]) {
-        sr.enclave_area_ratio = sr_node["enclave_area_ratio"].as<double>();
+        sr.enclave_area_ratio = finite_double(sr_node["enclave_area_ratio"]);
       }
       if (sr_node["enclave_angle_threshold"]) {
-        sr.enclave_angle_threshold = sr_node["enclave_angle_threshold"].as<double>();
+        sr.enclave_angle_threshold = finite_double(sr_node["enclave_angle_threshold"]);
       }
       if (sr_node["max_face_area_ratio"]) {
-        sr.max_face_area_ratio = sr_node["max_face_area_ratio"].as<double>();
+        sr.max_face_area_ratio = finite_double(sr_node["max_face_area_ratio"]);
       }
       if (sr_node["planarity_tolerance_deg"]) {
-        sr.planarity_tolerance_deg = sr_node["planarity_tolerance_deg"].as<double>();
+        sr.planarity_tolerance_deg = finite_double(sr_node["planarity_tolerance_deg"]);
+      }
+      if (sr_node["inflection_samples"]) {
+        sr.inflection_samples = sr_node["inflection_samples"].as<int>();
       }
       // Negated comparisons so NaN is rejected too.
       if (!(sr.max_cylinder_radius > 0.0)) {
@@ -239,6 +279,10 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
         set_error("shape_refiner.planarity_tolerance_deg must be in (0, 90) degrees");
         return std::nullopt;
       }
+      if (sr.inflection_samples < 2) {
+        set_error("shape_refiner.inflection_samples must be >= 2");
+        return std::nullopt;
+      }
     }
 
     if (params["fcl"]) {
@@ -247,7 +291,15 @@ std::optional<ParsedConfig> ConfigParser::parse_node(
       }
       if (params["fcl"]["triangulation_deflection"]) {
         config.finder_config.triangulation_deflection =
-          params["fcl"]["triangulation_deflection"].as<double>();
+          finite_double(params["fcl"]["triangulation_deflection"]);
+      }
+      if (!config.finder_config.use_fcl) {
+        set_error("fcl.enabled: false is not supported; collision checking requires FCL");
+        return std::nullopt;
+      }
+      if (config.finder_config.triangulation_deflection <= 0.0) {
+        set_error("fcl.triangulation_deflection must be > 0");
+        return std::nullopt;
       }
     }
 
@@ -288,6 +340,10 @@ YAML::Node ConfigParser::get_parameters_node(const YAML::Node & root) const
 
 bool ConfigParser::parse_primary(const YAML::Node & node, PrimaryConfig & config)
 {
+  if (node["step_path"] && node["urdf_path"]) {
+    set_error("Primary must have only one of 'step_path' and 'urdf_path'");
+    return false;
+  }
   if (node["step_path"]) {
     config.step_path = resolve_path(node["step_path"].as<std::string>(), base_dir_);
   } else if (node["urdf_path"]) {
@@ -314,7 +370,7 @@ bool ConfigParser::parse_gripper(const YAML::Node & node, ParsedConfig & config)
   config.gripper_urdf_path = resolve_path(node["urdf_path"].as<std::string>(), base_dir_);
 
   if (node["max_opening"]) {
-    config.gripper_max_opening = node["max_opening"].as<double>();
+    config.gripper_max_opening = finite_double(node["max_opening"]);
     if (!(*config.gripper_max_opening > 0.0)) {
       set_error("gripper.max_opening must be > 0");
       return false;
@@ -367,14 +423,15 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
   }
 
   if (config.type == "step" || config.type == "urdf") {
-    if (node["step_path"]) {
-      config.file_path = resolve_path(node["step_path"].as<std::string>(), base_dir_);
-    } else if (node["urdf_path"]) {
-      config.file_path = resolve_path(node["urdf_path"].as<std::string>(), base_dir_);
-    } else {
-      set_error("Secondary shape of type '" + config.type + "' must have file path");
+    const std::string path_key = config.type + "_path";
+    const std::string other_key = config.type == "step" ? "urdf_path" : "step_path";
+    if (!node[path_key] || node[other_key]) {
+      set_error(
+        "Secondary of type '" + config.type + "' must have '" + path_key + "' (and not '" +
+        other_key + "')");
       return false;
     }
+    config.file_path = resolve_path(node[path_key].as<std::string>(), base_dir_);
   } else if (config.type == "box") {
     if (node["dimensions"]) {
       config.dimensions = parse_vector3(node["dimensions"]);
@@ -382,27 +439,35 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
       set_error("Box secondary must have 'dimensions'");
       return false;
     }
+    if (!(config.dimensions.minCoeff() > 0.0)) {
+      set_error("Box secondary 'dimensions' must all be > 0");
+      return false;
+    }
   } else if (config.type == "cylinder") {
     if (node["radius"] && node["height"]) {
-      config.radius = node["radius"].as<double>();
-      config.height = node["height"].as<double>();
+      config.radius = finite_double(node["radius"]);
+      config.height = finite_double(node["height"]);
     } else {
       set_error("Cylinder secondary must have 'radius' and 'height'");
       return false;
     }
+    if (!(config.radius > 0.0 && config.height > 0.0)) {
+      set_error("Cylinder secondary 'radius' and 'height' must be > 0");
+      return false;
+    }
   } else if (config.type == "ground_plane") {
     if (node["size_x"]) {
-      config.size_x = node["size_x"].as<double>();
+      config.size_x = finite_double(node["size_x"]);
     }
     if (node["size_y"]) {
-      config.size_y = node["size_y"].as<double>();
+      config.size_y = finite_double(node["size_y"]);
     }
     if (config.size_x <= 0.0 || config.size_y <= 0.0) {
       set_error("Ground plane size_x and size_y must be > 0");
       return false;
     }
     if (node["z_position"]) {
-      config.z_position = node["z_position"].as<double>();
+      config.z_position = finite_double(node["z_position"]);
     }
   } else {
     set_error("Unknown secondary shape type: " + config.type);
@@ -419,7 +484,7 @@ bool ConfigParser::parse_secondary(const YAML::Node & node, SecondaryConfig & co
 bool ConfigParser::parse_exclusion_zones(const YAML::Node & node, ParsedConfig & config)
 {
   if (node["sample_density"]) {
-    config.finder_config.exclusion_sample_density = node["sample_density"].as<double>();
+    config.finder_config.exclusion_sample_density = finite_double(node["sample_density"]);
     if (config.finder_config.exclusion_sample_density <= 0.0) {
       set_error("exclusion_zones.sample_density must be > 0");
       return false;
@@ -470,24 +535,28 @@ bool ConfigParser::parse_exclusion_circle(
 
   circle.center = parse_vector3(node["center"]);
   circle.normal = parse_vector3(node["normal"]);
-  circle.radius = node["radius"].as<double>();
-  circle.projection_depth = node["projection_depth"].as<double>();
+  circle.radius = finite_double(node["radius"]);
+  circle.projection_depth = finite_double(node["projection_depth"]);
 
   if (node["clearance"]) {
-    circle.clearance = node["clearance"].as<double>();
+    circle.clearance = finite_double(node["clearance"]);
   }
 
   if (node["id"]) {
     circle.id = node["id"].as<std::string>();
   }
 
-  const std::string name = "Exclusion circle" + id_suffix(circle.id);
+  const std::string name = "Exclusion circle" + constraints::id_suffix(circle.id);
   if (circle.radius <= 0.0 || circle.projection_depth <= 0.0) {
     set_error(name + ": 'radius' and 'projection_depth' must be > 0");
     return false;
   }
   if (circle.clearance < 0.0) {
     set_error(name + ": 'clearance' must be >= 0");
+    return false;
+  }
+  if (circle.normal.norm() < kMinDirectionNorm) {
+    set_error(name + ": 'normal' must not be zero");
     return false;
   }
 
@@ -507,17 +576,17 @@ bool ConfigParser::parse_exclusion_polygon(
     polygon.exclusion_corners.push_back(parse_vector3(corner));
   }
 
-  polygon.projection_depth = node["projection_depth"].as<double>();
+  polygon.projection_depth = finite_double(node["projection_depth"]);
 
   if (node["clearance"]) {
-    polygon.clearance = node["clearance"].as<double>();
+    polygon.clearance = finite_double(node["clearance"]);
   }
 
   if (node["id"]) {
     polygon.id = node["id"].as<std::string>();
   }
 
-  const std::string name = "Exclusion polygon" + id_suffix(polygon.id);
+  const std::string name = "Exclusion polygon" + constraints::id_suffix(polygon.id);
   const auto & corners = polygon.exclusion_corners;
   if (corners.size() < 3) {
     set_error(name + ": needs at least 3 corners");
@@ -527,6 +596,14 @@ bool ConfigParser::parse_exclusion_polygon(
   if ((corners[1] - corners[0]).cross(corners[2] - corners[0]).norm() < 1e-6) {
     set_error(name + ": corners 0-2 are collinear; start the corner list at a real corner");
     return false;
+  }
+  const Eigen::Vector3d normal =
+    (corners[1] - corners[0]).cross(corners[2] - corners[0]).normalized();
+  for (size_t i = 3; i < corners.size(); ++i) {
+    if (std::abs((corners[i] - corners[0]).dot(normal)) > kPlanarityTolerance) {
+      set_error(name + ": corner " + std::to_string(i) + " is off the plane of corners 0-2");
+      return false;
+    }
   }
   if (polygon.projection_depth <= 0.0) {
     set_error(name + ": 'projection_depth' must be > 0");
@@ -552,23 +629,27 @@ bool ConfigParser::parse_exclusion_line(
 
   line.start = parse_vector3(node["start"]);
   line.end = parse_vector3(node["end"]);
-  line.exclusion_radius = node["exclusion_radius"].as<double>();
+  line.exclusion_radius = finite_double(node["exclusion_radius"]);
 
   if (node["clearance"]) {
-    line.clearance = node["clearance"].as<double>();
+    line.clearance = finite_double(node["clearance"]);
   }
 
   if (node["id"]) {
     line.id = node["id"].as<std::string>();
   }
 
-  const std::string name = "Exclusion line" + id_suffix(line.id);
+  const std::string name = "Exclusion line" + constraints::id_suffix(line.id);
   if (line.exclusion_radius <= 0.0) {
     set_error(name + ": 'exclusion_radius' must be > 0");
     return false;
   }
   if (line.clearance < 0.0) {
     set_error(name + ": 'clearance' must be >= 0");
+    return false;
+  }
+  if ((line.end - line.start).norm() < kMinDirectionNorm) {
+    set_error(name + ": 'start' and 'end' must differ");
     return false;
   }
 
@@ -578,28 +659,34 @@ bool ConfigParser::parse_exclusion_line(
 bool ConfigParser::parse_sampling(const YAML::Node & node, sampling::SamplingConfig & config)
 {
   if (node["min_angle_deg"]) {
-    config.min_angle_deg = node["min_angle_deg"].as<double>();
+    config.min_angle_deg = finite_double(node["min_angle_deg"]);
   }
   if (node["max_angle_deg"]) {
-    config.max_angle_deg = node["max_angle_deg"].as<double>();
+    config.max_angle_deg = finite_double(node["max_angle_deg"]);
   }
   if (node["min_gripper_opening"]) {
-    config.min_gripper_opening = node["min_gripper_opening"].as<double>();
+    config.min_gripper_opening = finite_double(node["min_gripper_opening"]);
   }
   if (node["max_gripper_opening"]) {
-    config.max_gripper_opening = node["max_gripper_opening"].as<double>();
+    config.max_gripper_opening = finite_double(node["max_gripper_opening"]);
   }
   if (node["sample_density"]) {
-    config.sample_density = node["sample_density"].as<double>();
+    config.sample_density = finite_double(node["sample_density"]);
   }
   if (node["normal_sample_density"]) {
-    config.normal_sample_density = node["normal_sample_density"].as<double>();
+    config.normal_sample_density = finite_double(node["normal_sample_density"]);
+  }
+  if (node["min_normal_samples"]) {
+    config.min_normal_samples = node["min_normal_samples"].as<int>();
+  }
+  if (node["max_normal_samples"]) {
+    config.max_normal_samples = node["max_normal_samples"].as<int>();
   }
   if (node["max_lateral_deviation"]) {
-    config.max_lateral_deviation = node["max_lateral_deviation"].as<double>();
+    config.max_lateral_deviation = finite_double(node["max_lateral_deviation"]);
   }
   if (node["alignment_threshold"]) {
-    config.alignment_threshold = node["alignment_threshold"].as<double>();
+    config.alignment_threshold = finite_double(node["alignment_threshold"]);
   }
 
   if (!(config.sample_density > 0.0)) {
@@ -610,14 +697,24 @@ bool ConfigParser::parse_sampling(const YAML::Node & node, sampling::SamplingCon
     set_error("sampling: 'normal_sample_density' must be > 0");
     return false;
   }
+  if (config.min_normal_samples < 1 || config.min_normal_samples > config.max_normal_samples) {
+    set_error("sampling: need 1 <= 'min_normal_samples' <= 'max_normal_samples'");
+    return false;
+  }
   if (config.min_gripper_opening < 0.0 ||
     config.min_gripper_opening > config.max_gripper_opening)
   {
     set_error("sampling: need 0 <= 'min_gripper_opening' <= 'max_gripper_opening'");
     return false;
   }
-  if (config.min_angle_deg > config.max_angle_deg) {
-    set_error("sampling: 'min_angle_deg' must be <= 'max_angle_deg'");
+  if (!(config.min_angle_deg >= 0.0 && config.min_angle_deg <= config.max_angle_deg &&
+    config.max_angle_deg <= 180.0))
+  {
+    set_error("sampling: need 0 <= 'min_angle_deg' <= 'max_angle_deg' <= 180");
+    return false;
+  }
+  if (!(config.alignment_threshold >= 0.0 && config.alignment_threshold <= 1.0)) {
+    set_error("sampling: 'alignment_threshold' must be in [0, 1]");
     return false;
   }
   if (config.max_lateral_deviation < 0.0) {
@@ -633,10 +730,10 @@ bool ConfigParser::parse_orientation(
   angle_finding::OrientationConfig & config)
 {
   if (node["finger_length"]) {
-    config.finger_length = node["finger_length"].as<double>();
+    config.finger_length = finite_double(node["finger_length"]);
   }
   if (node["finger_radius"]) {
-    config.finger_radius = node["finger_radius"].as<double>();
+    config.finger_radius = finite_double(node["finger_radius"]);
   }
   if (node["max_edge_candidates"]) {
     config.max_edge_candidates = node["max_edge_candidates"].as<size_t>();
@@ -645,7 +742,7 @@ bool ConfigParser::parse_orientation(
     config.max_orientations_per_pair = node["max_orientations_per_pair"].as<size_t>();
   }
   if (node["dual_seed_dedup_tolerance_deg"]) {
-    config.dual_seed_dedup_tolerance_deg = node["dual_seed_dedup_tolerance_deg"].as<double>();
+    config.dual_seed_dedup_tolerance_deg = finite_double(node["dual_seed_dedup_tolerance_deg"]);
   }
   if (node["max_edges_per_contact"]) {
     config.max_edges_per_contact = node["max_edges_per_contact"].as<size_t>();
@@ -653,29 +750,29 @@ bool ConfigParser::parse_orientation(
   if (node["angle_offsets"] && node["angle_offsets"].IsSequence()) {
     config.angle_offsets.clear();
     for (const auto & offset : node["angle_offsets"]) {
-      config.angle_offsets.push_back(offset.as<double>());
+      config.angle_offsets.push_back(finite_double(offset));
     }
   }
   if (node["stop_on_first_valid"]) {
     config.stop_on_first_valid = node["stop_on_first_valid"].as<bool>();
   }
   if (node["collision_tolerance"]) {
-    config.collision_tolerance = node["collision_tolerance"].as<double>();
+    config.collision_tolerance = finite_double(node["collision_tolerance"]);
   }
   if (node["ring_step_size"]) {
-    config.ring_step_size = node["ring_step_size"].as<double>();
+    config.ring_step_size = finite_double(node["ring_step_size"]);
   }
   if (node["angular_step_deg"]) {
-    config.angular_step_deg = node["angular_step_deg"].as<double>();
+    config.angular_step_deg = finite_double(node["angular_step_deg"]);
   }
   if (node["flat_detection_tolerance_m"]) {
-    config.flat_detection_tolerance_m = node["flat_detection_tolerance_m"].as<double>();
+    config.flat_detection_tolerance_m = finite_double(node["flat_detection_tolerance_m"]);
   }
   if (node["cliff_merge_tolerance_deg"]) {
-    config.cliff_merge_tolerance_deg = node["cliff_merge_tolerance_deg"].as<double>();
+    config.cliff_merge_tolerance_deg = finite_double(node["cliff_merge_tolerance_deg"]);
   }
   if (node["min_cliff_width_deg"]) {
-    config.min_cliff_width_deg = node["min_cliff_width_deg"].as<double>();
+    config.min_cliff_width_deg = finite_double(node["min_cliff_width_deg"]);
   }
   if (node["randomize_seeds"]) {
     config.randomize_seeds = node["randomize_seeds"].as<bool>();
@@ -684,13 +781,13 @@ bool ConfigParser::parse_orientation(
     config.debug_full_sweep = node["debug_full_sweep"].as<bool>();
   }
   if (node["debug_sweep_step_deg"]) {
-    config.debug_sweep_step_deg = node["debug_sweep_step_deg"].as<double>();
+    config.debug_sweep_step_deg = finite_double(node["debug_sweep_step_deg"]);
   }
   if (node["ray_lift_offset"]) {
-    config.ray_lift_offset = node["ray_lift_offset"].as<double>();
+    config.ray_lift_offset = finite_double(node["ray_lift_offset"]);
   }
   if (node["seed_step_deg"]) {
-    config.seed_step_deg = node["seed_step_deg"].as<double>();
+    config.seed_step_deg = finite_double(node["seed_step_deg"]);
   }
 
   const std::pair<const char *, double> positive[] = {
@@ -737,7 +834,14 @@ bool ConfigParser::parse_output(const YAML::Node & node, OutputConfig & config)
     config.max_grasps = node["max_grasps"].as<size_t>();
   }
   if (node["min_quality"]) {
-    config.min_quality = node["min_quality"].as<double>();
+    config.min_quality = finite_double(node["min_quality"]);
+  }
+  if (node["fail_on_skipped_constraint"]) {
+    config.fail_on_skipped_constraint = node["fail_on_skipped_constraint"].as<bool>();
+  }
+  if (!(config.min_quality >= 0.0 && config.min_quality <= 1.0)) {
+    set_error("output.min_quality must be in [0, 1]");
+    return false;
   }
 
   return true;
@@ -747,20 +851,24 @@ Eigen::Vector3d ConfigParser::parse_vector3(const YAML::Node & node) const
 {
   Eigen::Vector3d vec = Eigen::Vector3d::Zero();
 
-  if (node.IsSequence() && node.size() >= 3) {
-    vec.x() = node[0].as<double>();
-    vec.y() = node[1].as<double>();
-    vec.z() = node[2].as<double>();
+  if (node.IsSequence() && node.size() == 3) {
+    vec.x() = finite_double(node[0]);
+    vec.y() = finite_double(node[1]);
+    vec.z() = finite_double(node[2]);
   } else if (node.IsMap()) {
     if (node["x"]) {
-      vec.x() = node["x"].as<double>();
+      vec.x() = finite_double(node["x"]);
     }
     if (node["y"]) {
-      vec.y() = node["y"].as<double>();
+      vec.y() = finite_double(node["y"]);
     }
     if (node["z"]) {
-      vec.z() = node["z"].as<double>();
+      vec.z() = finite_double(node["z"]);
     }
+  } else {
+    throw std::runtime_error(
+            "expected a vector [x, y, z] or a map with x/y/z keys at line " +
+            std::to_string(node.Mark().line + 1));
   }
 
   return vec;
@@ -770,39 +878,33 @@ Eigen::Quaterniond ConfigParser::parse_quaternion(const YAML::Node & node) const
 {
   Eigen::Quaterniond quat = Eigen::Quaterniond::Identity();
 
-  if (node.IsSequence()) {
-    if (node.size() < 4) {
-      RCLCPP_WARN(rclcpp::get_logger("gripper_sampler"),
-        "parse_quaternion: sequence has %zu elements, expected 4 [x,y,z,w]. Using identity.",
-        node.size());
-      return Eigen::Quaterniond::Identity();
-    }
-    // Assume order: x, y, z, w
-    quat.x() = node[0].as<double>();
-    quat.y() = node[1].as<double>();
-    quat.z() = node[2].as<double>();
-    quat.w() = node[3].as<double>();
+  if (node.IsSequence() && node.size() == 4) {
+    quat.x() = finite_double(node[0]);
+    quat.y() = finite_double(node[1]);
+    quat.z() = finite_double(node[2]);
+    quat.w() = finite_double(node[3]);
   } else if (node.IsMap()) {
     if (node["x"]) {
-      quat.x() = node["x"].as<double>();
+      quat.x() = finite_double(node["x"]);
     }
     if (node["y"]) {
-      quat.y() = node["y"].as<double>();
+      quat.y() = finite_double(node["y"]);
     }
     if (node["z"]) {
-      quat.z() = node["z"].as<double>();
+      quat.z() = finite_double(node["z"]);
     }
     if (node["w"]) {
-      quat.w() = node["w"].as<double>();
+      quat.w() = finite_double(node["w"]);
     }
+  } else {
+    throw std::runtime_error(
+            "expected a quaternion [x, y, z, w] or a map with x/y/z/w keys at line " +
+            std::to_string(node.Mark().line + 1));
   }
 
   if (quat.norm() < 1e-6) {
-    RCLCPP_WARN(rclcpp::get_logger("gripper_sampler"),
-      "parse_quaternion: quaternion has near-zero norm \u2014 "
-      "check YAML input (expected sequence [x,y,z,w] or map with x/y/z/w keys). "
-      "Falling back to identity.");
-    return Eigen::Quaterniond::Identity();
+    throw std::runtime_error(
+            "quaternion at line " + std::to_string(node.Mark().line + 1) + " has zero norm");
   }
 
   return quat.normalized();
@@ -838,8 +940,8 @@ std::string ConfigParser::resolve_path(
         std::string pkg_share = ament_index_cpp::get_package_share_directory(package_name);
         return pkg_share + "/" + relative_path;
       } catch (const std::exception & e) {
-        RCLCPP_WARN(logger_, "Could not resolve package '%s': %s", package_name.c_str(), e.what());
-        return path;
+        throw std::runtime_error(
+                "could not resolve package '" + package_name + "' in '" + path + "': " + e.what());
       }
     }
   }
@@ -854,7 +956,6 @@ std::string ConfigParser::resolve_path(
 void ConfigParser::set_error(const std::string & message)
 {
   last_error_ = message;
-  RCLCPP_ERROR(logger_, "%s", message.c_str());
 }
 
 }  // namespace io

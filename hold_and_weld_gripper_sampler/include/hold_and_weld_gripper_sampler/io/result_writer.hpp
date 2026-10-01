@@ -57,6 +57,8 @@ struct ResultMetadata
   std::vector<constraints::exclusion_circle> exclusion_circles;
   std::vector<constraints::exclusion_line> exclusion_lines;
   std::vector<constraints::exclusion_polygon> exclusion_polygons;
+
+  std::vector<std::string> skipped_constraints;
 };
 
 /**
@@ -89,7 +91,8 @@ struct WriterOptions
  *     "generated_at": "2026-01-15T10:30:00Z",
  *     "coordinate_frame": "world",
  *     "primary_source": "meshes/workpiece.step",
- *     "num_grasps_output": 25
+ *     "num_grasps_output": 25,
+ *     "skipped_constraints": ["circle exclusion zone 0 'weld': not enforced (geometry failure)"]
  *   },
  *   "grasps": [
  *     {
@@ -205,6 +208,12 @@ private:
    * @brief Set error message
    */
   void set_error(const std::string & message);
+
+  /**
+   * @brief Copy metadata with the result's counts and skipped constraints filled in
+   */
+  static ResultMetadata merge_result_metadata(
+    const core::GraspFinderResult & result, const ResultMetadata & metadata);
 
   /**
    * @brief Escape a string for safe embedding in JSON

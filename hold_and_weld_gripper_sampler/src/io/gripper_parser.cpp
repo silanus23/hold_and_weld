@@ -29,126 +29,19 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepPrimAPI_MakeBox.hxx>
-#include <BRepPrimAPI_MakeCylinder.hxx>
-#include <BRepPrimAPI_MakeSphere.hxx>
-#include <BRep_Builder.hxx>
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <Standard_Failure.hxx>
 #include <TopLoc_Location.hxx>
-#include <TopoDS_Compound.hxx>
 
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
+#include "hold_and_weld_gripper_sampler/io/urdf_collision_loader.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
 namespace io
 {
-
-gp_Trsf rpy_to_transform(double roll, double pitch, double yaw)
-{
-  gp_Trsf transform;
-  transform.SetRotation(geometry::rpy_to_quaternion(roll, pitch, yaw));
-  return transform;
-}
-
-gp_Trsf parse_origin(tinyxml2::XMLElement * origin)
-{
-  gp_Trsf transform;
-
-  if (!origin) {
-    return transform;
-  }
-
-  const char * xyz_str = origin->Attribute("xyz");
-  if (xyz_str) {
-    double x, y, z;
-    if (std::sscanf(xyz_str, "%lf %lf %lf", &x, &y, &z) == 3) {
-      transform.SetTranslation(gp_Vec(x, y, z));
-    }
-  }
-
-  const char * rpy_str = origin->Attribute("rpy");
-  if (rpy_str) {
-    double roll, pitch, yaw;
-    if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
-      gp_Trsf rot_transform = rpy_to_transform(roll, pitch, yaw);
-      transform = transform * rot_transform;
-    }
-  }
-
-  return transform;
-}
-
-TopoDS_Shape create_shape_from_geometry(tinyxml2::XMLElement * geometry)
-{
-  if (!geometry) {
-    throw std::runtime_error("Geometry element is null");
-  }
-
-  try {
-    if (tinyxml2::XMLElement * box = geometry->FirstChildElement("box")) {
-      const char * size_str = box->Attribute("size");
-      if (!size_str) {
-        throw std::runtime_error("Box missing 'size' attribute");
-      }
-
-      double x, y, z;
-      if (std::sscanf(size_str, "%lf %lf %lf", &x, &y, &z) != 3) {
-        throw std::runtime_error("Failed to parse box size");
-      }
-
-      gp_Pnt corner(-x / 2.0, -y / 2.0, -z / 2.0);
-      return BRepPrimAPI_MakeBox(corner, x, y, z).Shape();
-
-    } else if (tinyxml2::XMLElement * cylinder = geometry->FirstChildElement("cylinder")) {
-      const char * radius_str = cylinder->Attribute("radius");
-      const char * length_str = cylinder->Attribute("length");
-
-      if (!radius_str || !length_str) {
-        throw std::runtime_error("Cylinder missing 'radius' or 'length' attribute");
-      }
-
-      double radius, length;
-      if (std::sscanf(radius_str, "%lf", &radius) != 1 ||
-        std::sscanf(length_str, "%lf", &length) != 1)
-      {
-        throw std::runtime_error("Failed to parse cylinder parameters");
-      }
-
-      gp_Ax2 axis(gp_Pnt(0, 0, -length / 2.0), gp_Dir(0, 0, 1));
-      return BRepPrimAPI_MakeCylinder(axis, radius, length).Shape();
-
-    } else if (tinyxml2::XMLElement * sphere = geometry->FirstChildElement("sphere")) {
-      const char * radius_str = sphere->Attribute("radius");
-
-      if (!radius_str) {
-        throw std::runtime_error("Sphere missing 'radius' attribute");
-      }
-
-      double radius;
-      if (std::sscanf(radius_str, "%lf", &radius) != 1) {
-        throw std::runtime_error("Failed to parse sphere radius");
-      }
-
-      return BRepPrimAPI_MakeSphere(radius).Shape();
-
-    } else if (geometry->FirstChildElement("mesh")) {
-      throw std::runtime_error("Mesh geometry not supported");
-    } else {
-      throw std::runtime_error("Unknown or unsupported geometry type");
-    }
-  } catch (const Standard_Failure & e) {
-    throw std::runtime_error(
-      "OCCT error creating shape from geometry: " + std::string(e.GetMessageString()));
-  } catch (const std::runtime_error &) {
-    throw;
-  } catch (...) {
-    throw std::runtime_error("Unknown error creating shape from geometry");
-  }
-}
 
 Eigen::Vector3d GripperParser::parse_xyz(const std::string & xyz_str)
 {
@@ -181,53 +74,15 @@ TopoDS_Shape GripperParser::extract_link_shape(
       continue;
     }
 
-    // Collect all <collision> elements into a compound shape.
-    TopoDS_Compound compound;
-    BRep_Builder builder;
-    builder.MakeCompound(compound);
-    bool found_any = false;
-
-    for (tinyxml2::XMLElement * collision = link->FirstChildElement("collision");
-      collision != nullptr;
-      collision = collision->NextSiblingElement("collision"))
-    {
-      tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
-      if (!geometry) {continue;}
-
-      try {
-        TopoDS_Shape shape = create_shape_from_geometry(geometry);
-
-        tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
-        if (origin) {
-          gp_Trsf transform = parse_origin(origin);
-          BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
-          if (!transformer.IsDone()) {
-            throw std::runtime_error(
-              "Transform failed for collision element in link '" + link_name + "'");
-          }
-          shape = transformer.Shape();
-        }
-
-        builder.Add(compound, shape);
-        found_any = true;
-      } catch (const Standard_Failure & e) {
-        throw std::runtime_error(
-          "OCCT error extracting shape for link '" + link_name + "': " +
-          std::string(e.GetMessageString()));
-      } catch (const std::exception & e) {
-        throw std::runtime_error(
-          "Error extracting shape for link '" + link_name + "': " + std::string(e.what()));
-      } catch (...) {
-        throw std::runtime_error(
-          "Unknown error extracting shape for link '" + link_name + "'");
-      }
+    std::vector<std::string> skipped;
+    TopoDS_Shape shape = link_collision_shape(link, skipped);
+    if (!skipped.empty()) {
+      throw std::runtime_error("Gripper collision element not built: " + skipped.front());
     }
-
-    if (!found_any) {
+    if (shape.IsNull()) {
       throw std::runtime_error("Link '" + link_name + "' has no valid collision geometry");
     }
-
-    return compound;
+    return shape;
   }
 
   throw std::runtime_error("Link not found: " + link_name);
@@ -267,38 +122,25 @@ Eigen::Vector3d GripperParser::extract_joint_axis(
               (type ? type : "unknown") + ")");
     }
 
+    // URDF's default when <axis> or its xyz is omitted.
+    Eigen::Vector3d axis_local = Eigen::Vector3d::UnitX();
     tinyxml2::XMLElement * axis_elem = joint->FirstChildElement("axis");
-    if (!axis_elem) {
-      return Eigen::Vector3d(0.0, 0.0, 1.0);
-    }
-
-    const char * xyz_str = axis_elem->Attribute("xyz");
-    if (!xyz_str) {
-      return Eigen::Vector3d(0.0, 0.0, 1.0);
+    const char * xyz_str = axis_elem ? axis_elem->Attribute("xyz") : nullptr;
+    if (xyz_str) {
+      axis_local = parse_xyz(xyz_str);
+      if (axis_local.norm() < 1e-9) {
+        throw std::runtime_error("Joint '" + joint_name + "' has a zero <axis xyz>");
+      }
+      axis_local.normalize();
     }
 
     // The <axis xyz> is expressed in the joint's local frame.
     // If the joint <origin> has a non-zero rpy, we must rotate the axis
     // into the gripper root frame so it matches the BVH vertex frame.
-    Eigen::Vector3d axis_local = parse_xyz(xyz_str).normalized();
 
-    tinyxml2::XMLElement * origin_elem = joint->FirstChildElement("origin");
-    if (origin_elem) {
-      const char * rpy_str = origin_elem->Attribute("rpy");
-      if (rpy_str) {
-        double roll, pitch, yaw;
-        if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
-          // Build rotation matrix from ZYX Euler angles (URDF convention)
-          Eigen::Matrix3d rot =
-            (Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-            Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-            Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX())).toRotationMatrix();
-          return (rot * axis_local).normalized();
-        }
-      }
-    }
-
-    return axis_local;
+    gp_Vec axis(axis_local.x(), axis_local.y(), axis_local.z());
+    axis.Transform(parse_origin(joint->FirstChildElement("origin")));
+    return Eigen::Vector3d(axis.X(), axis.Y(), axis.Z()).normalized();
   }
 
   throw std::runtime_error("Joint not found: " + joint_name);
@@ -592,6 +434,9 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
       throw std::runtime_error("Invalid finger_id: " + std::string(finger_id_str));
     }
 
+    if ((finger_id == 1 && !finger_1_link.empty()) || (finger_id == 2 && !finger_2_link.empty())) {
+      throw std::runtime_error("Duplicate finger_id " + std::to_string(finger_id));
+    }
     if (finger_id == 1) {
       finger_1_link = link_attr;
       finger_1_joint = joint_attr;
@@ -614,7 +459,8 @@ ParsedGripper GripperParser::parse_from_urdf_string(const std::string & urdf_str
   gripper.finger_2_joint_name = finger_2_joint;
 
   tinyxml2::XMLElement * gripper_type = metadata->FirstChildElement("gripper_type");
-  gripper.gripper_type = gripper_type ? gripper_type->GetText() : "parallel";
+  const char * gripper_type_text = gripper_type ? gripper_type->GetText() : nullptr;
+  gripper.gripper_type = gripper_type_text ? gripper_type_text : "parallel";
 
   tinyxml2::XMLElement * tcp_offset = metadata->FirstChildElement("tcp_offset");
   if (tcp_offset) {

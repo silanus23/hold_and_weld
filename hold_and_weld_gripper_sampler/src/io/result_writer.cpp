@@ -19,8 +19,8 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-
-#include <rclcpp/rclcpp.hpp>
+#include <string>
+#include <vector>
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -28,8 +28,6 @@ namespace io
 {
 
 using core::GraspFinderResult;
-
-static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 bool ResultWriter::write_to_file(
   const std::vector<Grasp> & grasps,
@@ -56,8 +54,6 @@ bool ResultWriter::write_to_file(
     }
 
     file.close();
-
-    RCLCPP_INFO(logger_, "Wrote %zu grasps to %s", grasps.size(), output_path.c_str());
     return true;
   } catch (const std::exception & e) {
     set_error("Error writing to file '" + output_path + "': " + std::string(e.what()));
@@ -74,14 +70,24 @@ bool ResultWriter::write_to_file(
   const ResultMetadata & metadata,
   const WriterOptions & options)
 {
+  return write_to_file(
+    result.grasps, output_path, merge_result_metadata(result, metadata), options);
+}
+
+ResultMetadata ResultWriter::merge_result_metadata(
+  const GraspFinderResult & result, const ResultMetadata & metadata)
+{
   ResultMetadata merged_metadata = metadata;
   merged_metadata.num_contact_pairs = result.num_contact_pairs;
   merged_metadata.num_surfaces_valid = result.num_valid_surfaces;
   merged_metadata.num_surfaces_banned = result.num_banned_surfaces;
   merged_metadata.num_candidates = result.num_candidates;
   merged_metadata.num_grasps_output = result.grasps.size();
+  merged_metadata.skipped_constraints.insert(
+    merged_metadata.skipped_constraints.end(),
+    result.skipped_constraints.begin(), result.skipped_constraints.end());
 
-  return write_to_file(result.grasps, output_path, merged_metadata, options);
+  return merged_metadata;
 }
 
 std::string ResultWriter::escape_json_string(const std::string & s)
@@ -176,7 +182,17 @@ std::string ResultWriter::to_json_string(
       }
 
       json << indent << indent << "\"num_grasps_output\":" << sep << filtered_grasps.size() <<
-        newline;
+        "," << newline;
+
+      json << indent << indent << "\"skipped_constraints\":" << sep << "[";
+      for (size_t i = 0; i < metadata.skipped_constraints.size(); ++i) {
+        json << (i == 0 ? "" : ",") << newline << indent << indent << indent << "\"" <<
+          escape_json_string(metadata.skipped_constraints[i]) << "\"";
+      }
+      if (!metadata.skipped_constraints.empty()) {
+        json << newline << indent << indent;
+      }
+      json << "]" << newline;
       json << indent << "}," << newline;
 
       json << indent << "\"constraint_geometry\":" << sep << "{" << newline;
@@ -345,10 +361,8 @@ std::string ResultWriter::to_json_string(
 
     return json.str();
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Error generating JSON: %s", e.what());
     throw std::runtime_error("Failed to generate JSON: " + std::string(e.what()));
   } catch (...) {
-    RCLCPP_ERROR(logger_, "Unknown error generating JSON");
     throw std::runtime_error("Failed to generate JSON: unknown error");
   }
 }
@@ -358,14 +372,7 @@ std::string ResultWriter::to_json_string(
   const ResultMetadata & metadata,
   const WriterOptions & options)
 {
-  ResultMetadata merged_metadata = metadata;
-  merged_metadata.num_contact_pairs = result.num_contact_pairs;
-  merged_metadata.num_surfaces_valid = result.num_valid_surfaces;
-  merged_metadata.num_surfaces_banned = result.num_banned_surfaces;
-  merged_metadata.num_candidates = result.num_candidates;
-  merged_metadata.num_grasps_output = result.grasps.size();
-
-  return to_json_string(result.grasps, merged_metadata, options);
+  return to_json_string(result.grasps, merge_result_metadata(result, metadata), options);
 }
 
 std::string ResultWriter::generate_timestamp()
@@ -375,11 +382,7 @@ std::string ResultWriter::generate_timestamp()
     auto time_t_now = std::chrono::system_clock::to_time_t(now);
 
     std::tm tm_utc;
-#ifdef _WIN32
-    gmtime_s(&tm_utc, &time_t_now);
-#else
     gmtime_r(&time_t_now, &tm_utc);
-#endif
 
     std::ostringstream oss;
     oss << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%SZ");
@@ -414,7 +417,6 @@ std::vector<Grasp> ResultWriter::filter_grasps(
 void ResultWriter::set_error(const std::string & message)
 {
   last_error_ = message;
-  RCLCPP_ERROR(logger_, "%s", message.c_str());
 }
 
 }  // namespace io

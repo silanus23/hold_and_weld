@@ -56,6 +56,7 @@ add_library(${PROJECT_NAME}_core SHARED
   src/io/result_writer.cpp
   src/io/shape_loader.cpp
   src/io/gripper_parser.cpp
+  src/io/urdf_collision_loader.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_core
@@ -151,7 +152,6 @@ if(BUILD_TESTING)
 
   ament_lint_auto_find_test_dependencies()
 
-  # Helper macro to keep test definitions extremely clean
   macro(add_sampler_test target_name source_file)
     ament_add_gtest(${target_name} ${source_file})
     if(TARGET ${target_name})
@@ -169,7 +169,6 @@ if(BUILD_TESTING)
     endif()
   endmacro()
 
-  # Unit tests (Just add one line here when you create a new test file)
   add_sampler_test(topology_extraction_test test/topology_extraction_test.cpp)
   add_sampler_test(shape_refiner_test test/shape_refiner_test.cpp)
   add_sampler_test(exclusion_zone_constraint_test test/exclusion_zone_constraint_test.cpp)

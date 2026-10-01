@@ -213,7 +213,7 @@ TEST_F(GraspOrientationFinderTest, FindGraspsOnSimpleBox)
   }
 }
 
-// TODO(@silanus23): Fix mock gripper geometry to match URDF convention (fingers at Y=0 rest pos)
+// TODO(silanus23): Fix mock gripper geometry to match URDF convention (fingers at Y=0 rest pos)
 #if 0
 TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
 {

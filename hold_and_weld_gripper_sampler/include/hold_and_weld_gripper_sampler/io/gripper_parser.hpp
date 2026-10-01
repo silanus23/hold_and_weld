@@ -67,14 +67,7 @@ namespace io
 class GripperParser
 {
 public:
-  /**
-   * @brief Default constructor
-   */
   GripperParser() = default;
-
-  /**
-   * @brief Virtual destructor
-   */
   ~GripperParser() = default;
 
   /**

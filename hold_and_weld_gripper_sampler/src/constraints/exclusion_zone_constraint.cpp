@@ -58,17 +58,6 @@ namespace hold_and_weld_gripper_sampler
 namespace constraints
 {
 
-namespace
-{
-
-// " 'id'" for log messages, or nothing when the zone has no id.
-std::string id_suffix(const std::string & id)
-{
-  return id.empty() ? "" : " '" + id + "'";
-}
-
-}  // namespace
-
 ExclusionZoneConstraint::ExclusionZoneConstraint(
   std::shared_ptr<const geometry::GeometryMapper> mapper,
   const ParsedGripper & gripper,
@@ -91,26 +80,6 @@ ExclusionZoneConstraint::ExclusionZoneConstraint(
 {
   RCLCPP_DEBUG(logger_, "ExclusionZoneConstraint: %zu lines, %zu circles, %zu polygons",
     lines_.size(), circles_.size(), polygons_.size());
-
-  try {
-    if (!gripper_.finger_1.IsNull()) {
-      BRepMesh_IncrementalMesh(gripper_.finger_1, mesh_linear_deflection_, Standard_False,
-            mesh_angular_deflection_);
-    }
-
-    if (!gripper_.finger_2.IsNull()) {
-      BRepMesh_IncrementalMesh(gripper_.finger_2, mesh_linear_deflection_, Standard_False,
-            mesh_angular_deflection_);
-    }
-
-    if (!gripper_.base.IsNull()) {
-      BRepMesh_IncrementalMesh(gripper_.base, mesh_linear_deflection_, Standard_False,
-            mesh_angular_deflection_);
-    }
-  } catch (const Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "Meshing failed for one or more gripper components: %s",
-          e.GetMessageString());
-  }
 }
 
 TopoDS_Shape ExclusionZoneConstraint::create_tube_from_line(
@@ -185,8 +154,10 @@ TopoDS_Shape ExclusionZoneConstraint::create_volume_from_circle(
   gp_Ax2 axis(center, normal);
 
   double radius = circle.radius + (include_clearance ? circle.clearance : 0.0);
-  double extrusion_depth = circle.projection_depth +
-    (include_clearance ? 2.0 * circle.clearance : 0.0);
+  // Both volumes start `clearance` below the zone's plane, so on a curved face the
+  // surface that falls away from the plane is still inside.
+  double extrusion_depth = circle.projection_depth + circle.clearance +
+    (include_clearance ? circle.clearance : 0.0);
 
   try {
     BRepBuilderAPI_MakeEdge edge_maker(gp_Circ(axis, radius));
@@ -196,18 +167,15 @@ TopoDS_Shape ExclusionZoneConstraint::create_volume_from_circle(
     TopoDS_Shape thick_disk = BRepPrimAPI_MakePrism(disk_maker.Face(),
           gp_Vec(normal.XYZ() * extrusion_depth)).Shape();
 
-    if (include_clearance) {
-      // Shift back so volume straddles the original surface plane for coverage
-      gp_Trsf shift_back;
-      shift_back.SetTranslation(gp_Vec(-normal.X() * circle.clearance,
-            -normal.Y() * circle.clearance, -normal.Z() * circle.clearance));
-      BRepBuilderAPI_Transform circle_transformer(thick_disk, shift_back, Standard_True);
-      if (!circle_transformer.IsDone()) {
-        RCLCPP_ERROR(logger_, "Circle volume: shift-back transform failed");
-        return TopoDS_Shape();
-      }
-      thick_disk = circle_transformer.Shape();
+    gp_Trsf shift_back;
+    shift_back.SetTranslation(gp_Vec(-normal.X() * circle.clearance,
+          -normal.Y() * circle.clearance, -normal.Z() * circle.clearance));
+    BRepBuilderAPI_Transform circle_transformer(thick_disk, shift_back, Standard_True);
+    if (!circle_transformer.IsDone()) {
+      RCLCPP_ERROR(logger_, "Circle volume: shift-back transform failed");
+      return TopoDS_Shape();
     }
+    thick_disk = circle_transformer.Shape();
 
     BRepMesh_IncrementalMesh(thick_disk, mesh_linear_deflection_, Standard_False,
           mesh_angular_deflection_);
@@ -267,24 +235,24 @@ TopoDS_Shape ExclusionZoneConstraint::create_prism_from_polygon(
       poly_face = BRepBuilderAPI_MakeFace(poly_builder.Wire());
     }
 
-    double depth = polygon.projection_depth + (include_clearance ? 2.0 * polygon.clearance : 0.0);
+    // Starts `clearance` below the corners' plane, as in create_volume_from_circle.
+    double depth = polygon.projection_depth + polygon.clearance +
+      (include_clearance ? polygon.clearance : 0.0);
     gp_Vec extrusion = gp_Vec(normal.x(), normal.y(), normal.z()) * depth;
 
     TopoDS_Shape prism = BRepPrimAPI_MakePrism(poly_face, extrusion).Shape();
 
-    if (include_clearance) {
-      gp_Trsf shift_back;
-      shift_back.SetTranslation(gp_Vec(
-        -normal.x() * polygon.clearance,
-        -normal.y() * polygon.clearance,
-        -normal.z() * polygon.clearance));
-      BRepBuilderAPI_Transform prism_transformer(prism, shift_back, Standard_True);
-      if (!prism_transformer.IsDone()) {
-        RCLCPP_ERROR(logger_, "Polygon prism: shift-back transform failed");
-        return TopoDS_Shape();
-      }
-      prism = prism_transformer.Shape();
+    gp_Trsf shift_back;
+    shift_back.SetTranslation(gp_Vec(
+      -normal.x() * polygon.clearance,
+      -normal.y() * polygon.clearance,
+      -normal.z() * polygon.clearance));
+    BRepBuilderAPI_Transform prism_transformer(prism, shift_back, Standard_True);
+    if (!prism_transformer.IsDone()) {
+      RCLCPP_ERROR(logger_, "Polygon prism: shift-back transform failed");
+      return TopoDS_Shape();
     }
+    prism = prism_transformer.Shape();
 
     BRepMesh_IncrementalMesh(prism, mesh_linear_deflection_, Standard_False,
       mesh_angular_deflection_);
@@ -300,7 +268,9 @@ TopoDS_Shape ExclusionZoneConstraint::create_prism_from_polygon(
 
 std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume(
   const TopoDS_Shape & constraint_volume,
-  const geometry::Topology & topology) const
+  const geometry::Topology & topology,
+  const std::string & zone_label,
+  std::vector<std::string> & skipped) const
 {
   constexpr double kOnVolumeTolerance = 1e-6;
   std::vector<core::SampleArea> sample_areas;
@@ -323,7 +293,7 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
     sampling_config.sample_density = sample_density_;
     sampling_config.layout = sampling::GridLayout::kCellCentres;
 
-    // TODO(perf): linear scan over all_surfaces with a fresh BRepBndLib::Add per face,
+    // TODO(silanus23): linear scan over all_surfaces with a fresh BRepBndLib::Add per face,
     // repeated per constraint volume/zone. A spatial index (BVH/AABB tree) built once
     // over the surfaces and reused across zones would avoid both the O(n) rescan and
     // the redundant per-zone bbox recomputation. Not a bottleneck at current PoC scale.
@@ -365,6 +335,9 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
           RCLCPP_WARN(logger_,
             "Surface %d: %zu sample(s) in exclusion zone but wire extraction failed — "
             "zone not excluded from sampling on this face", surface_id, excluded.size());
+          skipped.push_back(
+            zone_label + ": not excluded from sampling on surface " +
+            std::to_string(surface_id) + " (wire extraction failed)");
           continue;
         }
 
@@ -377,17 +350,26 @@ std::vector<core::SampleArea> ExclusionZoneConstraint::process_constraint_volume
         RCLCPP_DEBUG(logger_, "Exclusion wire created for surface %d (%zu of %zu samples)",
           surface_id, excluded.size(), samples.size());
       } catch (const Standard_Failure & e) {
-        RCLCPP_ERROR(logger_, "Surface %d: exclusion footprint measurement failed: %s — "
+        RCLCPP_WARN(logger_, "Surface %d: exclusion footprint measurement failed: %s — "
           "zone not excluded from sampling on this face", surface_id, e.GetMessageString());
+        skipped.push_back(
+          zone_label + ": not excluded from sampling on surface " + std::to_string(surface_id) +
+          " (" + e.GetMessageString() + ")");
       } catch (const std::exception & e) {
-        RCLCPP_ERROR(logger_, "Surface %d: exception in exclusion processing: %s — "
+        RCLCPP_WARN(logger_, "Surface %d: exception in exclusion processing: %s — "
           "zone not excluded from sampling on this face", surface_id, e.what());
+        skipped.push_back(
+          zone_label + ": not excluded from sampling on surface " + std::to_string(surface_id) +
+          " (" + e.what() + ")");
       }
     }
   } catch (const Standard_Failure & e) {
     RCLCPP_ERROR(logger_, "Exclusion footprint measurement failed: %s", e.GetMessageString());
+    skipped.push_back(
+      zone_label + ": not excluded from sampling (" + e.GetMessageString() + ")");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger_, "Exception in constraint processing: %s", e.what());
+    skipped.push_back(zone_label + ": not excluded from sampling (" + e.what() + ")");
   }
 
   return sample_areas;
@@ -402,6 +384,8 @@ void ExclusionZoneConstraint::analyze_constraints(
   sample_areas_.clear();
   projection_volumes_.clear();
   collision_volumes_.clear();
+  collision_volume_labels_.clear();
+  skipped_.clear();
 
   const size_t total = lines_.size() + circles_.size() + polygons_.size();
 
@@ -430,16 +414,8 @@ void ExclusionZoneConstraint::analyze_constraints(
     TopoDS_Shape proj = create_tube_from_line(line, false);
     TopoDS_Shape coll = create_tube_from_line(line, true);
 
-    if (!proj.IsNull() && !coll.IsNull()) {
-      projection_volumes_.push_back(proj);
-      collision_volumes_.push_back(coll);
-      auto areas = process_constraint_volume(proj, topology);
-      sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
-      RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
-    } else {
-      RCLCPP_ERROR(logger_, "Skipping line exclusion zone %zu%s due to geometry failure — "
-        "this zone will NOT be enforced", i, id_suffix(line.id).c_str());
-    }
+    const std::string label = "line exclusion zone " + std::to_string(i) + id_suffix(line.id);
+    add_zone(proj, coll, label, topology);
   }
 
   for (size_t i = 0; i < circles_.size(); ++i) {
@@ -457,16 +433,8 @@ void ExclusionZoneConstraint::analyze_constraints(
     TopoDS_Shape proj = create_volume_from_circle(circle, false);
     TopoDS_Shape coll = create_volume_from_circle(circle, true);
 
-    if (!proj.IsNull() && !coll.IsNull()) {
-      projection_volumes_.push_back(proj);
-      collision_volumes_.push_back(coll);
-      auto areas = process_constraint_volume(proj, topology);
-      sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
-      RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
-    } else {
-      RCLCPP_ERROR(logger_, "Skipping circle exclusion zone %zu%s due to geometry failure — "
-        "this zone will NOT be enforced", i, id_suffix(circle.id).c_str());
-    }
+    const std::string label = "circle exclusion zone " + std::to_string(i) + id_suffix(circle.id);
+    add_zone(proj, coll, label, topology);
   }
 
   for (size_t i = 0; i < polygons_.size(); ++i) {
@@ -475,7 +443,7 @@ void ExclusionZoneConstraint::analyze_constraints(
       i, id_suffix(polygon.id).c_str(),
       polygon.exclusion_corners.size(), polygon.projection_depth);
 
-    // Min edge length is a cheap proxy for "narrowest dimension" — a long thin polygon
+    // Min edge length is a cheap proxy for "narrowest dimension", a long thin polygon
     // can still have long edges while being narrow across, so this can under-warn.
     double min_edge_length = std::numeric_limits<double>::max();
     for (size_t c = 0; c < polygon.exclusion_corners.size(); ++c) {
@@ -493,16 +461,8 @@ void ExclusionZoneConstraint::analyze_constraints(
     TopoDS_Shape proj = create_prism_from_polygon(polygon, false);
     TopoDS_Shape coll = create_prism_from_polygon(polygon, true);
 
-    if (!proj.IsNull() && !coll.IsNull()) {
-      projection_volumes_.push_back(proj);
-      collision_volumes_.push_back(coll);
-      auto areas = process_constraint_volume(proj, topology);
-      sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
-      RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
-    } else {
-      RCLCPP_ERROR(logger_, "Skipping polygon exclusion zone %zu%s due to geometry failure — "
-        "this zone will NOT be enforced", i, id_suffix(polygon.id).c_str());
-    }
+    const std::string label = "polygon exclusion zone " + std::to_string(i) + id_suffix(polygon.id);
+    add_zone(proj, coll, label, topology);
   }
 
   std::map<int, int> surface_counts;
@@ -514,6 +474,26 @@ void ExclusionZoneConstraint::analyze_constraints(
   RCLCPP_INFO(logger_, "Exclusion analysis complete: %zu volume(s), %zu wire(s) "
     "on %zu surface(s)",
     collision_volumes_.size(), sample_areas_.size(), affected_surfaces);
+}
+
+void ExclusionZoneConstraint::add_zone(
+  const TopoDS_Shape & projection_volume,
+  const TopoDS_Shape & collision_volume,
+  const std::string & label,
+  const geometry::Topology & topology)
+{
+  if (projection_volume.IsNull() || collision_volume.IsNull()) {
+    RCLCPP_ERROR(logger_, "Skipping %s due to geometry failure — this zone will NOT be enforced",
+      label.c_str());
+    skipped_.push_back(label + ": not enforced (geometry failure)");
+    return;
+  }
+  projection_volumes_.push_back(projection_volume);
+  collision_volumes_.push_back(collision_volume);
+  collision_volume_labels_.push_back(label);
+  auto areas = process_constraint_volume(projection_volume, topology, label, skipped_);
+  sample_areas_.insert(sample_areas_.end(), areas.begin(), areas.end());
+  RCLCPP_DEBUG(logger_, "  -> %zu exclusion wire(s) extracted", areas.size());
 }
 
 std::vector<core::SampleArea> ExclusionZoneConstraint::get_sample_areas() const
@@ -537,7 +517,7 @@ bool ExclusionZoneConstraint::intersects_exclusion_zone(
   }
 
   if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    RCLCPP_ERROR(logger_, "FCL checker not available — rejecting grasp conservatively");
+    RCLCPP_ERROR_ONCE(logger_, "FCL checker not available — rejecting every grasp conservatively");
     return true;
   }
 
@@ -552,6 +532,16 @@ std::string ExclusionZoneConstraint::get_name() const
 const std::vector<TopoDS_Shape> & ExclusionZoneConstraint::get_collision_volumes() const
 {
   return collision_volumes_;
+}
+
+const std::vector<std::string> & ExclusionZoneConstraint::get_collision_volume_labels() const
+{
+  return collision_volume_labels_;
+}
+
+const std::vector<std::string> & ExclusionZoneConstraint::get_skipped() const
+{
+  return skipped_;
 }
 
 }  // namespace constraints

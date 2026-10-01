@@ -40,7 +40,7 @@ struct ParsedGripper
   Eigen::Vector3d finger_1_axis;
   Eigen::Vector3d finger_2_axis;
 
-  double max_opening;
+  double max_opening = 0.0;
 
   std::string gripper_type;
   Eigen::Vector3d tcp_offset;

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
 #include <memory>
-#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -29,7 +30,6 @@
 #include <gp_Vec.hxx>
 #include <rclcpp/rclcpp.hpp>
 
-#include "hold_and_weld_gripper_sampler/angle_finding/grasp_orientation_finder.hpp"
 #include "hold_and_weld_gripper_sampler/collision/jaw_clearance_check.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/exclusion_zone_constraint.hpp"
 #include "hold_and_weld_gripper_sampler/constraints/ground_constraint.hpp"
@@ -43,9 +43,12 @@ namespace hold_and_weld_gripper_sampler
 namespace angle_finding
 {
 
+namespace
+{
+
 // Finds all overlapping pieces between two arcs, each of which may wrap the 0/2pi seam.
 // An arc wraps either as start > end or, as rejoin_wraparound_arc emits it, as end > 2pi.
-static bool angular_overlap(
+bool angular_overlap(
   double a_start, double a_end,
   double b_start, double b_end,
   std::vector<std::pair<double, double>> & out_overlaps)
@@ -73,7 +76,7 @@ static bool angular_overlap(
 }
 
 // Orthonormal basis so stable for all normal orientations including +-Z.
-static void build_tangent_frame(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec & out_ly)
+void build_tangent_frame(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec & out_ly)
 {
   const double sign = (normal.Z() >= 0.0) ? 1.0 : -1.0;
   const double inv_denom = -1.0 / (sign + normal.Z());
@@ -88,7 +91,7 @@ static void build_tangent_frame(const gp_Vec & normal, gp_Vec & out_lx, gp_Vec &
     -normal.Y());
 }
 
-static gp_Pnt compute_ring_point(
+gp_Pnt compute_ring_point(
   const gp_Pnt & contact,
   const gp_Vec & tangent_axis_x,
   const gp_Vec & tangent_axis_y,
@@ -108,7 +111,7 @@ static gp_Pnt compute_ring_point(
 // first and last segments are one arc cut by the 0/2π seam. The back segment
 // absorbs the front one and keeps its start, so the arc ends past 2π.
 // Example: back=[350°,360°], front=[0°,10°] -> one segment [350°,370°].
-static void rejoin_wraparound_arc(
+void rejoin_wraparound_arc(
   RadialMaps & maps,
   SurfaceState first_state,
   SurfaceState last_state)
@@ -119,6 +122,8 @@ static void rejoin_wraparound_arc(
   segs.back().end_rad = segs.front().end_rad + 2.0 * M_PI;
   segs.erase(segs.begin());
 }
+
+}  // namespace
 
 GraspOrientationFinder::GraspOrientationFinder(
   const TopoDS_Shape & primary_shape,
@@ -182,7 +187,6 @@ SurfaceState GraspOrientationFinder::classify_hit(
   return SurfaceState::FLAT;
 }
 
-
 RadialMaps GraspOrientationFinder::create_radial_maps(
   const gp_Pnt & contact,
   const gp_Dir & normal,
@@ -215,20 +219,16 @@ RadialMaps GraspOrientationFinder::create_radial_maps(
     const double ray_length = ray_vec.Magnitude();
     if (ray_length < 1e-6) {continue;}
 
-    // Avoids spurious LOW classifications from rays falling short at grazing angles.
     gp_Pnt hit_point;
     bool hit = false;
-    static std::once_flag embree_unavailable_warned;
     if (embree_checker_ && embree_checker_->is_valid()) {
       auto embree_hit = embree_checker_->ray_intersect(lifted_center, gp_Dir(ray_vec), ray_length);
       if (embree_hit.has_value()) {hit_point = embree_hit.value(); hit = true;}
     } else {
-      std::call_once(embree_unavailable_warned, [this]() {
-          RCLCPP_WARN(logger_,
-          "GraspOrientationFinder: Embree checker is %s — all radial directions "
-          "classified as unobstructed. Quality scores will be 1.0 for all candidates.",
-          embree_checker_ ? "invalid" : "null");
-      });
+      RCLCPP_WARN_ONCE(logger_,
+        "GraspOrientationFinder: Embree checker is %s — all radial directions "
+        "classified as unobstructed. Quality scores will be 1.0 for all candidates.",
+        embree_checker_ ? "invalid" : "null");
     }
 
     const SurfaceState state = classify_hit(hit, hit_point, contact, normal_vec, flat_tol);
@@ -469,6 +469,89 @@ bool GraspOrientationFinder::collides_with_primary(
     transform, grip_distance, config_.collision_tolerance);
 }
 
+std::vector<double> GraspOrientationFinder::seeds_from_clusters(
+  const std::vector<std::vector<RadialSegment>> & clusters,
+  std::mt19937 & rng) const
+{
+  std::vector<std::vector<double>> cluster_seeds;
+  cluster_seeds.reserve(clusters.size());
+  for (const auto & cluster : clusters) {
+    std::vector<double> & out = cluster_seeds.emplace_back();
+    double span_start = cluster.front().start_rad;
+    double span_end = cluster.front().end_rad;
+    for (const auto & seg : cluster) {
+      span_start = std::min(span_start, seg.start_rad);
+      span_end = std::max(span_end, seg.end_rad);
+    }
+    const double cluster_arc_span = span_end - span_start;
+
+    if (config_.randomize_seeds) {
+      const size_t n_samples = (config_.max_orientations_per_pair > 0) ?
+        std::max(size_t{1}, config_.max_orientations_per_pair / clusters.size()) :
+        1;
+      std::uniform_real_distribution<double> dist(0.0, cluster_arc_span);
+      for (size_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
+        out.push_back(span_start + dist(rng));
+      }
+      continue;
+    }
+
+    const double seed_step_rad = config_.seed_step_deg * M_PI / 180.0;
+    if (cluster_arc_span <= seed_step_rad) {
+      out.push_back(span_start + cluster_arc_span * 0.5);
+      continue;
+    }
+    const int num_steps = static_cast<int>(std::floor(cluster_arc_span / seed_step_rad));
+    const double actual_step = cluster_arc_span / num_steps;
+    for (int step_idx = 0; step_idx < num_steps; ++step_idx) {
+      out.push_back(span_start + (step_idx + 0.5) * actual_step);
+    }
+  }
+
+  std::vector<double> seeds;
+  for (size_t rank = 0; ; ++rank) {
+    bool any = false;
+    for (const auto & out : cluster_seeds) {
+      if (rank < out.size()) {
+        seeds.push_back(out[rank]);
+        any = true;
+      }
+    }
+    if (!any) {break;}
+  }
+  return seeds;
+}
+
+bool GraspOrientationFinder::passes_pose_checks(
+  const gp_Trsf & transform,
+  double grip_distance,
+  OrientationStats & stats) const
+{
+  if (jaw_clearance_check_ && jaw_clearance_check_->intrudes(transform, grip_distance)) {
+    stats.rejected_by_jaw_clearance++;
+    return false;
+  }
+  if (collides_with_primary(transform, grip_distance)) {
+    stats.rejected_by_primary++;
+    return false;
+  }
+  if (exclusion_constraint_ && exclusion_constraint_->intersects_exclusion_zone(
+      transform, grip_distance, config_.collision_tolerance))
+  {
+    stats.rejected_by_exclusion++;
+    return false;
+  }
+  if (ground_constraint_ && ground_constraint_->intersects_ground(transform, grip_distance)) {
+    stats.rejected_by_ground++;
+    return false;
+  }
+  if (kissing_constraint_ && kissing_constraint_->intersects_secondary(grip_distance, transform)) {
+    stats.rejected_by_secondary++;
+    return false;
+  }
+  return true;
+}
+
 std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   const std::vector<sampling::ContactPair> & contact_pairs,
   [[maybe_unused]] const geometry::Topology & topology)
@@ -476,6 +559,9 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
   thread_local std::mt19937 rng(
     static_cast<uint32_t>(
       std::chrono::steady_clock::now().time_since_epoch().count()));
+
+  last_stats_ = OrientationStats{};
+  OrientationStats & stats = last_stats_;
 
   std::vector<GraspCandidate> valid_grasps;
   const size_t max_orientations = config_.max_orientations_per_pair > 0 ?
@@ -487,19 +573,6 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     return valid_grasps;
   }
 
-  size_t total_orientations_tested = 0;
-  size_t rejected_by_jaw_clearance = 0;
-  size_t rejected_by_primary = 0;
-  size_t rejected_by_exclusion = 0;
-  size_t rejected_by_ground = 0;
-  size_t rejected_by_secondary = 0;
-  size_t pairs_skipped_flat = 0;
-  size_t pairs_no_seeds = 0;
-  size_t pairs_merged_empty = 0;
-  size_t pairs_killed_cluster = 0;
-  size_t total_seeds_before_cap = 0;
-  size_t total_seeds_after_cap = 0;
-
   RCLCPP_INFO(logger_, "Processing %zu contact pairs (radial-map orientation finding)",
     contact_pairs.size());
 
@@ -510,7 +583,8 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
 
       if (normal_1.Magnitude() < 1e-6 || normal_2.Magnitude() < 1e-6) {
         RCLCPP_WARN(logger_, "Zero surface normal for pair [%d-%d] — skipping",
-        pair.surface_id_1, pair.surface_id_2);
+          pair.surface_id_1, pair.surface_id_2);
+        stats.pairs_failed++;
         continue;
       }
       normal_1.Normalize();
@@ -519,7 +593,8 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       gp_Vec grip_axis(pair.contact_1, pair.contact_2);
       if (grip_axis.Magnitude() < 1e-6) {
         RCLCPP_WARN(logger_, "Coincident contact points for surfaces [%d-%d] — skipping",
-        pair.surface_id_1, pair.surface_id_2);
+          pair.surface_id_1, pair.surface_id_2);
+        stats.pairs_failed++;
         continue;
       }
       grip_axis.Normalize();
@@ -527,7 +602,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       gp_Vec cal_ref = normal_1 - grip_axis * grip_axis.Dot(normal_1);
 
       if (cal_ref.Magnitude() < 1e-6) {
-      // normal_1 is parallel to grip_axis — fall back to an arbitrary perpendicular
+        // normal_1 is parallel to grip_axis — fall back to an arbitrary perpendicular
         gp_Vec unused_ly;
         build_tangent_frame(grip_axis, cal_ref, unused_ly);
       }
@@ -544,7 +619,7 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
       if (tangent_x_1.Crossed(tangent_y_1).Dot(grip_axis) < 0.0) {tangent_y_1.Reverse();}
       if (tangent_x_2.Crossed(tangent_y_2).Dot(grip_axis) < 0.0) {tangent_y_2.Reverse();}
 
-    // Angle of cal_ref in each tangent frame — aligns both radial maps to a common reference.
+      // Angle of cal_ref in each tangent frame — aligns both radial maps to a common reference.
       double offset_1 = std::atan2(cal_ref.Dot(tangent_y_1), cal_ref.Dot(tangent_x_1));
       double offset_2 = std::atan2(cal_ref.Dot(tangent_y_2), cal_ref.Dot(tangent_x_2));
 
@@ -559,17 +634,16 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
         pair.contact_2.Z() + normal_2.Z() * config_.ray_lift_offset);
 
       auto maps_1 = create_radial_maps(
-      pair.contact_1, gp_Dir(normal_1), tangent_x_1, tangent_y_1, lifted_1, offset_1);
+        pair.contact_1, gp_Dir(normal_1), tangent_x_1, tangent_y_1, lifted_1, offset_1);
 
       auto maps_2 = create_radial_maps(
-      pair.contact_2, gp_Dir(normal_2), tangent_x_2, tangent_y_2, lifted_2, offset_2);
+        pair.contact_2, gp_Dir(normal_2), tangent_x_2, tangent_y_2, lifted_2, offset_2);
 
-      if (maps_1.low.empty() && maps_2.low.empty()) {
-        pairs_skipped_flat++;
+      if (maps_1.low.empty() && maps_2.low.empty() && !config_.debug_full_sweep) {
+        stats.pairs_skipped_flat++;
         continue;
       }
 
-    // Reused for both quality scoring and seed generation.
       auto merged = merge_low_segments(maps_1, maps_2);
       std::sort(merged.begin(), merged.end(),
         [](const RadialSegment & a, const RadialSegment & b) {
@@ -592,78 +666,29 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
         }
       } else {
         if (merged.empty()) {
-          pairs_merged_empty++;
+          stats.pairs_merged_empty++;
           continue;
-        } else {
-          auto clusters = cluster_and_filter(merged);
-          if (clusters.empty()) {
-            pairs_killed_cluster++;
-            continue;
-          } else {
-            std::vector<std::vector<double>> cluster_seeds;
-            cluster_seeds.reserve(clusters.size());
-            for (const auto & cluster : clusters) {
-              std::vector<double> & out = cluster_seeds.emplace_back();
-              double span_start = cluster.front().start_rad;
-              double span_end = cluster.front().end_rad;
-              for (const auto & seg : cluster) {
-                span_start = std::min(span_start, seg.start_rad);
-                span_end = std::max(span_end, seg.end_rad);
-              }
-              const double cluster_arc_span = span_end - span_start;
-
-              if (config_.randomize_seeds) {
-                const size_t n_clusters = clusters.size();
-                const size_t n_samples = (config_.max_orientations_per_pair > 0) ?
-                  std::max(size_t{1}, config_.max_orientations_per_pair / n_clusters) :
-                  1;
-                std::uniform_real_distribution<double> dist(0.0, cluster_arc_span);
-                for (size_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
-                  out.push_back(span_start + dist(rng));
-                }
-              } else {
-                const double seed_step_rad = config_.seed_step_deg * M_PI / 180.0;
-                if (cluster_arc_span <= seed_step_rad) {
-                  out.push_back(span_start + cluster_arc_span * 0.5);
-                } else {
-                  const int num_steps = static_cast<int>(std::floor(cluster_arc_span /
-                      seed_step_rad));
-                  const double actual_step = cluster_arc_span / num_steps;
-                  for (int step_idx = 0; step_idx < num_steps; ++step_idx) {
-                    out.push_back(span_start + (step_idx + 0.5) * actual_step);
-                  }
-                }
-              }
-            }
-
-            // Interleave clusters so the per-pair cap below takes seeds from every
-            // cliff in turn, not all from whichever cliff comes first in angle order.
-            for (size_t rank = 0; ; ++rank) {
-              bool any = false;
-              for (const auto & out : cluster_seeds) {
-                if (rank < out.size()) {
-                  seeds.push_back(out[rank]);
-                  any = true;
-                }
-              }
-              if (!any) {break;}
-            }
-          }
         }
+        const auto clusters = cluster_and_filter(merged);
+        if (clusters.empty()) {
+          stats.pairs_killed_cluster++;
+          continue;
+        }
+        seeds = seeds_from_clusters(clusters, rng);
       }
 
       if (seeds.empty()) {
-        pairs_no_seeds++;
+        stats.pairs_no_seeds++;
         continue;
       }
 
-      total_seeds_before_cap += seeds.size();
+      stats.total_seeds_before_cap += seeds.size();
       if (config_.max_orientations_per_pair > 0 &&
         seeds.size() > config_.max_orientations_per_pair)
       {
         seeds.resize(config_.max_orientations_per_pair);
       }
-      total_seeds_after_cap += seeds.size();
+      stats.total_seeds_after_cap += seeds.size();
 
       gp_Vec perp_to_cal = grip_axis.Crossed(cal_ref);
       perp_to_cal.Normalize();
@@ -673,43 +698,10 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
 
         gp_Pnt base_pos;
         gp_Trsf transform = compute_gripper_transform(
-        pair.contact_1, pair.contact_2, approach, base_pos);
+          pair.contact_1, pair.contact_2, approach, base_pos);
 
-        total_orientations_tested++;
-
-        // Broad-phase: the jaw mouth, which the exact pose check cannot see into.
-        if (jaw_clearance_check_ &&
-          jaw_clearance_check_->intrudes(transform, pair.grip_distance))
-        {
-          rejected_by_jaw_clearance++;
-          continue;
-        }
-
-        if (collides_with_primary(transform, pair.grip_distance)) {
-          rejected_by_primary++;
-          continue;
-        }
-
-        if (exclusion_constraint_ && exclusion_constraint_->intersects_exclusion_zone(
-          transform, pair.grip_distance, config_.collision_tolerance))
-        {
-          rejected_by_exclusion++;
-          continue;
-        }
-
-        if (ground_constraint_ &&
-          ground_constraint_->intersects_ground(transform, pair.grip_distance))
-        {
-          rejected_by_ground++;
-          continue;
-        }
-
-        if (kissing_constraint_ &&
-          kissing_constraint_->intersects_secondary(pair.grip_distance, transform))
-        {
-          rejected_by_secondary++;
-          continue;
-        }
+        stats.total_orientations_tested++;
+        if (!passes_pose_checks(transform, pair.grip_distance, stats)) {continue;}
 
         GraspCandidate candidate;
         candidate.contact_1 = pair.contact_1;
@@ -729,17 +721,18 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     } catch (const Standard_Failure & e) {
       RCLCPP_WARN(logger_, "OCCT error on pair [%d-%d]: %s — skipping",
         pair.surface_id_1, pair.surface_id_2, e.GetMessageString());
-      continue;
+      stats.pairs_failed++;
     } catch (const std::exception & e) {
       RCLCPP_WARN(logger_, "Error on pair [%d-%d]: %s — skipping",
         pair.surface_id_1, pair.surface_id_2, e.what());
-      continue;
+      stats.pairs_failed++;
     }
   }
 
   const size_t total_pairs = contact_pairs.size();
   const size_t pairs_with_seeds = total_pairs -
-    pairs_skipped_flat - pairs_merged_empty - pairs_killed_cluster - pairs_no_seeds;
+    stats.pairs_skipped_flat - stats.pairs_merged_empty - stats.pairs_killed_cluster -
+    stats.pairs_no_seeds - stats.pairs_failed;
 
   // Pipeline stage breakdown as percentage of total pairs.
   auto pct = [&](size_t n) {
@@ -747,25 +740,27 @@ std::vector<GraspCandidate> GraspOrientationFinder::find_valid_grasps(
     };
 
   const double avg_seeds = pairs_with_seeds > 0 ?
-    static_cast<double>(total_seeds_before_cap) / static_cast<double>(pairs_with_seeds) : 0.0;
+    static_cast<double>(stats.total_seeds_before_cap) / static_cast<double>(pairs_with_seeds) : 0.0;
   const double avg_seeds_capped = pairs_with_seeds > 0 ?
-    static_cast<double>(total_seeds_after_cap) / static_cast<double>(pairs_with_seeds) : 0.0;
+    static_cast<double>(stats.total_seeds_after_cap) / static_cast<double>(pairs_with_seeds) : 0.0;
 
   RCLCPP_INFO(logger_,
     "Orientation finding complete: %zu valid grasps from %zu pairs "
-    "(%zu flat-skipped, %zu no-seeds, %zu tested, "
+    "(%zu flat-skipped, %zu no-seeds, %zu failed, %zu tested, "
     "rejected: %zu jaw-clearance / %zu primary / %zu exclusion / %zu ground / %zu secondary)",
     valid_grasps.size(), total_pairs,
-    pairs_skipped_flat, pairs_no_seeds, total_orientations_tested,
-    rejected_by_jaw_clearance, rejected_by_primary, rejected_by_exclusion, rejected_by_ground,
-    rejected_by_secondary);
+    stats.pairs_skipped_flat, stats.pairs_no_seeds, stats.pairs_failed,
+    stats.total_orientations_tested,
+    stats.rejected_by_jaw_clearance, stats.rejected_by_primary, stats.rejected_by_exclusion,
+    stats.rejected_by_ground, stats.rejected_by_secondary);
 
   RCLCPP_DEBUG(logger_,
     "[Radial pipeline] flat=%.1f%%  merged_empty=%.1f%%  "
-    "killed_cluster=%.1f%%  no_seeds=%.1f%%  with_seeds=%.1f%%  "
+    "killed_cluster=%.1f%%  no_seeds=%.1f%%  failed=%.1f%%  with_seeds=%.1f%%  "
     "avg_seeds=%.2f (capped=%.2f)",
-    pct(pairs_skipped_flat), pct(pairs_merged_empty),
-    pct(pairs_killed_cluster), pct(pairs_no_seeds), pct(pairs_with_seeds),
+    pct(stats.pairs_skipped_flat), pct(stats.pairs_merged_empty),
+    pct(stats.pairs_killed_cluster), pct(stats.pairs_no_seeds),
+    pct(stats.pairs_failed), pct(pairs_with_seeds),
     avg_seeds, avg_seeds_capped);
 
   if (valid_grasps.empty()) {

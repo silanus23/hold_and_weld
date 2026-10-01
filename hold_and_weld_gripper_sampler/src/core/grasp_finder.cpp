@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <Standard_Failure.hxx>
 
 #include "hold_and_weld_gripper_sampler/core/grasp_finder.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/shape_refiner.hpp"
@@ -70,34 +71,26 @@ GraspFinder::GraspFinder(
     exclusion_circles_.size(), exclusion_polygons_.size(), exclusion_lines_.size());
 }
 
-// TODO(@silanus23): Constraint parameters should ideally be handled via parameter subscribers.
+// TODO(silanus23): Constraint parameters should ideally be handled via parameter subscribers.
 std::string GraspFinder::initialize()
 {
   std::call_once(init_flag_, [this]() {
       try {
         RCLCPP_INFO(logger_, "Initializing GraspFinder Constraints");
 
-        std::optional<std::vector<constraints::exclusion_circle>> circles_opt;
-        std::optional<std::vector<constraints::exclusion_polygon>> polygons_opt;
-        std::optional<std::vector<constraints::exclusion_line>> lines_opt;
-
-        if (!exclusion_circles_.empty()) {circles_opt = exclusion_circles_;}
-        if (!exclusion_polygons_.empty()) {polygons_opt = exclusion_polygons_;}
-        if (!exclusion_lines_.empty()) {lines_opt = exclusion_lines_;}
-
         exclusion_constraint_ = std::make_shared<constraints::ExclusionZoneConstraint>(
-        mapper_, gripper_, circles_opt, polygons_opt, lines_opt,
+        mapper_, gripper_, exclusion_circles_, exclusion_polygons_, exclusion_lines_,
         config_.mesh_linear_deflection, config_.mesh_angular_deflection,
         config_.exclusion_sample_density);
-
 
         kissing_constraint_ = std::make_shared<constraints::KissingSurfaceConstraint>(
         mapper_, gripper_, secondary_shapes_,
         config_.kissing_contact_threshold, config_.collision_tolerance,
-        config_.kissing_contact_distance_threshold, config_.mesh_linear_deflection);
+        config_.kissing_contact_distance_threshold, config_.mesh_linear_deflection,
+        config_.mesh_angular_deflection, config_.kissing_sample_density);
 
         constraints::GroundConfig ground_config;
-        ground_config.bottom_z = config_.ground_bottom_z;
+        ground_config.surface_z = config_.ground_surface_z;
         ground_config.center_x = config_.ground_center_x;
         ground_config.center_y = config_.ground_center_y;
         ground_config.size_x = config_.ground_size_x;
@@ -105,10 +98,16 @@ std::string GraspFinder::initialize()
         ground_config.contact_band = config_.ground_safety_margin;
         ground_config.support_threshold = config_.kissing_contact_threshold;
         ground_config.collision_tolerance = config_.collision_tolerance;
+        ground_config.sample_density = config_.kissing_sample_density;
         ground_constraint_ = std::make_shared<constraints::GroundConstraint>(ground_config);
 
         exclusion_constraint_->analyze_constraints(primary_shape_, primary_topology_);
         kissing_constraint_->analyze_constraints(primary_topology_);
+        if (config_.ground_shapes.empty() && config_.enable_ground_plane_check) {
+          RCLCPP_INFO(logger_, "No ground_plane secondary: using the implicit ground "
+            "(%.1f x %.1f m at z=%.3f); set implicit_ground: false to disable",
+            config_.ground_size_x, config_.ground_size_y, config_.ground_surface_z);
+        }
         if (!config_.ground_shapes.empty() || config_.enable_ground_plane_check) {
           ground_constraint_->analyze_constraints(primary_topology_);
         }
@@ -135,13 +134,13 @@ std::string GraspFinder::initialize()
         (!config_.ground_shapes.empty() || config_.enable_ground_plane_check))
         {
           fcl_checker_->add_ground_plane(
-            Eigen::Vector3d(0.0, 0.0, 1.0), config_.ground_bottom_z,
+            Eigen::Vector3d(0.0, 0.0, 1.0), config_.ground_surface_z,
             config_.ground_size_x, config_.ground_size_y,
             config_.ground_center_x, config_.ground_center_y);
           RCLCPP_INFO(logger_,
             "Ground added to FCL: %s, surface z=%.4f",
             fcl_checker_->has_finite_ground() ? "finite footprint" : "infinite halfspace",
-            config_.ground_bottom_z);
+            config_.ground_surface_z);
         }
 
         if (!fcl_checker_->is_valid()) {
@@ -188,6 +187,8 @@ GraspFinderResult GraspFinder::find()
     return result;
   }
 
+  result.skipped_constraints = collect_skipped_constraints();
+
   try {
     auto banned_ids = kissing_constraint_->get_banned_surface_ids();
     if (ground_constraint_) {
@@ -201,7 +202,7 @@ GraspFinderResult GraspFinder::find()
     result.num_valid_surfaces = valid_ids.size();
     result.num_exclusion_areas = exclusion_areas.size();
 
-    RCLCPP_INFO(logger_, "Phase 1: %zu/%zu surfaces valid", result.num_valid_surfaces,
+    RCLCPP_INFO(logger_, "Surface filtering: %zu/%zu surfaces valid", result.num_valid_surfaces,
           primary_topology_.num_surfaces());
 
     if (valid_ids.empty()) {
@@ -210,12 +211,24 @@ GraspFinderResult GraspFinder::find()
       return result;
     }
 
-    sampling::ContactPointSampler sampler(config_.sampling);
+    // A contact span the fingers cannot reach is not a grasp, whatever sampling allows.
+    // The tolerance keeps a part exactly max_opening wide: its sampled spans land a few
+    // ulps either side of it.
+    constexpr double kOpeningTolerance = 1e-6;
+    sampling::SamplingConfig sampling_config = config_.sampling;
+    const double reachable = gripper_.max_opening + kOpeningTolerance;
+    if (gripper_.max_opening > 0.0 && sampling_config.max_gripper_opening > reachable) {
+      RCLCPP_INFO(logger_, "sampling.max_gripper_opening %.4f m exceeds the gripper's "
+        "max_opening %.4f m; sampling up to the gripper's",
+        sampling_config.max_gripper_opening, gripper_.max_opening);
+      sampling_config.max_gripper_opening = reachable;
+    }
+    sampling::ContactPointSampler sampler(sampling_config);
     auto contact_pairs = sampler.generate_contact_pairs(primary_topology_, valid_ids,
           exclusion_areas);
     result.num_contact_pairs = contact_pairs.size();
 
-    RCLCPP_INFO(logger_, "Phase 2: %zu contact pair(s) sampled", result.num_contact_pairs);
+    RCLCPP_INFO(logger_, "Contact sampling: %zu contact pair(s) sampled", result.num_contact_pairs);
 
     if (contact_pairs.empty()) {
       result.success = false;
@@ -240,7 +253,8 @@ GraspFinderResult GraspFinder::find()
 
     fcl_checker_->log_collision_stats();
 
-    RCLCPP_INFO(logger_, "Phase 3: %zu collision-free candidate(s)", result.num_candidates);
+    RCLCPP_INFO(logger_, "Orientation search: %zu collision-free candidate(s)",
+      result.num_candidates);
 
     if (candidates.empty()) {
       result.success = false;
@@ -253,11 +267,7 @@ GraspFinderResult GraspFinder::find()
       result.grasps.push_back(angle_finding::to_grasp(candidate));
     }
 
-    std::stable_sort(
-      result.grasps.begin(), result.grasps.end(),
-      [](const Grasp & a, const Grasp & b) {
-        return a.quality_score > b.quality_score;
-      });
+    sort_by_quality(result.grasps);
 
     result.success = true;
 
@@ -265,9 +275,15 @@ GraspFinderResult GraspFinder::find()
     cached_result_ = result;
 
     auto stats = kissing_constraint_->get_collision_stats();
-    RCLCPP_INFO(logger_, "GraspFinder Result: %zu grasps. FCL Stats: %zu checks, %zu rejections",
-      result.grasps.size(), stats.total_checks, stats.fcl_rejections);
+    RCLCPP_INFO(logger_, "GraspFinder Result: %zu grasps. Secondary-obstacle checks: %zu, "
+      "rejections: %zu", result.grasps.size(), stats.total_checks, stats.fcl_rejections);
 
+    return result;
+  } catch (const Standard_Failure & e) {
+    result.success = false;
+    result.error_message = std::string("Grasp Search Failed: OCCT error: ") +
+      e.GetMessageString();
+    RCLCPP_ERROR(logger_, "%s", result.error_message.c_str());
     return result;
   } catch (const std::exception & e) {
     result.success = false;
@@ -327,6 +343,21 @@ std::vector<core::SampleArea> GraspFinder::merge_sample_areas() const
   }
 
   return merged;
+}
+
+std::vector<std::string> GraspFinder::collect_skipped_constraints() const
+{
+  std::vector<std::string> skipped = exclusion_constraint_->get_skipped();
+
+  const auto & labels = exclusion_constraint_->get_collision_volume_labels();
+  for (size_t i : fcl_checker_->get_unchecked_exclusions()) {
+    skipped.push_back(labels.at(i) + ": not collision-checked (BVH build failed)");
+  }
+  for (size_t i : fcl_checker_->get_unchecked_secondaries()) {
+    skipped.push_back(
+      "secondary obstacle " + std::to_string(i) + ": not collision-checked (BVH build failed)");
+  }
+  return skipped;
 }
 
 }  // namespace core

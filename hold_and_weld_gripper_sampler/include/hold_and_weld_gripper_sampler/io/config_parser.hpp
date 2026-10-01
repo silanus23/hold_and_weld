@@ -71,9 +71,10 @@ struct SecondaryConfig
  */
 struct OutputConfig
 {
-  std::string json_path = "grasps.json";
+  std::string json_path;  // empty = hold_and_weld_application's grasps/grasps.json
   size_t max_grasps = 0;  // 0 = all
   double min_quality = 0.0;
+  bool fail_on_skipped_constraint = false;
 };
 
 /**

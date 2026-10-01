@@ -54,7 +54,11 @@ public:
   /** @brief Default constructor with default configuration */
   ShapeLoader();
 
-  /** @brief Constructor with custom configuration */
+  /**
+   * @brief Constructor with custom configuration
+   *
+   * @param config Loader configuration
+   */
   explicit ShapeLoader(const ShapeLoaderConfig & config);
 
   ~ShapeLoader() = default;
@@ -88,8 +92,8 @@ public:
   /**
    * @brief Load collision geometry from URDF file
    *
-   * Extracts all collision geometries and combines them.
-   * Does NOT parse kinematics — use GripperParser for that.
+   * Extracts all collision geometries, places each link by its joint <origin>s
+   * (joints at position zero) and combines them. Meshes are skipped with a warning.
    *
    * @param urdf_path Path to URDF file
    * @return Combined collision geometry shape
@@ -192,11 +196,23 @@ public:
    */
   TopoDS_Shape combine_shapes(const std::vector<TopoDS_Shape> & shapes) const;
 
-  /** @brief Get current configuration */
+  /**
+   * @brief Get current configuration
+   *
+   * @return The loader's configuration
+   */
   const ShapeLoaderConfig & get_config() const {return config_;}
+
+  /**
+   * @brief Get the URDF collision elements every load so far could not build
+   *
+   * @return One "<urdf path>: <link>: <reason>" entry per skipped element
+   */
+  const std::vector<std::string> & get_skipped() const {return skipped_;}
 
 private:
   ShapeLoaderConfig config_;
+  std::vector<std::string> skipped_;
 
   /**
    * @brief Create OCCT transform from Eigen types

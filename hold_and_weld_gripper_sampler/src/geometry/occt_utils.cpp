@@ -115,12 +115,23 @@ TopoDS_Shape apply_transform(
   }
 }
 
-gp_Vec extract_surface_normal(const TopoDS_Face & face)
+IMeshTools_Parameters collision_mesh_parameters(double linear_deflection)
+{
+  IMeshTools_Parameters params;
+  params.Deflection = linear_deflection;
+  params.Angle = 0.5;
+  // Coarse interior: the boundary deflection alone already subdivides flat faces enough.
+  params.DeflectionInterior = linear_deflection * 10.0;
+  return params;
+}
+
+std::optional<gp_Vec> face_centre_normal(const TopoDS_Face & face)
 {
   try {
+    // BRep_Tool::Surface applies the face location, so the normal is in the shape's frame.
     Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
     if (surf.IsNull()) {
-      throw std::runtime_error("Failed to extract surface from face");
+      return std::nullopt;
     }
 
     Standard_Real u_min, u_max, v_min, v_max;
@@ -128,26 +139,34 @@ gp_Vec extract_surface_normal(const TopoDS_Face & face)
 
     GeomLProp_SLProps props(
       surf, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1, 1e-6);
-
     if (!props.IsNormalDefined()) {
-      throw std::runtime_error("Surface normal not defined at face center");
+      props.SetParameters(u_min + (u_max - u_min) * 0.1, v_min + (v_max - v_min) * 0.1);
+    }
+    if (!props.IsNormalDefined()) {
+      return std::nullopt;
     }
 
     gp_Vec normal = props.Normal();
     if (face.Orientation() == TopAbs_REVERSED) {
       normal.Reverse();
     }
-
     if (normal.Magnitude() < 1e-9) {
-      throw std::runtime_error("Surface normal has near-zero magnitude");
+      return std::nullopt;
     }
     normal.Normalize();
-
     return normal;
-  } catch (const Standard_Failure & e) {
-    throw std::runtime_error(
-      std::string("Failed to extract surface normal: ") + e.GetMessageString());
+  } catch (const Standard_Failure &) {
+    return std::nullopt;
   }
+}
+
+gp_Vec extract_surface_normal(const TopoDS_Face & face)
+{
+  const std::optional<gp_Vec> normal = face_centre_normal(face);
+  if (!normal.has_value()) {
+    throw std::runtime_error("Surface normal not defined at face center");
+  }
+  return *normal;
 }
 
 gp_Pnt extract_surface_center(const TopoDS_Face & face)
@@ -251,11 +270,12 @@ double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2)
     return std::numeric_limits<double>::max();
   }
 
-  BRepExtrema_DistShapeShape dist(face_1, face_2);
-  dist.Perform();
-
-  if (dist.NbSolution() > 0) {
-    return dist.Value();
+  try {
+    BRepExtrema_DistShapeShape dist(face_1, face_2);
+    if (dist.IsDone() && dist.NbSolution() > 0) {
+      return dist.Value();
+    }
+  } catch (const Standard_Failure &) {
   }
 
   return std::numeric_limits<double>::max();

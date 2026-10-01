@@ -87,24 +87,6 @@ KissingSurfaceConstraint::KissingSurfaceConstraint(
     "contact_threshold=%.1f%%, collision_tolerance=%.6f m",
     secondary_shapes_.size(), contact_threshold_ * 100.0, collision_tolerance_);
 
-  try {
-    if (!gripper_.finger_1.IsNull()) {
-      BRepMesh_IncrementalMesh(gripper_.finger_1, mesh_linear_deflection_, Standard_False,
-        mesh_angular_deflection_);
-    }
-    if (!gripper_.finger_2.IsNull()) {
-      BRepMesh_IncrementalMesh(gripper_.finger_2, mesh_linear_deflection_, Standard_False,
-        mesh_angular_deflection_);
-    }
-    if (!gripper_.base.IsNull()) {
-      BRepMesh_IncrementalMesh(gripper_.base, mesh_linear_deflection_, Standard_False,
-        mesh_angular_deflection_);
-    }
-  } catch (const Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "Critical gripper meshing failure: %s", e.GetMessageString());
-    throw std::runtime_error("Gripper geometry is unmeshable.");
-  }
-
   for (size_t i = 0; i < secondary_shapes_.size(); ++i) {
     if (secondary_shapes_[i].IsNull()) {continue;}
     try {
@@ -237,7 +219,7 @@ double KissingSurfaceConstraint::measure_contact_ratio(
         try {
           BRepExtrema_DistShapeShape dist(
             BRepBuilderAPI_MakeVertex(sample.point), *secondary);
-          if (dist.Value() <= contact_distance_threshold_) {
+          if (dist.IsDone() && dist.Value() <= contact_distance_threshold_) {
             if (contact_samples != nullptr) {
               contact_samples->push_back(sample);
             }
@@ -267,7 +249,7 @@ bool KissingSurfaceConstraint::intersects_secondary(
   }
 
   if (!fcl_checker_ || !fcl_checker_->is_valid()) {
-    RCLCPP_ERROR(logger_, "FCL checker not available — rejecting grasp conservatively");
+    RCLCPP_ERROR_ONCE(logger_, "FCL checker not available — rejecting every grasp conservatively");
     return true;
   }
 

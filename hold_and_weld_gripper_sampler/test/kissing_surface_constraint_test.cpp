@@ -98,7 +98,7 @@ TEST_F(KissingSurfaceConstraintTest, NoContactWithDistantSecondary)
   EXPECT_TRUE(constraint.get_sample_areas().empty());
 }
 
-// TODO(@silanus23): intersects_secondary returns false even when the gripper is
+// TODO(silanus23): intersects_secondary returns false even when the gripper is
 // placed inside the secondary shape. Needs investigation into how BVH volumes
 // are built for the secondary and how the gripper geometry is represented.
 TEST_F(KissingSurfaceConstraintTest, DISABLED_CollisionWhenInsideSecondary)

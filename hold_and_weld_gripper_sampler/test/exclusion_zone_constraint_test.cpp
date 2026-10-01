@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -92,7 +93,7 @@ TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
   EXPECT_FALSE(collision);
 }
 
-// TODO(@silanus23): FCL collision check returns false even when the gripper is
+// TODO(silanus23): FCL collision check returns false even when the gripper is
 // placed at origin inside a circle exclusion zone. Likely a volume construction
 // or transform issue in the FCL wiring for circle exclusions.
 TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWhenInsideExclusionZone)
@@ -151,7 +152,7 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
   EXPECT_FALSE(collision);
 }
 
-// TODO(@silanus23): FCL collision check returns false even when the gripper is
+// TODO(silanus23): FCL collision check returns false even when the gripper is
 // placed inside a polygon exclusion prism. Likely a volume construction or
 // transform issue in the FCL wiring for polygon exclusions.
 TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWithPolygonExclusionZone)
@@ -200,6 +201,10 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
   Topology topology = mapper_->load_from_shape(test_box);
   constraint.analyze_constraints(test_box, topology);
   wire_fcl(constraint, gripper_, test_box);
+
+  // A zone that cannot be built must be reported, not just logged.
+  ASSERT_EQ(constraint.get_skipped().size(), 1u);
+  EXPECT_NE(constraint.get_skipped()[0].find("line exclusion zone 0"), std::string::npos);
 }
 
 // Sub-millimetre exclusion geometry must not crash during collision query.
@@ -347,6 +352,30 @@ TEST_F(ExclusionZoneConstraintTest, CircleInsideAFaceExcludesItsDisk)
              std::hypot(p.X() - 0.05, p.Y() - 0.05) < 0.018;
     });
   EXPECT_TRUE(leaked.empty()) << leaked.size() << " sample(s) survive inside the hole";
+}
+
+// A zone on a curved face: away from the centre the surface falls below the disk's
+// plane, by ~1.1 mm at 8 mm out on R = 30 mm. Within the clearance it must still be excluded.
+TEST_F(ExclusionZoneConstraintTest, CircleOnCurvedFaceExcludesItsWholeFootprint)
+{
+  exclusion_circle hole;
+  hole.center = Eigen::Vector3d(0.0, 0.03, 0.05);
+  hole.normal = Eigen::Vector3d(0.0, 1.0, 0.0);
+  hole.radius = 0.01;
+  hole.projection_depth = 0.02;
+  hole.clearance = 0.005;
+
+  ExclusionZoneConstraint constraint(mapper_, gripper_, std::vector<exclusion_circle>{hole});
+
+  const TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(0.03, 0.1).Shape();
+  const Topology topology = mapper_->load_from_shape(cylinder);
+  constraint.analyze_constraints(cylinder, topology);
+
+  const auto leaked = samples_left_in_zone(
+    topology, constraint.get_sample_areas(), [](const gp_Pnt & p) {
+      return p.Y() > 0.0 && std::hypot(p.X(), p.Z() - 0.05) < 0.008;
+    });
+  EXPECT_TRUE(leaked.empty()) << leaked.size() << " sample(s) survive inside the zone";
 }
 
 int main(int argc, char ** argv)

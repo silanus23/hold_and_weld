@@ -55,6 +55,8 @@ struct GraspFinderResult
   size_t num_banned_surfaces = 0;
   size_t num_exclusion_areas = 0;
   size_t num_candidates = 0;
+  /** Constraints or obstacles that were not (fully) enforced; the grasps may violate them. */
+  std::vector<std::string> skipped_constraints;
   bool success = false;
   std::string error_message;
 
@@ -91,6 +93,7 @@ struct ShapeRefinerConfig
   double enclave_angle_threshold = 45.0;
   double max_face_area_ratio = 0.3;
   double planarity_tolerance_deg = 1.0;
+  int inflection_samples = 25;
 };
 
 /**
@@ -105,23 +108,25 @@ struct GraspFinderConfig
 
   double kissing_contact_threshold = 0.8;
   double kissing_contact_distance_threshold = 0.005;
+  // Spacing of the face samples that measure secondary and ground contact ratios [m].
+  double kissing_sample_density = 0.005;
 
   // Spacing of the face samples that find each exclusion zone's footprint [m].
   double exclusion_sample_density = 0.005;
 
-  // TODO(@silanus23): still unused. GroundConstraint decides support by measured
+  // TODO(silanus23): still unused. GroundConstraint decides support by measured
   // area fraction rather than by face normal, which handles faces that graze the
   // ground at an angle; a normal test would reject those. Kept in case explicit
   // normal-based filtering is wanted later.
   double ground_normal_z_threshold = -0.9;
 
   // Live: consumed by GroundConstraint. A surface sample within ground_safety_margin
-  // of ground_bottom_z counts as resting on the ground.
+  // of ground_surface_z counts as resting on the ground.
   double ground_safety_margin = 0.005;
 
   // Live: the ground is a finite footprint, not an infinite plane. A weld setup is
   // a bounded thing, and a part hanging off the edge is over open floor.
-  double ground_bottom_z = 0.0;
+  double ground_surface_z = 0.0;
   double ground_center_x = 0.0;
   double ground_center_y = 0.0;
   double ground_size_x = 10.0;
@@ -133,6 +138,7 @@ struct GraspFinderConfig
   std::vector<TopoDS_Shape> ground_shapes;
 
   bool use_fcl = true;
+  // YAML implicit_ground: without a ground_plane secondary, assume the ground_* defaults.
   bool enable_ground_plane_check = true;
   bool use_fcl_for_ground_plane = true;
 
@@ -171,6 +177,8 @@ public:
    * @param exclusion_polygons Optional exclusion polygons
    * @param exclusion_lines Optional exclusion lines
    * @param config Configuration
+   * @param fcl_primary_shape Unrefined primary shape for FCL collision meshes; null uses
+   *   primary_shape
    */
   GraspFinder(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
@@ -243,7 +251,8 @@ private:
    * @brief Lazily initialize all sub-components on the first find() call
    *
    * Constructs and wires together the ExclusionZoneConstraint,
-   * KissingSurfaceConstraint, and FCLCollisionChecker in the correct order.
+   * KissingSurfaceConstraint, GroundConstraint, FCLCollisionChecker and
+   * JawClearanceCheck in the correct order.
    *
    * @return Empty string on success, or a human-readable error message on failure
    */
@@ -263,13 +272,22 @@ private:
   /**
    * @brief Merge exclusion SampleAreas from all active constraints
    *
-   * Collects SampleArea objects produced by the ExclusionZoneConstraint and
-   * the KissingSurfaceConstraint and concatenates them into a single vector
-   * that is forwarded to the contact-point sampler.
+   * Collects SampleArea objects produced by the ExclusionZoneConstraint,
+   * the KissingSurfaceConstraint and, if present, the GroundConstraint and
+   * concatenates them into a single vector that is forwarded to the
+   * contact-point sampler.
    *
    * @return Combined vector of SampleArea objects from all constraints
    */
   std::vector<core::SampleArea> merge_sample_areas() const;
+
+  /**
+   * @brief List what initialize() could not enforce: exclusion zones, and obstacles
+   * whose collision model failed to build
+   *
+   * @return One human-readable entry per skipped constraint
+   */
+  std::vector<std::string> collect_skipped_constraints() const;
 };
 
 }  // namespace core

@@ -1,16 +1,19 @@
-
+# Default config of grasp_finder_node (used when no --config is given), and the
+# reference example: one of every constraint type on the shipped test cube.
+# Every key is documented in PARAMS.md; relative paths resolve against this
+# package's share directory.
 /**:
   ros__parameters:
     frame_id: 'world'
 
+    # 0.25 m cube resting on the ground: spans z 0..0.25, top face at z = 0.25.
     primary:
-      step_path: 'meshes/workpiece.step'
-
+      urdf_path: 'config/cube_workpiece.urdf'
       transform:
         translation:
           x: 1.2
-          y: -0.5
-          z: 0.65
+          y: 0.3
+          z: 0.125
         rotation:
           x: 0.0
           y: 0.0
@@ -18,40 +21,27 @@
           w: 1.0
 
     gripper:
-      urdf_path: 'urdf/grippers/parallel_gripper.urdf.xacro'
+      urdf_path: 'config/test_gripper.urdf'
 
     secondaries:
       - id: 'ground_plane'
         type: 'ground_plane'
-        size_x: 2.0
-        size_y: 2.0
+        size_x: 3.0
+        size_y: 3.0
         z_position: 0.0
 
-      - id: 'fixture_1'
-        type: 'step'
-        step_path: 'meshes/fixture.step'
-        transform:
-          translation:
-            x: 1.0
-            y: -0.5
-            z: 0.0
-          rotation:
-            x: 0.0
-            y: 0.0
-            z: 0.0
-            w: 1.0
-
+      # Touches the cube's +x face, which the kissing constraint then bans.
       - id: 'support_block'
         type: 'box'
         dimensions:
           x: 0.1
-          y: 0.1
-          z: 0.3
+          y: 0.25
+          z: 0.25
         transform:
           translation:
-            x: 1.2
-            y: -0.3
-            z: 0.15
+            x: 1.375
+            y: 0.3
+            z: 0.125
           rotation:
             x: 0.0
             y: 0.0
@@ -59,56 +49,44 @@
             w: 1.0
 
     exclusion_zones:
-      circles:
-        - id: 'weld_point_1'
-          center:
-            x: 1.25
-            y: -0.45
-            z: 0.70
-          normal:
-            x: 0.0
-            y: 0.0
-            z: 1.0
-          radius: 0.015
-          projection_depth: 0.05
-          clearance: 0.01
+      sample_density: 0.005
 
+      circles:
         - id: 'screw_hole_1'
           center:
-            x: 1.15
-            y: -0.55
-            z: 0.70
+            x: 1.2
+            y: 0.3
+            z: 0.25
           normal:
             x: 0.0
             y: 0.0
             z: 1.0
-          radius: 0.008
+          radius: 0.02
           projection_depth: 0.03
           clearance: 0.005
 
       polygons:
         - id: 'label_area'
           corners:
-            - { x: 1.10, y: -0.40, z: 0.70 }
-            - { x: 1.20, y: -0.40, z: 0.70 }
-            - { x: 1.20, y: -0.35, z: 0.70 }
-            - { x: 1.10, y: -0.35, z: 0.70 }
+            - {x: 1.10, y: 0.20, z: 0.25}
+            - {x: 1.15, y: 0.20, z: 0.25}
+            - {x: 1.15, y: 0.25, z: 0.25}
+            - {x: 1.10, y: 0.25, z: 0.25}
           projection_depth: 0.02
           clearance: 0.005
 
       lines:
         - id: 'weld_seam_1'
           start:
-            x: 1.10
-            y: -0.50
-            z: 0.65
+            x: 1.075
+            y: 0.175
+            z: 0.25
           end:
-            x: 1.30
-            y: -0.50
-            z: 0.65
-          exclusion_radius: 0.012
-          projection_depth: 0.04
-          clearance: 0.008
+            x: 1.075
+            y: 0.425
+            z: 0.25
+          exclusion_radius: 0.01
+          clearance: 0.005
 
     mesh_deflection:
       linear: 0.001
@@ -117,17 +95,18 @@
     sampling:
       min_angle_deg: 160.0
       max_angle_deg: 180.0
-      min_gripper_opening: 0.02
-      max_gripper_opening: 0.15
 
-      sample_density: 0.01
+      min_gripper_opening: 0.06
+      max_gripper_opening: 0.36
+
+      sample_density: 0.015
       normal_sample_density: 1.0
 
-      max_lateral_deviation: 0.02
+      max_lateral_deviation: 0.03
       alignment_threshold: 0.95
 
     orientation:
-      finger_length: 0.10
+      finger_length: 0.20
       finger_radius: 0.02
 
       max_edge_candidates: 5
@@ -153,11 +132,13 @@
 
     fcl:
       enabled: true
-      triangulation_deflection: 0.0001
+      triangulation_deflection: 0.001
 
     output:
-      json_path: 'results/grasps.json'
+      # Unset: <hold_and_weld_application share>/grasps/grasps.json, the file the
+      # gripper server reads. --output overrides either.
+      # json_path: 'results/grasps.json'
 
       max_grasps: 50
-
       min_quality: 0.0
+      fail_on_skipped_constraint: false

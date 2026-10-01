@@ -15,7 +15,6 @@
 #include "hold_and_weld_gripper_sampler/geometry/geometry_mapper.hpp"
 
 #include <Eigen/Geometry>
-#include <tinyxml2.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,16 +27,11 @@
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepGProp.hxx>
-#include <BRepPrimAPI_MakeBox.hxx>
-#include <BRepPrimAPI_MakeCylinder.hxx>
-#include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
-#include <GeomLProp_SLProps.hxx>
 #include <Geom_Surface.hxx>
 #include <GProp_GProps.hxx>
-#include <gp_Ax2.hxx>
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -55,6 +49,7 @@
 
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 #include "hold_and_weld_gripper_sampler/geometry/topology.hpp"
+#include "hold_and_weld_gripper_sampler/io/urdf_collision_loader.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -63,22 +58,6 @@ namespace geometry
 
 static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
-namespace
-{
-
-// Reads a required URDF attribute; a missing one would otherwise reach sscanf as nullptr.
-const char * required_attribute(const tinyxml2::XMLElement * element, const char * name)
-{
-  const char * value = element->Attribute(name);
-  if (!value) {
-    throw std::runtime_error(
-      std::string("<") + element->Name() + "> is missing the '" + name + "' attribute");
-  }
-  return value;
-}
-
-}  // namespace
-
 GeometryMapper::GeometryMapper() {}
 GeometryMapper::~GeometryMapper() {}
 
@@ -86,141 +65,22 @@ TopoDS_Shape GeometryMapper::create_shape_from_urdf_string(const std::string & u
 {
   RCLCPP_DEBUG(logger_, "Parsing URDF string for geometry extraction");
 
-  tinyxml2::XMLDocument doc;
-  doc.Parse(urdf_string.c_str());
-
-  if (doc.Error()) {
-    throw std::runtime_error("Failed to parse URDF string: " + std::string(doc.ErrorStr()));
+  const io::UrdfCollisionModel model = io::load_urdf_collision(urdf_string);
+  for (const auto & skipped : model.skipped) {
+    RCLCPP_WARN(logger_, "Workpiece collision element skipped: %s", skipped.c_str());
   }
-
-  tinyxml2::XMLElement * robot = doc.FirstChildElement("robot");
-  if (!robot) {
-    throw std::runtime_error("No <robot> element found in URDF");
-  }
-
-  tinyxml2::XMLElement * link = robot->FirstChildElement("link");
-  if (!link) {
-    throw std::runtime_error("No <link> elements found in URDF");
+  if (model.links.empty()) {
+    throw std::runtime_error("URDF contains no usable collision geometry");
   }
 
   TopoDS_Compound compound;
   BRep_Builder builder;
   builder.MakeCompound(compound);
-  int link_count = 0;
-
-  for (; link != nullptr; link = link->NextSiblingElement("link")) {
-    tinyxml2::XMLElement * collision = link->FirstChildElement("collision");
-    if (!collision) {
-      continue;
-    }
-
-    const char * link_name = link->Attribute("name");
-    std::string link_name_str = link_name ? link_name : "unknown";
-
-    tinyxml2::XMLElement * geometry = collision->FirstChildElement("geometry");
-    if (!geometry) {
-      RCLCPP_ERROR(logger_, "Link '%s' has <collision> but no <geometry> element - skipping",
-        link_name_str.c_str());
-      continue;
-    }
-
-    RCLCPP_DEBUG(logger_, "Processing link: %s", link_name_str.c_str());
-
-    gp_Trsf transform;
-    tinyxml2::XMLElement * origin = collision->FirstChildElement("origin");
-    if (origin) {
-      const char * xyz_str = origin->Attribute("xyz");
-      if (xyz_str) {
-        double x, y, z;
-        if (std::sscanf(xyz_str, "%lf %lf %lf", &x, &y, &z) == 3) {
-          transform.SetTranslation(gp_Vec(x, y, z));
-        } else {
-          RCLCPP_WARN(logger_, "Failed to parse xyz attribute for link '%s'",
-                link_name_str.c_str());
-        }
-      }
-
-      const char * rpy_str = origin->Attribute("rpy");
-      if (rpy_str) {
-        double roll, pitch, yaw;
-        if (std::sscanf(rpy_str, "%lf %lf %lf", &roll, &pitch, &yaw) == 3) {
-          gp_Trsf rot_transform;
-          rot_transform.SetRotation(rpy_to_quaternion(roll, pitch, yaw));
-          transform = transform * rot_transform;
-        } else {
-          RCLCPP_WARN(logger_, "Failed to parse rpy attribute for link '%s'",
-                link_name_str.c_str());
-        }
-      }
-    }
-
-    TopoDS_Shape shape;
-
-    try {
-      if (auto * box = geometry->FirstChildElement("box")) {
-        double x, y, z;
-        if (std::sscanf(required_attribute(box, "size"), "%lf %lf %lf", &x, &y, &z) != 3) {
-          throw std::runtime_error("Invalid box size attributes");
-        }
-        if (x <= 1e-6 || y <= 1e-6 || z <= 1e-6) {
-          throw std::runtime_error("Box dimensions too small");
-        }
-        // URDF centers box at origin; MakeBox takes a corner, so shift by -half.
-        BRepPrimAPI_MakeBox maker(gp_Pnt(-x / 2.0, -y / 2.0, -z / 2.0), x, y, z);
-        shape = maker.Shape();
-
-      } else if (auto * cylinder = geometry->FirstChildElement("cylinder")) {
-        double r, l;
-        if (std::sscanf(required_attribute(cylinder, "radius"), "%lf", &r) != 1 ||
-          std::sscanf(required_attribute(cylinder, "length"), "%lf", &l) != 1)
-        {
-          throw std::runtime_error("Invalid cylinder attributes");
-        }
-        if (r <= 1e-6 || l <= 1e-6) {throw std::runtime_error("Cylinder dimensions too small");}
-        // OCCT builds cylinder from z=0 up; URDF centers it, so drop axis origin by half-length.
-        BRepPrimAPI_MakeCylinder maker(gp_Ax2(gp_Pnt(0, 0, -l / 2.0), gp_Dir(0, 0, 1)), r, l);
-        shape = maker.Shape();
-
-      } else if (auto * sphere = geometry->FirstChildElement("sphere")) {
-        double r;
-        if (std::sscanf(required_attribute(sphere, "radius"), "%lf", &r) != 1) {
-          throw std::runtime_error("Invalid sphere radius");
-        }
-        if (r <= 1e-6) {throw std::runtime_error("Sphere radius too small");}
-        BRepPrimAPI_MakeSphere maker(r);
-        shape = maker.Shape();
-      } else {
-        // <mesh> and anything else: not supported here (ShapeLoader handles meshes).
-        const tinyxml2::XMLElement * child = geometry->FirstChildElement();
-        throw std::runtime_error(
-          std::string("Unsupported geometry type '") + (child ? child->Name() : "none") + "'");
-      }
-
-      if (origin) {
-        BRepBuilderAPI_Transform transformer(shape, transform, Standard_True);
-        if (!transformer.IsDone()) {
-          throw std::runtime_error("Geometry transformation failed for link: " + link_name_str);
-        }
-        shape = transformer.Shape();
-      }
-    } catch (const Standard_Failure & e) {
-      RCLCPP_ERROR(logger_, "OCCT Geometric Error for link '%s': %s", link_name_str.c_str(),
-            e.GetMessageString());
-      continue;
-    } catch (const std::exception & e) {
-      RCLCPP_ERROR(logger_, "Error creating geometry for link '%s': %s", link_name_str.c_str(),
-            e.what());
-      continue;
-    }
-    builder.Add(compound, shape);
-    link_count++;
+  for (const auto & link : model.links) {
+    builder.Add(compound, link.shape);
   }
 
-  if (link_count == 0) {
-    throw std::runtime_error("URDF contains no usable collision geometry");
-  }
-
-  RCLCPP_DEBUG(logger_, "Created compound shape from %d link(s)", link_count);
+  RCLCPP_DEBUG(logger_, "Created compound shape from %zu link(s)", model.links.size());
   return compound;
 }
 
@@ -388,32 +248,8 @@ Topology GeometryMapper::create_topology_from_shape(
       BRepGProp::SurfaceProperties(face, props);
       surface.center = props.CentreOfMass();
 
-      Handle(Geom_Surface) surf_geom = BRep_Tool::Surface(face);
-      if (surf_geom.IsNull()) {
-        surface.normal = make_fallback_normal(i - 1);
-      } else {
-        Standard_Real u_min, u_max, v_min, v_max;
-        BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
-
-        // Normal at the middle of the UV bounding box. On a trimmed or holed face that
-        // point can lie outside the face, so this is representative only for faces whose
-        // normal barely varies (the planar faces the filters care about).
-        GeomLProp_SLProps props_normal(surf_geom, (u_min + u_max) / 2.0, (v_min + v_max) / 2.0, 1,
-          1e-6);
-        if (!props_normal.IsNormalDefined()) {
-          // Midpoint can land on a pole (sphere apex, cone tip) — retry at 10% offset.
-          props_normal.SetParameters(
-            u_min + (u_max - u_min) * 0.1, v_min + (v_max - v_min) * 0.1);
-        }
-
-        if (props_normal.IsNormalDefined()) {
-          gp_Vec normal = props_normal.Normal();
-          if (face.Orientation() == TopAbs_REVERSED) {normal.Reverse();}
-          surface.normal = normal;
-        } else {
-          surface.normal = make_fallback_normal(i - 1);
-        }
-      }
+      const std::optional<gp_Vec> normal = face_centre_normal(face);
+      surface.normal = normal.has_value() ? *normal : make_fallback_normal(i - 1);
     }
 
     Topology topology;
@@ -432,11 +268,9 @@ Topology GeometryMapper::create_topology_from_shape(
 
     return topology;
   } catch (const Standard_Failure & e) {
-    RCLCPP_ERROR(logger_, "OCCT exception during topology extraction: %s", e.GetMessageString());
     throw std::runtime_error(
       std::string("Topology extraction failed: ") + e.GetMessageString());
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(logger_, "Exception during topology extraction: %s", e.what());
     throw std::runtime_error(std::string("Topology extraction failed: ") + e.what());
   }
 }

@@ -43,7 +43,7 @@ struct exclusion_line
 {
   Eigen::Vector3d start;
   Eigen::Vector3d end;
-  double exclusion_radius;
+  double exclusion_radius = 0.0;
   double clearance = 0.01;
   std::string id;
 };
@@ -55,8 +55,8 @@ struct exclusion_circle
 {
   Eigen::Vector3d center;
   Eigen::Vector3d normal;
-  double radius;
-  double projection_depth;
+  double radius = 0.0;
+  double projection_depth = 0.0;
   double clearance = 0.01;
   std::string id;
 };
@@ -67,10 +67,21 @@ struct exclusion_circle
 struct exclusion_polygon
 {
   std::vector<Eigen::Vector3d> exclusion_corners;
-  double projection_depth;
+  double projection_depth = 0.0;
   double clearance = 0.01;
   std::string id;
 };
+
+/**
+ * @brief Zone id formatted for messages
+ *
+ * @param id Zone id from the config; may be empty
+ * @return " 'id'", or an empty string when id is empty
+ */
+inline std::string id_suffix(const std::string & id)
+{
+  return id.empty() ? "" : " '" + id + "'";
+}
 
 /**
  * @brief Constraint for user-defined exclusion zones (welds, screws, forbidden areas)
@@ -157,6 +168,20 @@ public:
   const std::vector<TopoDS_Shape> & get_collision_volumes() const;
 
   /**
+   * @brief Get a readable name per collision volume, e.g. "circle exclusion zone 0 'weld'"
+   *
+   * @return One label per entry of get_collision_volumes(), same order
+   */
+  const std::vector<std::string> & get_collision_volume_labels() const;
+
+  /**
+   * @brief Get what analyze_constraints() could not enforce, whole zones or single faces
+   *
+   * @return One "<zone>: <what was dropped> (<why>)" entry per failure
+   */
+  const std::vector<std::string> & get_skipped() const;
+
+  /**
    * @brief Get the human-readable name of this constraint
    *
    * @return Constraint name string (e.g. "ExclusionZoneConstraint")
@@ -174,6 +199,8 @@ private:
 
   std::vector<TopoDS_Shape> projection_volumes_;
   std::vector<TopoDS_Shape> collision_volumes_;
+  std::vector<std::string> collision_volume_labels_;
+  std::vector<std::string> skipped_;
 
   std::vector<core::SampleArea> sample_areas_;
 
@@ -227,12 +254,30 @@ private:
    *
    * @param constraint_volume Projection volume of one exclusion zone
    * @param topology Primary shape topology
+   * @param zone_label Name of the zone, used in skipped entries
+   * @param skipped Receives one entry per face the zone could not be excluded from
    * @return Vector of SampleArea objects with exclusion wires per surface
    */
   std::vector<core::SampleArea> process_constraint_volume(
     const TopoDS_Shape & constraint_volume,
-    const geometry::Topology & topology
+    const geometry::Topology & topology,
+    const std::string & zone_label,
+    std::vector<std::string> & skipped
   ) const;
+
+  /**
+   * @brief Register one zone's volumes and exclusion wires, or record it as skipped
+   *
+   * @param projection_volume Volume whose footprint is excluded from sampling; null on failure
+   * @param collision_volume Volume the gripper is collision-checked against; null on failure
+   * @param label Name of the zone, used in logs and skipped entries
+   * @param topology Primary shape topology
+   */
+  void add_zone(
+    const TopoDS_Shape & projection_volume,
+    const TopoDS_Shape & collision_volume,
+    const std::string & label,
+    const geometry::Topology & topology);
 };
 
 }  // namespace constraints

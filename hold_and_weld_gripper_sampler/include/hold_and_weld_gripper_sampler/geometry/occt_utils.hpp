@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <BRepBuilderAPI_Transform.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Quaternion.hxx>
@@ -40,47 +41,119 @@ namespace hold_and_weld_gripper_sampler
 namespace geometry
 {
 
-/** @brief Convert OCCT point to Eigen vector */
+/**
+ * @brief Convert OCCT point to Eigen vector
+ *
+ * @param pnt Point to convert
+ * @return Same coordinates as an Eigen vector
+ */
 Eigen::Vector3d to_eigen(const gp_Pnt & pnt);
 
-/** @brief Convert Eigen vector to OCCT point */
+/**
+ * @brief Convert Eigen vector to OCCT point
+ *
+ * @param vec Coordinates to convert
+ * @return Same coordinates as a gp_Pnt
+ */
 gp_Pnt to_occt_point(const Eigen::Vector3d & vec);
 
-/** @brief Convert OCCT vector to Eigen vector */
+/**
+ * @brief Convert OCCT vector to Eigen vector
+ *
+ * @param vec Vector to convert
+ * @return Same components as an Eigen vector
+ */
 Eigen::Vector3d to_eigen(const gp_Vec & vec);
 
-/** @brief Convert Eigen vector to OCCT vector */
+/**
+ * @brief Convert Eigen vector to OCCT vector
+ *
+ * @param vec Vector to convert
+ * @return Same components as a gp_Vec
+ */
 gp_Vec to_occt_vec(const Eigen::Vector3d & vec);
 
-/** @brief Convert OCCT direction to Eigen unit vector */
+/**
+ * @brief Convert OCCT direction to Eigen unit vector
+ *
+ * @param dir Direction to convert
+ * @return Unit vector along dir
+ */
 Eigen::Vector3d to_eigen(const gp_Dir & dir);
 
 /**
  * @brief Convert ZYX Euler angles (roll, pitch, yaw) to a gp_Quaternion.
  *
  * Uses the aerospace (ZYX) convention: yaw applied first, then pitch, then roll.
- * Shared by geometry_mapper and gripper_parser to avoid duplication.
+ *
+ * @param roll Rotation about X [rad]
+ * @param pitch Rotation about Y [rad]
+ * @param yaw Rotation about Z [rad]
+ * @return The combined rotation
  */
 gp_Quaternion rpy_to_quaternion(double roll, double pitch, double yaw);
 
-/** @brief Create OCCT transform from translation and quaternion */
+/**
+ * @brief Create OCCT transform from translation and quaternion
+ *
+ * @param translation Translation [m]
+ * @param quaternion Rotation
+ * @return Rotation followed by translation
+ */
 gp_Trsf create_transform(
   const Eigen::Vector3d & translation,
   const Eigen::Quaterniond & quaternion);
 
-/** @brief Apply transform to OCCT shape, returns new transformed shape */
+/**
+ * @brief Apply transform to OCCT shape
+ *
+ * @param shape Shape to transform
+ * @param transform Transform to apply
+ * @return New transformed shape
+ */
 TopoDS_Shape apply_transform(
   const TopoDS_Shape & shape,
   const gp_Trsf & transform);
 
 /**
+ * @brief Meshing parameters shared by every collision mesh (FCL and Embree)
+ *
+ * Both checkers triangulate the same shapes in place, so they must agree on the
+ * parameters or whichever runs second sees the other's mesh.
+ *
+ * @param linear_deflection Chord-height tolerance on face boundaries [m]
+ * @return Parameters with the interior deflection at 10x linear_deflection
+ */
+IMeshTools_Parameters collision_mesh_parameters(double linear_deflection);
+
+/**
+ * @brief Outward unit normal at the middle of a face's UV bounding box.
+ *
+ * Retries 10% into the UV box when the middle lands on a pole (sphere apex,
+ * cone tip). On a trimmed or holed face the middle can lie outside the face,
+ * so this represents faces whose normal barely varies.
+ *
+ * @param face Face to evaluate
+ * @return The normal, or std::nullopt if it is undefined at both points
+ */
+std::optional<gp_Vec> face_centre_normal(const TopoDS_Face & face);
+
+/**
  * @brief Extract surface normal at face center.
  *
  * Handles TopAbs_REVERSED faces correctly.
+ *
+ * @param face Face to evaluate
+ * @return Outward unit normal at the face's UV centre
  */
 gp_Vec extract_surface_normal(const TopoDS_Face & face);
 
-/** @brief Extract surface centroid */
+/**
+ * @brief Extract surface centroid
+ *
+ * @param face Face to evaluate
+ * @return Area centroid of the face
+ */
 gp_Pnt extract_surface_center(const TopoDS_Face & face);
 
 /**

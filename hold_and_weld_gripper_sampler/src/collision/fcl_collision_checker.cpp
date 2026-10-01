@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
+
 #include <limits>
 
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -23,15 +25,30 @@
 #include <TopoDS_Face.hxx>
 #include <rclcpp/rclcpp.hpp>
 
-#include "hold_and_weld_gripper_sampler/collision/fcl_collision_checker.hpp"
 #include "hold_and_weld_gripper_sampler/collision/embree_mesh_query.hpp"
+#include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
 namespace hold_and_weld_gripper_sampler
 {
 namespace geometry
 {
 
-static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
+namespace
+{
+
+const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
+
+template<typename T>
+std::vector<size_t> null_indices(const std::vector<std::shared_ptr<T>> & bvhs)
+{
+  std::vector<size_t> indices;
+  for (size_t i = 0; i < bvhs.size(); ++i) {
+    if (!bvhs[i]) {indices.push_back(i);}
+  }
+  return indices;
+}
+
+}  // namespace
 
 FCLCollisionChecker::FCLCollisionChecker(
   const ParsedGripper & gripper,
@@ -111,7 +128,7 @@ FCLCollisionChecker::FCLCollisionChecker(
 
   if (!embree_primary_ || !embree_primary_->is_valid()) {
     RCLCPP_WARN(logger_,
-      "Embree primary query not available — Phase-0 containment checks will be skipped");
+      "Embree primary query not available — containment checks will be skipped");
   }
 }
 
@@ -151,7 +168,7 @@ void FCLCollisionChecker::add_exclusion_volumes(
     } catch (const std::exception & e) {
       RCLCPP_WARN(logger_,
         "add_exclusion_volumes: Embree build failed for exclusion [%zu]: %s — "
-        "Phase 0 containment disabled for this volume", i, e.what());
+        "Containment check disabled for this volume", i, e.what());
       embree_exclusions_.push_back(nullptr);
     }
   }
@@ -183,7 +200,7 @@ void FCLCollisionChecker::add_secondary_shapes(
     } catch (const std::exception & e) {
       RCLCPP_WARN(logger_,
         "add_secondary_shapes: Embree build failed for secondary [%zu]: %s — "
-        "Phase 0 containment disabled for this shape", i, e.what());
+        "Containment check disabled for this shape", i, e.what());
       embree_secondaries_.push_back(nullptr);
     }
   }
@@ -362,21 +379,19 @@ bool FCLCollisionChecker::cylinder_collides_with_obstacles(
   return false;
 }
 
-double FCLCollisionChecker::distance_to_primary(
-  const gp_Trsf & gripper_transform,
-  double grip_distance) const
-{
-  if (!valid_ || !primary_bvh_) {
-    RCLCPP_WARN(logger_,
-          "distance_to_primary: checker not valid or primary BVH missing — returning max distance");
-    return std::numeric_limits<double>::max();
-  }
-  return compute_gripper_distance(gripper_transform, grip_distance, primary_bvh_);
-}
-
 bool FCLCollisionChecker::is_valid() const
 {
   return valid_;
+}
+
+std::vector<size_t> FCLCollisionChecker::get_unchecked_exclusions() const
+{
+  return null_indices(exclusion_bvhs_);
+}
+
+std::vector<size_t> FCLCollisionChecker::get_unchecked_secondaries() const
+{
+  return null_indices(secondary_bvhs_);
 }
 
 bool FCLCollisionChecker::has_ground_plane() const
@@ -386,8 +401,6 @@ bool FCLCollisionChecker::has_ground_plane() const
 
 void FCLCollisionChecker::log_collision_stats() const
 {
-  // Use snprintf so we control the full format string — RCLCPP_INFO prepends
-  // its own args, which breaks PRI* macro string-concatenation.
   char buf[256];
 
   std::snprintf(buf, sizeof(buf), "[FCL collision stats] total_checks=%zu",
@@ -449,10 +462,7 @@ std::shared_ptr<FCLCollisionChecker::BVHModel> FCLCollisionChecker::shape_to_bvh
     return nullptr;
   }
 
-  IMeshTools_Parameters mesh_params;
-  mesh_params.Deflection = linear_deflection_;
-  mesh_params.Angle = 0.5;
-  mesh_params.DeflectionInterior = 0.01;  // 10mm interior deflection — forces flat face subdivision
+  IMeshTools_Parameters mesh_params = collision_mesh_parameters(linear_deflection_);
   mesh_params.InParallel = true;
 
   try {
@@ -743,11 +753,8 @@ bool FCLCollisionChecker::check_gripper_collision(
     {
       if (!part_bvh) {return false;}
 
-      // Phase 0: FCL misses containment when one mesh is fully inside the
-      // other, so probe with the Embree parity test in both directions. Every
-      // part vertex against the target; one target vertex against the part,
-      // which suffices because a target only partly inside crosses the part's
-      // surface and Phase 1 catches it.
+      // FCL misses a mesh that sits fully inside another, so probe containment
+      // with Embree in both directions.
       if (part_embree && part_embree->is_valid() && target_has_vertex) {
         const Eigen::Vector3d target_v(
           target_bvh->vertices[0][0],
@@ -776,7 +783,7 @@ bool FCLCollisionChecker::check_gripper_collision(
 
       CollisionObject part_obj(part_bvh, part_tf);
 
-    // Phase 1: boolean collision (catches surface intersection)
+    // Boolean collision (catches surface intersection)
       fcl::CollisionResult<FCLScalar> col_res;
       fcl::collide(&part_obj, &target_obj, col_req, col_res);
       if (col_res.isCollision()) {
@@ -784,7 +791,7 @@ bool FCLCollisionChecker::check_gripper_collision(
         return true;
       }
 
-    // Phase 2: near-miss distance check
+    // Near-miss distance check
       if (tolerance > 0.0) {
         fcl::DistanceResult<FCLScalar> dist_res;
         fcl::distance(&part_obj, &target_obj, dist_req, dist_res);
@@ -802,48 +809,6 @@ bool FCLCollisionChecker::check_gripper_collision(
   if (check_part(finger_2_bvh_, embree_finger_2_, f2_tf, ctr_f2)) {return true;}
 
   return false;
-}
-
-double FCLCollisionChecker::compute_gripper_distance(
-  const gp_Trsf & gripper_transform,
-  double grip_distance,
-  const std::shared_ptr<BVHModel> & target_bvh) const
-{
-  if (!target_bvh) {return std::numeric_limits<double>::max();}
-
-  Transform3 base_tf = to_fcl_transform(gripper_transform);
-  Transform3 f1_local, f2_local;
-  compute_finger_transforms(grip_distance, f1_local, f2_local);
-
-  Transform3 f1_tf = base_tf * f1_local;
-  Transform3 f2_tf = base_tf * f2_local;
-
-  fcl::DistanceRequest<FCLScalar> request;
-  fcl::DistanceResult<FCLScalar> result;
-  double min_dist = std::numeric_limits<double>::max();
-
-  CollisionObject target_obj(target_bvh, Transform3::Identity());
-
-  if (base_bvh_) {
-    result.clear();
-    CollisionObject base_obj(base_bvh_, base_tf);
-    fcl::distance(&base_obj, &target_obj, request, result);
-    min_dist = std::min(min_dist, result.min_distance);
-  }
-  if (finger_1_bvh_) {
-    result.clear();
-    CollisionObject f1_obj(finger_1_bvh_, f1_tf);
-    fcl::distance(&f1_obj, &target_obj, request, result);
-    min_dist = std::min(min_dist, result.min_distance);
-  }
-  if (finger_2_bvh_) {
-    result.clear();
-    CollisionObject f2_obj(finger_2_bvh_, f2_tf);
-    fcl::distance(&f2_obj, &target_obj, request, result);
-    min_dist = std::min(min_dist, result.min_distance);
-  }
-
-  return min_dist;
 }
 
 }  // namespace geometry

@@ -154,8 +154,8 @@ struct Surface
  * @brief Container for object topology extracted from a loaded shape
  *        (STEP, URDF or a raw OCCT shape).
  *
- * Provides read-only access to corners, edges, and surfaces with
- * their connectivity relationships. All elements are 0-indexed.
+ * Holds corners, edges, and surfaces with their connectivity
+ * relationships. All elements are 0-indexed.
  *
  * Built by GeometryMapper when a shape is loaded.
  */
@@ -225,16 +225,22 @@ public:
 
   /**
    * @brief Get total number of corners
+   *
+   * @return Corner count
    */
   size_t num_corners() const {return corners_.size();}
 
   /**
    * @brief Get total number of edges
+   *
+   * @return Edge count
    */
   size_t num_edges() const {return edges_.size();}
 
   /**
    * @brief Get total number of surfaces
+   *
+   * @return Surface count
    */
   size_t num_surfaces() const {return surfaces_.size();}
 

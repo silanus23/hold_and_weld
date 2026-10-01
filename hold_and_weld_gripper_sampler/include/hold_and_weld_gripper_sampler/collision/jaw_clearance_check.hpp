@@ -83,11 +83,15 @@ public:
 
   /**
    * @brief Cylinder length along the jaw axis
+   *
+   * @return Length [m]
    */
   double get_length() const {return finger_length_;}
 
   /**
    * @brief Name for logging
+   *
+   * @return The check's name
    */
   std::string get_name() const;
 
