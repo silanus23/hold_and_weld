@@ -31,6 +31,8 @@ kissing surfaces, then extracts exact seam curves and surface normals.
 # - Hardcoded fallback normals [0,0,1] should fail instead
 # - G1 continuity check samples only one point on edge
 
+# TODO: (@silanus23) Add secondary check if PTP seams could be changed to
+# arc or line
 from dataclasses import dataclass
 import logging
 
