@@ -27,6 +27,9 @@ goal_orientation_tolerance: 0.01   # OMPL approach/retract pose goal [rad]
 # executing) the torch is off the standoff, and the job moves on instead of replaying it.
 max_ompl_planning_attempts: 1  # OMPL plans per approach/retract goal
 max_cartesian_retries: 2       # planning attempts per Pilz LIN/CIRC motion (and ptp path)
+# Weld motions through Pilz (LIN plunge + LIN/CIRC). Off: every seam follows its dense
+# poses via computeCartesianPath, as ptp seams always do; approach/retract stay OMPL.
+use_pilz: true
 use_approach_validation: false  # LEGACY, superseded by use_configuration_finder below
 
 # Approach validator (LEGACY; used only when use_approach_validation is true and the

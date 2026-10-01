@@ -54,9 +54,9 @@
          w: 1.0
 
      child_link:
-       urdf_path: 'urdf/environment/elliptic_part.urdf.xacro'
+       urdf_path: 'urdf/environment/cube.urdf.xacro'
        id: 'child_link'
-       spawn_name: 'robotiq_cube_tjoint_straight'
+       spawn_name: 'cube_straigth'
        pose:
          x: 1.2
          y: 0.3
@@ -113,4 +113,83 @@
 #           w: 0.9238795
 #
 #     frame_id: 'world'
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Complex shape and workpiece ──────────────────────────────────────────
+#/**:
+#   ros__parameters:
+#     base_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'base_link'
+#       spawn_name: 'workpiece_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.65
+#       orientation:
+#         x: 0.0
+#         y: 0.0
+#         z: 0.0
+#         w: 1.0
+#
+#     child_link:
+#       urdf_path: 'urdf/environment/elliptic_part.urdf.xacro'
+#       id: 'child_link'
+#       spawn_name: 'robotiq_cube_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: 0.3
+#         z: 0.05
+#       end_pose:
+#         position:
+#           x: 1.2
+#           y: -0.5
+#           z: 0.925
+#         orientation:
+#           x: 0.0
+#           y: 0.0
+#           z: 0.0
+#           w: 1.0
+#
+#     frame_id: 'world'
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── robotiq_cube straight──────────────────────────────────────────────────────
+#/**:
+#   ros__parameters:
+#     base_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'base_link'
+#       spawn_name: 'workpiece_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.65
+#       orientation:
+#         x: 0.0
+#         y: 0.0
+#         z: 0.0
+#         w: 1.0
+#
+#     child_link:
+#       urdf_path: 'urdf/environment/robotiq_cube.urdf.xacro'
+#       id: 'child_link'
+#       spawn_name: 'robotiq_cube_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: 0.3
+#         z: 0.05
+#       end_pose:
+#         position:
+#           x: 1.2
+#           y: -0.5
+#           z: 0.925
+#         orientation:
+#           x: 0.0
+#           y: 0.0
+#           z: 0.0
+#           w: 1.0
+#
+#     frame_id: 'world'
+
 # ──────────────────────────────────────────────────────────────────────────────

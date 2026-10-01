@@ -69,6 +69,7 @@ struct WelderConfig
   double goal_position_tolerance = 0.001;
   double goal_orientation_tolerance = 0.01;
   int max_cartesian_retries = 2;
+  bool use_pilz = true;
   bool use_approach_validator = true;
   std::string json_file;
   double manipulability_threshold = 1e-6;
@@ -303,8 +304,8 @@ private:
    * planner (LIN / CIRC respectively) for deterministic constant-velocity /
    * true-circular motion, after a LIN plunge from the approach standoff onto
    * the seam start. CIRC uses the middle seam pose as its interim point.
-   * "ptp"/unknown/legacy seams fall back to the dense-waypoint
-   * `computeCartesianPath()` behavior.
+   * "ptp"/unknown/legacy seams, and every seam when use_pilz is off, follow the
+   * dense seam poses through `computeCartesianPath()` instead.
    *
    * @param seam The weld seam to execute (poses and segment_type).
    * @param goal_handle Handle to the goal for sending feedback and results.
@@ -353,9 +354,23 @@ private:
     const std::function<bool()> & should_stop);
 
   /**
-   * @brief Back the torch off the part after a failed weld: Pilz LIN from the current
-   * end-effector pose to its standoff (approach_offset_z along the tool Z axis), so the
-   * next seam's approach does not start with the torch on the workpiece.
+   * @brief Plan (retrying up to max_cartesian_retries) and execute a computeCartesianPath()
+   * motion from the current state through the waypoints.
+   * @param waypoints End-effector poses to pass through, planning frame.
+   * @param seam_id Seam id, for log messages.
+   * @param should_stop Returns true once the job must stop; checked before each attempt.
+   * @return Whether planning failed, execution failed, or both succeeded.
+   */
+  MotionOutcome plan_and_execute_cartesian(
+    const std::vector<geometry_msgs::msg::Pose> & waypoints,
+    const std::string & seam_id,
+    const std::function<bool()> & should_stop);
+
+  /**
+   * @brief Back the torch off the part after a failed weld: a straight line (Pilz LIN, or
+   * computeCartesianPath() when use_pilz is off) from the current end-effector pose to its
+   * standoff (approach_offset_z along the tool Z axis), so the next seam's approach does not
+   * start with the torch on the workpiece.
    * @param seam_id Seam id, for log messages.
    * @param should_stop Returns true once the job must stop (cancel or transition).
    * @return true if the retreat was executed.

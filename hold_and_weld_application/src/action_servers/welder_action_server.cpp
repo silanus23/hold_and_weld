@@ -618,6 +618,9 @@ bool WelderActionServer::load_config_from_yaml(
     if (yaml["max_cartesian_retries"]) {
       parsed.max_cartesian_retries = yaml["max_cartesian_retries"].as<int>();
     }
+    if (yaml["use_pilz"]) {
+      parsed.use_pilz = yaml["use_pilz"].as<bool>();
+    }
     if (yaml["json_file"]) {
       parsed.json_file = yaml["json_file"].as<std::string>();
     }
@@ -1311,6 +1314,37 @@ WelderActionServer::MotionOutcome WelderActionServer::plan_and_execute_pilz(
   return outcome;
 }
 
+WelderActionServer::MotionOutcome WelderActionServer::plan_and_execute_cartesian(
+  const std::vector<geometry_msgs::msg::Pose> & waypoints,
+  const std::string & seam_id,
+  const std::function<bool()> & should_stop)
+{
+  moveit_msgs::msg::RobotTrajectory trajectory;
+  bool planned = false;
+  for (int attempt = 1; attempt <= config_.max_cartesian_retries && !should_stop(); ++attempt) {
+    move_group_->setStartStateToCurrentState();
+    const double fraction = move_group_->computeCartesianPath(
+      waypoints, config_.cartesian_step_size, trajectory);
+    RCLCPP_INFO(logger_, "Seam %s: Cartesian path %.2f%% achieved", seam_id.c_str(),
+      fraction * 100.0);
+    if (fraction >= config_.cartesian_path_threshold) {
+      planned = true;
+      break;
+    }
+    RCLCPP_WARN(logger_, "Cartesian path below threshold (%.2f%% < %.2f%%), attempt %d/%d",
+      fraction * 100.0, config_.cartesian_path_threshold * 100.0,
+      attempt, config_.max_cartesian_retries);
+  }
+  if (!planned || should_stop()) {
+    return MotionOutcome::kPlanningFailed;
+  }
+  if (move_group_->execute(trajectory) != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_ERROR(logger_, "Seam %s: Cartesian path execution failed", seam_id.c_str());
+    return MotionOutcome::kExecutionFailed;
+  }
+  return MotionOutcome::kSucceeded;
+}
+
 bool WelderActionServer::execute_cartesian_path(
   const WeldSeam & seam,
   const std::shared_ptr<GoalHandleTriggerWelder> & goal_handle,
@@ -1323,7 +1357,7 @@ bool WelderActionServer::execute_cartesian_path(
   const auto & waypoints = seam.poses;
   torch_left_standoff = false;
 
-  if (seam.segment_type == "line" || seam.segment_type == "arc") {
+  if (config_.use_pilz && (seam.segment_type == "line" || seam.segment_type == "arc")) {
     // parse_weld_seams() guarantees >= 3 poses for an arc, >= 2 otherwise.
     const bool is_arc = (seam.segment_type == "arc");
 
@@ -1363,37 +1397,13 @@ bool WelderActionServer::execute_cartesian_path(
       return false;
     }
   } else {
-    // "ptp" / unknown / legacy: Pilz PTP is a single joint-space point-to-point,
-    // not a match for the discrete multi-point path a PTP segment actually
-    // represents, so this keeps the pre-Pilz computeCartesianPath() behavior.
-    RCLCPP_INFO(logger_, "Seam %s: segment_type '%s' — using computeCartesianPath fallback",
+    // TODO(silanus23): split ptp seams into LIN/CIRC pieces sent as one blended Pilz
+    // sequence; separate Pilz motions would stop the torch between every piece.
+    RCLCPP_INFO(logger_, "Seam %s: segment_type '%s' — using computeCartesianPath",
       seam.seam_id.c_str(), seam.segment_type.c_str());
-
-    moveit_msgs::msg::RobotTrajectory trajectory;
-    bool planned = false;
-    for (int attempt = 1; attempt <= config_.max_cartesian_retries; ++attempt) {
-      if (should_stop()) {
-        return false;
-      }
-      move_group_->setStartStateToCurrentState();
-      const double fraction = move_group_->computeCartesianPath(
-        waypoints, config_.cartesian_step_size, trajectory);
-      RCLCPP_INFO(logger_, "Cartesian path: %.2f%% achieved", fraction * 100.0);
-      if (fraction >= config_.cartesian_path_threshold) {
-        planned = true;
-        break;
-      }
-      RCLCPP_WARN(logger_, "Cartesian path below threshold (%.2f%% < %.2f%%), attempt %d/%d",
-                    fraction * 100.0, config_.cartesian_path_threshold * 100.0,
-                    attempt, config_.max_cartesian_retries);
-    }
-    if (!planned || should_stop()) {
-      return false;
-    }
-
-    torch_left_standoff = true;
-    if (move_group_->execute(trajectory) != moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_ERROR(logger_, "Execution failed");
+    const MotionOutcome weld = plan_and_execute_cartesian(waypoints, seam.seam_id, should_stop);
+    torch_left_standoff = weld != MotionOutcome::kPlanningFailed;
+    if (weld != MotionOutcome::kSucceeded) {
       return false;
     }
   }
@@ -1424,9 +1434,10 @@ bool WelderActionServer::retreat_from_part(
 
   RCLCPP_WARN(logger_, "Seam %s: retreating %.3f m along the tool Z axis before the next seam",
     seam_id.c_str(), config_.approach_offset_z);
-  if (plan_and_execute_pilz("LIN", target, nullptr, seam_id, should_stop) !=
-    MotionOutcome::kSucceeded)
-  {
+  const MotionOutcome retreat = config_.use_pilz ?
+    plan_and_execute_pilz("LIN", target, nullptr, seam_id, should_stop) :
+    plan_and_execute_cartesian({target}, seam_id, should_stop);
+  if (retreat != MotionOutcome::kSucceeded) {
     RCLCPP_ERROR(logger_, "Seam %s: retreat failed; the torch may still be on the part",
       seam_id.c_str());
     return false;
