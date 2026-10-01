@@ -21,12 +21,13 @@ import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Point, Pose
 from moveit_msgs.msg import CollisionObject, ObjectColor, PlanningScene
 import rclpy
 from rclpy.node import Node
-from shape_msgs.msg import SolidPrimitive
+from shape_msgs.msg import Mesh, MeshTriangle, SolidPrimitive
 from std_msgs.msg import ColorRGBA, Header
+import trimesh
 import yaml
 
 
@@ -163,6 +164,13 @@ class AddCollisionObjects(Node):
                 primitive.dimensions = sizes
                 collision_obj.primitives = [primitive]
 
+        mesh_element = geometry.find('mesh')
+        if mesh_element is not None:
+            mesh = self.load_mesh(mesh_element)
+            if mesh is None:
+                return
+            collision_obj.meshes = [mesh]
+
         pose = Pose()
         pose.position.x = pose_config.get('x', 0.0)
         pose.position.y = pose_config.get('y', 0.0)
@@ -172,7 +180,10 @@ class AddCollisionObjects(Node):
         pose.orientation.z = orientation_config.get('z', 0.0)
         pose.orientation.w = orientation_config.get('w', 1.0)
 
-        collision_obj.primitive_poses = [pose]
+        if collision_obj.meshes:
+            collision_obj.mesh_poses = [pose]
+        else:
+            collision_obj.primitive_poses = [pose]
         collision_obj.operation = CollisionObject.ADD
 
         self.get_logger().info(
@@ -181,6 +192,31 @@ class AddCollisionObjects(Node):
         self.collision_pub.publish(collision_obj)
         rclpy.spin_once(self, timeout_sec=0.5)
         self.get_logger().info(f'{object_id} added to planning scene successfully!')
+
+    def load_mesh(self, mesh_element):
+        """Load a URDF <mesh> element's file as a shape_msgs Mesh, or None on failure."""
+        filename = mesh_element.get('filename', '')
+        if filename.startswith('package://'):
+            package, _, relative = filename[len('package://'):].partition('/')
+            filename = os.path.join(get_package_share_directory(package), relative)
+        elif filename.startswith('file://'):
+            filename = filename[len('file://'):]
+
+        try:
+            loaded = trimesh.load(filename, force='mesh')
+        except (OSError, ValueError) as e:
+            self.get_logger().error(f'Failed to load mesh {filename}: {e}')
+            return None
+
+        scale = mesh_element.get('scale')
+        if scale:
+            loaded.apply_scale([float(x) for x in scale.split()])
+
+        mesh = Mesh()
+        mesh.vertices = [Point(x=float(x), y=float(y), z=float(z)) for x, y, z in loaded.vertices]
+        mesh.triangles = [
+            MeshTriangle(vertex_indices=[int(a), int(b), int(c)]) for a, b, c in loaded.faces]
+        return mesh
 
     def set_object_color(self, object_id: str, color: ColorRGBA):
         """Set the display color of a collision object in the planning scene."""

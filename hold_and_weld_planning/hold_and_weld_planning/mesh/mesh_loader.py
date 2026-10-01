@@ -124,12 +124,13 @@ class MeshLoader:
             if status != manifold3d.Error.NoError:
                 raise ValueError(f'Mesh {index} failed manifold conversion: {status}')
 
-            manifold_obj += solid
+            # Refine before the union: manifold3d's refine on a boolean result emits
+            # near-coincident vertices that trimesh merges, so the shell stops being watertight
+            # (refine 40 on elliptic_part.stl).
+            if self.refine_iterations > 0:
+                solid = solid.refine(self.refine_iterations)
 
-        # Subdivide to increase vertex density for smoother seam extraction
-        if self.refine_iterations > 0:
-            logger.debug(f'Refining mesh with {self.refine_iterations} iterations')
-            manifold_obj = manifold_obj.refine(self.refine_iterations)
+            manifold_obj += solid
 
         # Apply world transform (manifold3d uses 3x4 matrix: [R|t])
         mat_3x4 = self.world_transform[:3, :].tolist()

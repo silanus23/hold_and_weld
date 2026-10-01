@@ -93,6 +93,14 @@ class TestMeshLoader:
         loader = MeshLoader(path, refine_iterations=0)
         assert loader.manifold.volume() == pytest.approx(1.5, rel=1e-9)
 
+    def test_a_refined_cad_stl_stays_watertight(self):
+        loader = MeshLoader(
+            'package://hold_and_weld_description/meshes/workpieces/elliptic_part.stl',
+            refine_iterations=40,
+        )
+        mesh = loader.manifold.to_mesh()
+        assert trimesh.Trimesh(mesh.vert_properties, mesh.tri_verts).is_watertight
+
 
 NO_COLLISION = URDF.from_xml_string(
     '<robot name="part"><link name="base"><visual><geometry>'
