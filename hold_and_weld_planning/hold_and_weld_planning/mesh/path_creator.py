@@ -63,14 +63,16 @@ class PathCreator:
             List of Seam objects.
 
         Raises:
-            ValueError: If the chain has fewer than 2 points, or a position is not a finite 3D
-                point. Refused rather than skipped: a job missing a seam is the wrong job.
+            ValueError: If the chain has fewer than 2 points, a normal is not 3D, or a position
+                is not a finite 3D point. Refused rather than skipped: a job missing a seam is the
+                wrong job.
         """
         if len(seam_points) < 2:
             raise ValueError(f'Too few SeamPoints to process: {len(seam_points)}')
 
-        if any(np.shape(sp.position) != (3,) for sp in seam_points):
-            raise ValueError('SeamPoint positions are not 3D')
+        if any(np.shape(vector) != (3,) for sp in seam_points
+               for vector in (sp.position, sp.normal_base, sp.normal_wall)):
+            raise ValueError('SeamPoint positions and normals must be 3D')
         bad = sum(not np.isfinite(sp.position).all() for sp in seam_points)
         if bad:
             raise ValueError(

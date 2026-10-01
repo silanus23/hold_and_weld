@@ -27,6 +27,7 @@ import trimesh
 
 from .params import MeshLoadParams
 from ..utils.path_utils import resolve_package_path
+from ..utils.transforms import as_world_transform
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +59,7 @@ class MeshLoader:
             ValueError: If mesh loading or conversion fails
             FileNotFoundError: If file doesn't exist
         """
-        # Built here rather than in the signature: a default argument is one array shared by every
-        # caller, and a caller that transforms it in place moves every later part that took the
-        # default with it.
-        if world_transform is None:
-            world_transform = np.eye(4)
-
-        if world_transform.shape != (4, 4):
-            raise ValueError(
-                f'world_transform must be 4x4, got {world_transform.shape}'
-            )
+        world_transform = as_world_transform(world_transform)
 
         refine_iterations = MeshLoadParams.from_dict(
             {'refine_iterations': refine_iterations}).refine_iterations

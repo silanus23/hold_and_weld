@@ -107,10 +107,10 @@ def load_urdf_config(
 
     logger.info(f'Loading URDF-based config from: {yaml_path}')
 
-    with open(yaml_path, 'r') as f:
+    with open(yaml_path, 'r', encoding='utf-8') as f:
         try:
             config = yaml.safe_load(f)
-        except yaml.YAMLError as e:
+        except (yaml.YAMLError, UnicodeDecodeError) as e:
             raise ValueError(f'Config is not valid YAML: {yaml_path}: {e}') from e
 
     # An empty file, or a key with nothing under it, loads as None; checked here so it is named

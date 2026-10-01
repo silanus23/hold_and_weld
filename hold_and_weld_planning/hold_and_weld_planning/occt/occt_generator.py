@@ -24,7 +24,6 @@ a seam.
 import logging
 from typing import Any
 
-import numpy as np
 from numpy.typing import NDArray
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
@@ -38,7 +37,8 @@ from OCC.Core.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCC.Core.TopoDS import TopoDS_Shape
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
 
-from ..utils.transforms import link_poses, numpy_to_gp_trsf, origin_to_matrix
+from ..utils.transforms import (
+    as_world_transform, link_poses, numpy_to_gp_trsf, origin_to_matrix)
 
 logger = logging.getLogger(__name__)
 
@@ -63,19 +63,10 @@ class OCCTGenerator:
                 identity.
 
         Raises:
-            ValueError: If world_transform is not 4x4, or the URDF's joint
+            ValueError: If world_transform is not a finite 4x4, or the URDF's joint
                 tree does not place every link.
         """
-        # Built here rather than in the signature: a default argument is one array shared by every
-        # caller, and a caller that transforms it in place moves every later part that took the
-        # default with it.
-        if world_transform is None:
-            world_transform = np.eye(4)
-
-        if world_transform.shape != (4, 4):
-            raise ValueError(
-                f'world_transform must be 4x4, got {world_transform.shape}'
-            )
+        world_transform = as_world_transform(world_transform)
 
         self.robot = robot_object
         self.world_transform = world_transform
@@ -200,7 +191,7 @@ class OCCTGenerator:
                         f'Box size must be [x, y, z], got {geom.size}'
                     )
 
-                if any(s <= 0 for s in geom.size):
+                if not all(s > 0 for s in geom.size):
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
                         f'Box size must be positive: {geom.size}'
@@ -211,7 +202,7 @@ class OCCTGenerator:
                 shape = BRepPrimAPI_MakeBox(pnt, dx, dy, dz).Shape()
 
             elif isinstance(geom, Cylinder):
-                if geom.radius <= 0 or geom.length <= 0:
+                if not (geom.radius > 0 and geom.length > 0):
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
                         f'Cylinder dimensions must be positive: '
@@ -222,7 +213,7 @@ class OCCTGenerator:
                 shape = BRepPrimAPI_MakeCylinder(ax, geom.radius, geom.length).Shape()
 
             elif isinstance(geom, Sphere):
-                if geom.radius <= 0:
+                if not geom.radius > 0:
                     raise ValueError(
                         f"Link '{link.name}' collision {idx}: "
                         f'Sphere radius must be positive: {geom.radius}'

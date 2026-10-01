@@ -88,3 +88,13 @@ class TestParameterValidation:
     def test_a_bad_value_is_refused_by_name(self, main, secondary, bad):
         with pytest.raises(ValueError, match=next(iter(bad))):
             JobPlanner(main, secondary, parameters=dict(REQUIRED, **bad))
+
+    @pytest.mark.parametrize('pose', [
+        [0.0, 0.0, 0.0],
+        {'xyz': 0.1},
+        {'xyz': [float('nan'), 0.0, 0.0]},
+    ])
+    def test_a_malformed_world_pose_is_a_value_error(self, pose):
+        # ValueError is what the CLI reports as a configuration error rather than a crash.
+        with pytest.raises(ValueError, match='xyz|world_pose'):
+            JobPlanner('a.stl', 'b.stl', main_world_pose=pose, parameters=dict(REQUIRED))

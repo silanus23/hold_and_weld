@@ -61,7 +61,7 @@ from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.ptp_segment import PtPSegment
 from ..core.seam import Seam
-from ..mesh.params import ParamsBase
+from ..utils.params import ParamsBase
 
 logger = logging.getLogger(__name__)
 

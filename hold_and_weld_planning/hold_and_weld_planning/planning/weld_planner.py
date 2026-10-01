@@ -22,7 +22,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
-from ..mesh.params import ParamsBase
+from ..mesh.params import PathCreatorParams
+from ..utils.params import ParamsBase
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ class WeldPlannerParams(ParamsBase):
     work_angle_deg: float
     travel_angle_deg: float
     gap_mm: float
-    waypoint_spacing_mm: float = 10.0
+    # PathCreator reads the same key, so the two cannot be allowed different defaults.
+    waypoint_spacing_mm: float = PathCreatorParams.waypoint_spacing_mm
 
     REQUIRED = ('work_angle_deg', 'travel_angle_deg', 'gap_mm')
 
@@ -120,9 +122,9 @@ class WeldPlanner:
             seam: Seam object with geometry data in config
 
         Raises:
-            ValueError: If required data is missing from seam.config, arrays
-                have invalid lengths, no point has a usable normal, or every
-                point coincides so there is no tangent
+            ValueError: If arrays have invalid lengths, no point has a usable
+                normal, or every point coincides so there is no tangent
+            RuntimeError: If seam.config lacks a key the extractor must write
 
         Side Effects:
             - Sets seam.poses to list of pose dictionaries
@@ -131,7 +133,7 @@ class WeldPlanner:
         required = ('smoothed_points', 'normals_main', 'normals_secondary', 'is_edge_joint')
         missing = [key for key in required if key not in seam.config]
         if missing:
-            raise ValueError(f'Seam config is missing key(s): {missing}')
+            raise RuntimeError(f'Seam config is missing key(s): {missing}')
 
         points = seam.config['smoothed_points']
         normals_main = seam.config['normals_main']

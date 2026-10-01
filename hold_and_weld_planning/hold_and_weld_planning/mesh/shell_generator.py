@@ -23,12 +23,11 @@ import logging
 from typing import Any
 
 import manifold3d
-import numpy as np
 from numpy.typing import NDArray
 from urdf_parser_py.urdf import Box, Cylinder, Mesh, Sphere
 
 from .params import MeshLoadParams
-from ..utils.transforms import link_poses, origin_to_matrix
+from ..utils.transforms import as_world_transform, link_poses, origin_to_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -55,19 +54,10 @@ class ShellGenerator:
             refine_iterations: Pieces each edge is split into; see MeshLoadParams
 
         Raises:
-            ValueError: If world_transform is not 4x4, or the URDF's joint
+            ValueError: If world_transform is not a finite 4x4, or the URDF's joint
                 tree does not place every link.
         """
-        # Built here rather than in the signature: a default argument is one array shared by every
-        # caller, and a caller that transforms it in place moves every later part that took the
-        # default with it.
-        if world_transform is None:
-            world_transform = np.eye(4)
-
-        if world_transform.shape != (4, 4):
-            raise ValueError(
-                f'world_transform must be 4x4, got {world_transform.shape}'
-            )
+        world_transform = as_world_transform(world_transform)
 
         refine_iterations = MeshLoadParams.from_dict(
             {'refine_iterations': refine_iterations}).refine_iterations
@@ -158,14 +148,14 @@ class ShellGenerator:
                 if isinstance(geom, Box):
                     if len(geom.size) != 3:
                         raise ValueError(f'Box size must be [x, y, z], got {geom.size}')
-                    if any(s <= 0 for s in geom.size):
+                    if not all(s > 0 for s in geom.size):
                         raise ValueError(
                             f'Box size must be positive: {geom.size}')
                     manifold_obj = manifold3d.Manifold.cube(geom.size, center=True)
                     logger.debug(f'Created box: size={geom.size}')
 
                 elif isinstance(geom, Cylinder):
-                    if geom.radius <= 0 or geom.length <= 0:
+                    if not (geom.radius > 0 and geom.length > 0):
                         raise ValueError(
                             f'Cylinder dimensions must be positive: '
                             f'radius={geom.radius}, length={geom.length}'
@@ -176,7 +166,7 @@ class ShellGenerator:
                     logger.debug(f'Created cylinder: radius={geom.radius}, length={geom.length}')
 
                 elif isinstance(geom, Sphere):
-                    if geom.radius <= 0:
+                    if not geom.radius > 0:
                         raise ValueError(
                             f'Sphere radius must be positive: {geom.radius}'
                         )

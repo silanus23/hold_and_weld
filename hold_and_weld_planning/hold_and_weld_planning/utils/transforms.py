@@ -43,19 +43,51 @@ def xyz_rpy_to_matrix(
         4x4 homogeneous transformation matrix.
 
     Raises:
-        ValueError: If either argument does not have exactly 3 elements.
+        ValueError: If either argument is not 3 finite numbers.
     """
-    xyz_array = np.asarray(xyz, dtype=float).ravel()
-    rpy_array = np.asarray(rpy, dtype=float).ravel()
+    try:
+        xyz_array = np.asarray(xyz, dtype=float).ravel()
+        rpy_array = np.asarray(rpy, dtype=float).ravel()
+    except (TypeError, ValueError) as e:
+        raise ValueError(f'xyz and rpy must be numbers, got xyz={xyz!r}, rpy={rpy!r}') from e
 
     if xyz_array.shape != (3,):
         raise ValueError(f'xyz must have 3 elements, got {xyz_array.size}')
     if rpy_array.shape != (3,):
         raise ValueError(f'rpy must have 3 elements, got {rpy_array.size}')
+    if not (np.isfinite(xyz_array).all() and np.isfinite(rpy_array).all()):
+        raise ValueError(f'xyz and rpy must be finite, got xyz={xyz!r}, rpy={rpy!r}')
 
     matrix = np.eye(4)
     matrix[:3, :3] = Rotation.from_euler('xyz', rpy_array).as_matrix()
     matrix[:3, 3] = xyz_array
+    return matrix
+
+
+def as_world_transform(world_transform: Any | None) -> NDArray:
+    """Validate a part's world transform, or return the identity for None.
+
+    Args:
+        world_transform: 4x4 homogeneous transform, array-like, or None.
+
+    Returns:
+        A new 4x4 float array.
+
+    Raises:
+        ValueError: If world_transform is not a finite 4x4.
+    """
+    # A fresh array either way: a default shared by every caller would move every later part
+    # with it the moment one caller transformed it in place.
+    if world_transform is None:
+        return np.eye(4)
+    try:
+        matrix = np.array(world_transform, dtype=float)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f'world_transform must be numeric, got {world_transform!r}') from e
+    if matrix.shape != (4, 4):
+        raise ValueError(f'world_transform must be 4x4, got {matrix.shape}')
+    if not np.isfinite(matrix).all():
+        raise ValueError('world_transform must be finite')
     return matrix
 
 

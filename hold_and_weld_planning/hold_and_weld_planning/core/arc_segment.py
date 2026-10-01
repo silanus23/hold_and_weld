@@ -53,7 +53,7 @@ class ArcSegment:
             raise ValueError('Need at least 2 points for arc')
         if self.center.shape != (3,):
             raise ValueError('Center must be 3D point [x, y, z]')
-        if radius <= 0:
+        if not radius > 0:
             raise ValueError(f'Radius must be positive, got {radius}')
 
         self.radius = float(radius)

@@ -22,64 +22,12 @@ Lives in its own module because `seam_extractor_mesh` imports `path_creator`, so
 anything both of them share has to sit upstream of the pair.
 """
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-
-class ParamsBase:
-    """Build a params dataclass from a loosely typed config dict."""
-
-    @classmethod
-    def from_dict(cls, params: dict[str, Any] | None):
-        """Build from a config dict, coercing types and ignoring foreign keys.
-
-        Foreign keys are ignored rather than rejected because the pipeline
-        hands ONE dict to both the extractor and PathCreator, so each
-        necessarily sees the other's keys. Values arrive from YAML, so the
-        declared field type does the coercion.
-
-        Args:
-            params: Config dict, or None for all defaults.
-
-        Returns:
-            An instance with declared defaults for everything not supplied.
-
-        Raises:
-            ValueError: If params is not a dict, a value cannot be coerced,
-                or a value fails a constraint.
-        """
-        if params is not None and not isinstance(params, dict):
-            raise ValueError(
-                f'params must be a dict, got {type(params).__name__}')
-        given = params or {}
-        taken = {}
-        for spec in fields(cls):
-            if spec.name not in given:
-                continue
-            taken[spec.name] = cls._coerce(spec.name, spec.type,
-                                           given[spec.name])
-        return cls(**taken)
-
-    @staticmethod
-    def _coerce(name: str, declared: Any, value: Any) -> Any:
-        """Coerce one config value to a finite number of its declared type."""
-        try:
-            number = float(value)
-        except (TypeError, ValueError) as e:
-            raise ValueError(
-                f'{name} must be a number, got {value!r}') from e
-        # YAML's .nan and .inf coerce cleanly, and nan passes every `< 0` style check, so they
-        # would otherwise switch features off silently.
-        if not np.isfinite(number):
-            raise ValueError(f'{name} must be finite, got {value!r}')
-        if declared is int or declared == 'int':
-            if not number.is_integer():
-                raise ValueError(
-                    f'{name} must be a whole number, got {value!r}')
-            return int(number)
-        return number
+from ..utils.params import ParamsBase
 
 
 @dataclass
@@ -104,6 +52,7 @@ class MeshLoadParams(ParamsBase):
 class SeamExtractorMeshParams(ParamsBase):
     """Tuning for SeamExtractorMesh; every field is optional."""
 
+    # Must sit between the fit-up gap and about half the transverse face size.
     epsilon: float = 0.002
     edge_angle_min_deg: float = 0.0057
     near_contact_edge_fraction: float = 0.1

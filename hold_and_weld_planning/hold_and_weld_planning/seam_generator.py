@@ -24,6 +24,7 @@ import sys
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).parent))
 
+from hold_and_weld_planning.occt.seam_extractor_occt import SeamExtractorOCCTParams
 from hold_and_weld_planning.planning.job_planner import JobPlanner
 from hold_and_weld_planning.utils.path_utils import (
     auto_generate_output_path,
@@ -142,14 +143,16 @@ def main():
         # After JobPlanner, which is what validates the keys read here.
         if args.verbose:
             print(f'  Job: {Path(args.input).stem}')
-            print(f'  Points per seam: {parameters.get("num_smooth_points", 100)}')
             print(f'  Work angle: {parameters["work_angle_deg"]}')
             print(f'  Travel angle: {parameters["travel_angle_deg"]}')
             print(f'  Gap: {parameters["gap_mm"]}mm')
             print()
             print(f'  Main part URDF: {main_path}')
             print(f'  Secondary part URDF: {secondary_path}')
-            print(f'  Mode: {mode}')
+            print(f'  Mode: {planner.mode}')
+            if planner.mode == 'occt':
+                print('  Points per seam: '
+                      f'{SeamExtractorOCCTParams.from_dict(parameters).num_smooth_points}')
             print()
 
         logger.info('Starting weld job planning')

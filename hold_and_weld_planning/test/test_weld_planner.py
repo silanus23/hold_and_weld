@@ -53,6 +53,7 @@ class TestParameters:
         ('gap_mm', float('nan')),
         ('gap_mm', 'wide'),
         ('gap_mm', -1.0),
+        ('gap_mm', True),
         ('work_angle_deg', float('inf')),
         ('work_angle_deg', 90.0),
         ('work_angle_deg', -95.0),

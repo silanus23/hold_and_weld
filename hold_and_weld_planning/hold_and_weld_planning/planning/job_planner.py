@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 import trimesh
 
 from .weld_planner import WeldPlanner, WeldPlannerParams
@@ -32,6 +31,7 @@ from ..occt.occt_generator import OCCTGenerator
 from ..occt.occt_loader import OCCTLoader
 from ..occt.seam_extractor_occt import SeamExtractorOCCT, SeamExtractorOCCTParams
 from ..urdf.urdf_processor import URDFProcessor
+from ..utils.transforms import xyz_rpy_to_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,8 @@ class JobPlanner:
             mode: 'auto', 'mesh', or 'occt'
 
         Raises:
-            ValueError: If the mode is invalid, or a parameter the resolved
-                pipeline reads is missing or out of range
+            ValueError: If the mode or a world pose is invalid, or a parameter
+                the resolved pipeline reads is missing or out of range
         """
         self.main_path = main_path
         self.secondary_path = secondary_path
@@ -108,10 +108,9 @@ class JobPlanner:
         self._validate_inputs(main_path, secondary_path)
 
         if self.mode == 'occt':
-            self.parameters.setdefault('epsilon', 1e-3)
+            self.parameters.setdefault('epsilon', SeamExtractorOCCTParams.epsilon)
         else:
-            # Epsilon must sit between the fit-up gap and about half the transverse face size.
-            self.parameters.setdefault('epsilon', 0.002)
+            self.parameters.setdefault('epsilon', SeamExtractorMeshParams.epsilon)
 
         # Every stage's parameters are validated here, before any geometry is loaded, so a bad
         # value fails at once rather than after the shells are built and the seams extracted. The
@@ -274,11 +273,6 @@ class JobPlanner:
             self.secondary_path, self.secondary_world_transform
         )
 
-        if not mesh_main.is_watertight:
-            raise ValueError('Main mesh is not watertight')
-        if not mesh_secondary.is_watertight:
-            raise ValueError('Secondary mesh is not watertight')
-
         logger.info(f'Main mesh: {len(mesh_main.vertices)} vertices, {len(mesh_main.faces)} faces')
         logger.info(
             f'Secondary mesh: {len(mesh_secondary.vertices)} vertices, '
@@ -293,19 +287,13 @@ class JobPlanner:
         shape_secondary = self._load_input_occt(
             self.secondary_path, self.secondary_world_transform
         )
-
-        if shape_main.IsNull():
-            raise ValueError('Main OCCT shape is null after loading')
-        if shape_secondary.IsNull():
-            raise ValueError('Secondary OCCT shape is null after loading')
-
         return shape_main, shape_secondary
 
     def _load_input_mesh(self, path: str, world_transform: np.ndarray) -> trimesh.Trimesh:
         """Load URDF or STL as trimesh and apply world transform."""
         refine_iterations = self.refine_iterations
 
-        if Path(path).suffix.lower() == '.stl':
+        if Path(path).suffix.lower() in MESH_EXTENSIONS:
             loader = MeshLoader(
                 mesh_path=path,
                 world_transform=world_transform,
@@ -329,7 +317,7 @@ class JobPlanner:
         """Load URDF, STEP, or IGES as OCCT shape and apply world transform."""
         path_suffix = Path(path).suffix.lower()
 
-        if path_suffix in ['.step', '.stp', '.iges', '.igs']:
+        if path_suffix in OCCT_EXTENSIONS:
             loader = OCCTLoader(
                 cad_path=path,
                 world_transform=world_transform,
@@ -340,23 +328,16 @@ class JobPlanner:
             occt_gen = OCCTGenerator(urdf.robot, world_transform)
             return occt_gen.create_shape_for_all_links()
 
-    def _pose_to_matrix(self, pose: dict[str, list] | None) -> np.ndarray:
-        """Convert xyz/rpy dict to 4x4 homogeneous transformation matrix."""
+    @staticmethod
+    def _pose_to_matrix(pose: dict[str, list] | None) -> np.ndarray:
+        """Convert an xyz/rpy dict to a 4x4 homogeneous transform; None is the identity.
+
+        Raises:
+            ValueError: If pose is not a dict, or its xyz or rpy is not 3 finite numbers.
+        """
         if pose is None:
             return np.eye(4)
-
-        xyz = pose.get('xyz', [0.0, 0.0, 0.0])
-        rpy = pose.get('rpy', [0.0, 0.0, 0.0])
-
-        if len(xyz) != 3:
-            raise ValueError(f'xyz must have 3 elements, got {len(xyz)}')
-        if len(rpy) != 3:
-            raise ValueError(f'rpy must have 3 elements, got {len(rpy)}')
-
-        rot_matrix = Rotation.from_euler('xyz', rpy).as_matrix()
-
-        T = np.eye(4)
-        T[:3, :3] = rot_matrix
-        T[:3, 3] = xyz
-
-        return T
+        if not isinstance(pose, dict):
+            raise ValueError(f'world_pose must be a mapping with xyz and rpy, got {pose!r}')
+        return xyz_rpy_to_matrix(pose.get('xyz', [0.0, 0.0, 0.0]),
+                                 pose.get('rpy', [0.0, 0.0, 0.0]))
