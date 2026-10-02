@@ -38,7 +38,6 @@ namespace application
 {
 
 /**
- * @class DualRobotCoordinator
  * @brief Lifecycle coordinator that runs the gripper job, then the welder job.
  *
  * - Readiness: a 500 ms timer asks controller_manager (asynchronously) whether both arm
@@ -110,14 +109,13 @@ public:
 
 private:
   /**
-   * @brief Periodically checks if all dependencies are ready.
-   * When ready and auto_start is enabled, automatically triggers execution.
+   * @brief Timer callback: ask controller_manager for the controller list, one request
+   * at a time.
    */
   void check_readiness();
 
   /**
    * @brief Handle the list_controllers answer sent by check_readiness().
-   * @param future Response from controller_manager.
    */
   void handle_controller_list(
     rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedFuture future);
@@ -129,22 +127,17 @@ private:
 
   /**
    * @brief End the current sequence after a failed or rejected step.
-   * @param generation Sequence the failing callback belongs to.
    */
   void abort_sequence(uint64_t generation);
 
   /**
    * @brief Whether a callback belongs to the current, still-active sequence.
-   * @param generation Sequence the callback was created for.
-   * @param what Callback description, logged when it is ignored.
    * @return false (with a log) for callbacks after deactivation or from an older sequence.
    */
   bool is_current(uint64_t generation, const char * what) const;
 
   /**
    * @brief Service callback to manually trigger the coordinated sequence.
-   * @param request Service request (empty).
-   * @param response Service response with success status and message.
    */
   void handle_trigger_service(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -157,22 +150,18 @@ private:
   void execute_sequence();
 
   /**
-   * @brief Execute gripper job (async).
-   * Calls step_welder_job() upon completion.
-   * @param generation Sequence this step belongs to.
+   * @brief Execute gripper job (async); gripper_result_callback() starts the welder step.
    */
   void step_gripper_job(uint64_t generation);
 
   /**
    * @brief Execute welder job (async).
    * Final step in the sequence.
-   * @param generation Sequence this step belongs to.
    */
   void step_welder_job(uint64_t generation);
 
   /**
    * @brief Callback for gripper action feedback.
-   * @param feedback Feedback message from gripper action.
    */
   void gripper_feedback_callback(
     GoalHandleTriggerGripper::SharedPtr,
@@ -180,15 +169,12 @@ private:
 
   /**
    * @brief Callback for gripper action result.
-   * @param result Wrapped result from gripper action.
-   * @param generation Sequence the goal was sent for.
    */
   void gripper_result_callback(
     const GoalHandleTriggerGripper::WrappedResult & result, uint64_t generation);
 
   /**
    * @brief Callback for welder action feedback.
-   * @param feedback Feedback message from welder action.
    */
   void welder_feedback_callback(
     GoalHandleTriggerWelder::SharedPtr,
@@ -196,8 +182,6 @@ private:
 
   /**
    * @brief Callback for welder action result.
-   * @param result Wrapped result from welder action.
-   * @param generation Sequence the goal was sent for.
    */
   void welder_result_callback(
     const GoalHandleTriggerWelder::WrappedResult & result, uint64_t generation);
@@ -209,6 +193,8 @@ private:
   std::atomic<bool> sequence_started_{false};
   std::atomic<bool> sequence_running_{false};
   std::atomic<bool> readiness_request_in_flight_{false};
+  // Bumped by each new sequence and by stop_sequence(). Step and result callbacks carry
+  // the generation they were created for; is_current() and abort_sequence() ignore stale ones.
   std::atomic<uint64_t> sequence_generation_{0};
 
   rclcpp::TimerBase::SharedPtr readiness_timer_;

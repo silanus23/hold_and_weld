@@ -36,8 +36,10 @@ namespace kinematics
 
 /**
  * @brief Tunables for ApproachValidator, read from the approach_validator section of
- * welding.yaml. Tolerances bound how far each IK solution's pose may be from its seam
- * point; defaults are the historical hard-coded values, loose for welding.
+ * welding.yaml.
+ *
+ * Tolerances bound how far each IK solution's pose may be from its seam point; the defaults
+ * are loose, sized for welding.
  */
 struct ApproachValidatorParams
 {
@@ -49,10 +51,11 @@ struct ApproachValidatorParams
 };
 
 /**
- * @brief Validates approach configurations for welding seams by "static walking" a seam
- * trajectory from an OMPL-generated approach configuration, warm-starting IK from each
- * solved waypoint to the next and checking reachability and manipulability. Does not
- * check the joint step between waypoints (ConfigurationFinder does).
+ * @brief Validates approach configurations for welding seams by "static walking" the seam.
+ *
+ * Starting from an OMPL-generated approach configuration, IK is warm-started from each
+ * solved waypoint to the next, checking reachability and manipulability. Does not check the
+ * joint step between waypoints (ConfigurationFinder does).
  *
  * Legacy: superseded by ConfigurationFinder, which picks the approach configuration
  * before OMPL runs instead of checking OMPL's pick afterwards. Kept working and tested,
@@ -83,9 +86,11 @@ public:
   void set_weld_seam(const hold_and_weld::WeldSeam & seam) {seam_ = seam;}
 
   /**
-   * @brief Validate approach configuration through entire seam by warm-started IK per
-   * waypoint, checking manipulability at each step. Seam quaternions are normalised
-   * before use.
+   * @brief Validate an approach configuration through the entire seam by warm-started IK per
+   * waypoint, checking manipulability at each step.
+   *
+   * Seam quaternions are normalised before use.
+   *
    * @param q_approach Joint configuration to validate (OMPL result)
    * @return true if approach is valid for entire seam; false if no seam is set, the seam
    *         is empty, or a seam pose is non-finite or has a zero quaternion

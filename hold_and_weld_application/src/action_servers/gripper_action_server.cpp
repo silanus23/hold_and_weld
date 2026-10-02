@@ -39,10 +39,8 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 // Below this norm a quaternion has no usable direction (an unset Pose has w = 0).
 constexpr double kMinQuaternionNorm = 1e-6;
 
-/**
- * @brief Normalize q in place; false, leaving it untouched, if it has no orientation
- * (a non-finite component or a near-zero norm).
- */
+// Normalize q in place; false, leaving it untouched, if it has no orientation
+// (a non-finite component or a near-zero norm).
 bool normalize_quaternion(geometry_msgs::msg::Quaternion & q)
 {
   const double norm = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);

@@ -38,7 +38,6 @@ namespace application
 {
 
 /**
- * @struct MoveToPoseConfig
  * @brief Configuration parameters for the move to pose action server.
  */
 struct MoveToPoseConfig
@@ -51,7 +50,6 @@ struct MoveToPoseConfig
 };
 
 /**
- * @class MoveToPoseActionServer
  * @brief ROS2 action server for moving robot to target positions in joint or Cartesian space.
  *
  * Plans and executes one goal at a time with MoveIt, in joint space (joint angles for a

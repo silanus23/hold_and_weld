@@ -88,7 +88,7 @@ public:
   /**
    * @brief Check if configuration is near singularity
    * @param q Joint angles [rad]
-   * @param threshold Yoshikawa index threshold (default 0.01)
+   * @param threshold Yoshikawa index threshold
    * @return true if manipulability < threshold
    */
   bool is_near_singularity(

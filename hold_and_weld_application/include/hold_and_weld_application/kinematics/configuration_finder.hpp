@@ -31,9 +31,11 @@ namespace kinematics
 {
 
 /**
- * @brief Tunables for ConfigurationFinder. Every field is exposed in welding.yaml
- * (manipulability_threshold via the top-level key). All must be finite; the
- * constructor rejects non-positive steps/tolerances and negative weights.
+ * @brief Tunables for ConfigurationFinder.
+ *
+ * Every field is exposed in welding.yaml (manipulability_threshold via the top-level key).
+ * All must be finite; the constructor rejects non-positive steps/tolerances and negative
+ * weights.
  */
 struct ConfigurationFinderParams
 {
@@ -73,6 +75,9 @@ std::string to_string(WalkFailure failure);
 
 /**
  * @brief Result of simulating the Pilz path from one start configuration.
+ *
+ * fail_index is the path sample the walk stopped at (0: the start configuration itself).
+ * min_limit_margin and max_joint_step are in [rad].
  */
 struct WalkResult
 {
@@ -86,6 +91,8 @@ struct WalkResult
 
 /**
  * @brief One ranked start configuration for the Pilz weld.
+ *
+ * index is the configuration's position in generation order; ranking uses it to break ties.
  */
 struct Candidate
 {
@@ -100,7 +107,7 @@ struct Candidate
 
 /**
  * @brief Standoff pose used for approach and retract: ref moved approach_offset along
- * its local +Z, same orientation. WelderActionServer::move_to_seam_boundary uses it too.
+ * its local +Z, same orientation.
  * @param ref Seam boundary pose
  * @param approach_offset Standoff distance [m]
  * @return The standoff pose, in ref's frame
@@ -108,11 +115,13 @@ struct Candidate
 Eigen::Isometry3d standoff_pose(const Eigen::Isometry3d & ref, double approach_offset);
 
 /**
- * @brief Chooses the joint configuration Pilz starts a weld from. Pilz LIN/CIRC is
- * deterministic given its start state, so it inherits the start configuration's branch
- * and J4/J6 2*pi copy. This class enumerates the IK solutions at the approach standoff,
- * simulates the path Pilz will execute from each, and ranks the ones that survive; the
- * same seam always yields the same ranking. All poses are in the robot base frame.
+ * @brief Chooses the joint configuration Pilz starts a weld from.
+ *
+ * Pilz LIN/CIRC is deterministic given its start state, so it inherits the start
+ * configuration's branch and J4/J6 2*pi copy. This class enumerates the IK solutions at the
+ * approach standoff, simulates the path Pilz will execute from each, and ranks the ones
+ * that survive; the same seam always yields the same ranking. All poses are in the robot
+ * base frame.
  */
 class ConfigurationFinder
 {
@@ -167,10 +176,12 @@ public:
   std::vector<Vector6d> expand_solution(const Vector6d & q) const;
 
   /**
-   * @brief Densely sampled Cartesian path Pilz will follow: LIN plunge from the approach
-   * pose to seam[0], then LIN (line), CIRC (arc) or the seam poses (anything else).
-   * An "arc" with fewer than 3 poses, or with colinear start/interim/end, has no
-   * circle to follow and is sampled like the dense-waypoint fallback / LIN.
+   * @brief Densely sampled Cartesian path Pilz will follow: LIN plunge from the approach pose
+   * to seam[0], then LIN (line), CIRC (arc) or the seam poses (anything else).
+   *
+   * An "arc" with fewer than 3 poses, or with colinear start/interim/end, has no circle to
+   * follow and is sampled like the dense-waypoint fallback / LIN.
+   *
    * @param seam Seam poses in base frame
    * @param segment_type "line", "arc", or anything else for the dense-waypoint fallback
    * @param approach_pose Standoff pose the plunge starts from (path[0])
@@ -197,11 +208,19 @@ public:
   const ConfigurationFinderParams & params() const {return params_;}
 
 private:
-  /** @brief True if every joint of q is inside its URDF limits. */
+  /**
+   * @brief True if every joint of q is inside its URDF limits.
+   */
   bool within_limits(const Vector6d & q) const;
-  /** @brief Smallest distance of any joint of q to its nearest limit [rad]. */
+
+  /**
+   * @brief Smallest distance of any joint of q to its nearest limit [rad].
+   */
   double limit_margin(const Vector6d & q) const;
-  /** @brief Seed on the other elbow branch: elbow mirrored across shoulder -> wrist. */
+
+  /**
+   * @brief Seed on the other elbow branch: elbow mirrored across shoulder -> wrist.
+   */
   Vector6d elbow_mirror_seed(const Vector6d & q) const;
 
   std::shared_ptr<KinematicsSolver> kin_solver_;

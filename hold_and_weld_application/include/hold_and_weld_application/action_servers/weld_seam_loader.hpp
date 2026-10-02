@@ -81,7 +81,8 @@ inline std::array<double, 3> finite_vector3(const Json & value, const std::strin
 }
 
 /**
- * @brief One JSON pose as an end-effector goal; throws std::invalid_argument if unusable.
+ * @brief One JSON pose as an end-effector goal, with the torch's 180° X flip applied;
+ * throws std::invalid_argument if unusable.
  */
 inline geometry_msgs::msg::Pose json_to_pose(const Json & pose_data, const std::string & what)
 {
@@ -211,7 +212,7 @@ inline WeldSeam parse_seam(
  * a seam left without enough poses (2, or 3 for an arc) or with a bad segment_type is
  * reported in WeldJob::skipped; bad informational fields are ignored. Every
  * such decision gets a line in WeldJob::problems. Each pose's orientation is
- * normalised and gets the torch's 180° X flip (see WeldSeam::poses). Throws
+ * normalised and gets the torch's 180° X flip (see json_to_pose()). Throws
  * std::invalid_argument only when the document itself is unusable (not JSON, or no
  * 'seams' object).
  *

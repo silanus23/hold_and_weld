@@ -55,7 +55,6 @@ namespace application
 {
 
 /**
- * @struct WelderConfig
  * @brief Welder settings from welding.yaml; see validate() for the accepted ranges.
  */
 struct WelderConfig
@@ -88,7 +87,6 @@ struct WelderConfig
 };
 
 /**
- * @class WelderActionServer
  * @brief ROS2 lifecycle action server for controlling welding operations with MoveIt integration.
  *
  * Handles welding seam execution: approach/retract motions, Pilz LIN/CIRC weld motions,
@@ -127,7 +125,11 @@ public:
 
   // Lifecycle callbacks
   /**
-   * @brief Configure lifecycle transition callback.
+   * @brief Validate parameters and welding.yaml, wait for MoveIt and controller_manager, and
+   * set up MoveIt plus, if the approach needs them, the kinematics solvers.
+   *
+   * The weld path itself is loaded per goal.
+   *
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -135,7 +137,8 @@ public:
   on_configure(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Activate lifecycle transition callback.
+   * @brief Start the auto-trigger timer if auto_trigger is set and it has not fired since
+   * configure.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -143,7 +146,7 @@ public:
   on_activate(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Deactivate lifecycle transition callback.
+   * @brief Abort a queued goal and stop a running one, waiting for it to end.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -151,7 +154,7 @@ public:
   on_deactivate(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Cleanup lifecycle transition callback.
+   * @brief Stop the worker and release MoveIt, the action server and the kinematics solvers.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -159,7 +162,7 @@ public:
   on_cleanup(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Shutdown lifecycle transition callback; releases everything via on_cleanup().
+   * @brief Release everything via on_cleanup(); reachable from any primary state.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -179,26 +182,20 @@ public:
 
 private:
   /**
-   * @brief Handle incoming goal requests from action clients.
-   * @param uuid Unique identifier for the goal.
-   * @param goal Goal message containing the trigger welder request.
-   * @return GoalResponse indicating whether the goal is accepted.
+   * @brief Reject a goal while the node is inactive or another is queued or running.
    */
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const TriggerWelder::Goal> goal);
 
   /**
-   * @brief Handle cancellation requests for active goals.
-   * @param goal_handle Handle to the goal being cancelled.
-   * @return CancelResponse indicating whether cancellation is accepted.
+   * @brief Accept a cancel and stop the running job.
    */
   rclcpp_action::CancelResponse handle_cancel(
     const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
   /**
-   * @brief Handle accepted goals by queuing them for the worker thread.
-   * @param goal_handle Handle to the accepted goal.
+   * @brief Queue an accepted goal for the worker thread.
    */
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
@@ -218,7 +215,6 @@ private:
 
   /**
    * @brief Load weld seams from a JSON file.
-   * @param filepath Path to the JSON file containing seam definitions.
    * @return The usable seams plus the skipped/partial ones, best effort (see
    *         parse_weld_seams()); no seams, with the reason logged, if the file cannot be
    *         read or is not a weld JSON document.
@@ -234,7 +230,7 @@ private:
    * @brief Stop the worker thread and join it.
    *
    * Ends a still-queued goal, then joins. Callers must have made the running job end
-   * first (stop(), then wait on execution_future_), or the join waits for it.
+   * first (request_stop()), or the join waits for it.
    */
   void shutdown_worker();
 
@@ -250,32 +246,27 @@ private:
   void send_auto_trigger_goal();
 
   /**
-   * @brief Block until the running job (if any) has returned.
-   * @param timeout How long to wait; none waits forever.
+   * @brief Block until the running job (if any) has returned, waiting at most @p timeout
+   * (none: forever).
    * @return false if the job is still running when the timeout expires.
    */
   bool wait_for_running_job(std::optional<std::chrono::nanoseconds> timeout = std::nullopt);
 
   /**
    * @brief Execute welding operation for a given goal.
-   * @param goal_handle Handle to the goal being executed.
    */
   void execute_weld(const std::shared_ptr<GoalHandleTriggerWelder> goal_handle);
 
   /**
-   * @brief Move the welder arm to the offset boundary pose relative to a seam pose.
-   *
-   * Used for both approach (ref_pose = poses.front()) and retract (ref_pose = poses.back()).
-   * The target is `approach_offset_z` metres from ref_pose along its local Z axis
-   * (kinematics::standoff_pose), with the same orientation.
+   * @brief Move the welder arm to kinematics::standoff_pose(ref_pose, approach_offset_z).
    *
    * Approach with use_configuration_finder: OMPL gets the finder's chosen start
    * configuration as a joint goal. Approach otherwise: OMPL pose goal, optionally
    * checked by the ApproachValidator. Retract: always a plain OMPL pose goal.
    * Only planning is retried; an execution failure ends the move.
    *
-   * @param seam        The weld seam.
-   * @param ref_pose    Boundary pose to offset from (poses.front() or poses.back()), world frame.
+   * @param seam The weld seam, world frame.
+   * @param ref_pose Boundary pose to offset from (poses.front() or poses.back()), world frame.
    * @param is_approach true before the weld, false for the retract after it.
    * @param should_stop Returns true once the job must stop (cancel or transition).
    * @return true if the motion was planned, validated and executed successfully.
@@ -315,7 +306,6 @@ private:
    * @param should_stop Returns true once the job must stop (cancel or transition).
    * @param torch_left_standoff Output; true once any motion was executed (or started),
    *        so a failure leaves the torch on or near the part rather than at the standoff.
-   * @return true if the weld motion was successful, false otherwise.
    */
   bool execute_cartesian_path(
     const WeldSeam & seam,
@@ -367,13 +357,11 @@ private:
     const std::function<bool()> & should_stop);
 
   /**
-   * @brief Back the torch off the part after a failed weld: a straight line (Pilz LIN, or
-   * computeCartesianPath() when use_pilz is off) from the current end-effector pose to its
-   * standoff (approach_offset_z along the tool Z axis), so the next seam's approach does not
-   * start with the torch on the workpiece.
-   * @param seam_id Seam id, for log messages.
-   * @param should_stop Returns true once the job must stop (cancel or transition).
-   * @return true if the retreat was executed.
+   * @brief Back the torch off the part after a failed weld, so the next seam's approach does
+   * not start with the torch on the workpiece.
+   *
+   * A straight line (Pilz LIN, or computeCartesianPath() when use_pilz is off) from the
+   * current end-effector pose to its standoff (approach_offset_z along the tool Z axis).
    */
   bool retreat_from_part(const std::string & seam_id, const std::function<bool()> & should_stop);
 

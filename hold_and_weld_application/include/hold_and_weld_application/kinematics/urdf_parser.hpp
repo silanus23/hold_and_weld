@@ -80,10 +80,11 @@ struct ParsedChain
 };
 
 /**
- * @brief URDF parser for 6-DOF welder robots with fixed tool attachments: exactly 6
- * revolute (or continuous) joints followed by a chain of fixed joints forming the tool
- * (e.g., torch). Accumulates consecutive fixed joints into one transform. Continuous
- * joints get limits [-pi, pi].
+ * @brief URDF parser for 6-DOF welder robots with fixed tool attachments.
+ *
+ * Expects exactly 6 revolute (or continuous) joints followed by a chain of fixed joints
+ * forming the tool (e.g., torch). Accumulates consecutive fixed joints into one transform.
+ * Continuous joints get limits [-pi, pi].
  */
 class URDFParser {
 public:
@@ -98,9 +99,11 @@ public:
   ~URDFParser();
 
   /**
-   * @brief Extract joint chain from URDF file (running xacro first for *.xacro files):
-   * 6 actuated (revolute) joints with their local transforms, plus the accumulated
+   * @brief Extract the joint chain from a URDF file, running xacro first for *.xacro files.
+   *
+   * Yields 6 actuated (revolute) joints with their local transforms, plus the accumulated
    * tool transform from fixed joints after the last actuated joint.
+   *
    * @param urdf_path Path to URDF or xacro file (supports package://)
    * @param base_link Starting link name (e.g., "robot2_base_link")
    * @param tip_link End link name/TCP (e.g., "robot2_wire_tip")
@@ -112,9 +115,11 @@ public:
     const std::string & tip_link);
 
   /**
-   * @brief Extracts a kinematic chain directly from a raw URDF XML string, bypassing the
-   * filesystem. Designed to consume the 'robot_description' parameter directly from the
-   * ROS 2 parameter server.
+   * @brief Extract the joint chain from a raw URDF XML string, bypassing the filesystem.
+   *
+   * Designed to consume the 'robot_description' parameter directly from the ROS 2 parameter
+   * server.
+   *
    * @param urdf_string The raw XML string containing the URDF robot description.
    * @param base_link The name of the root link of the desired kinematic chain.
    * @param tip_link The name of the end-effector link of the desired kinematic chain.
@@ -127,18 +132,12 @@ public:
 
 private:
   /**
-   * @brief Throw std::invalid_argument if either link name is empty
-   * @param base_link Base link name
-   * @param tip_link Tip link name
+   * @brief Throw std::invalid_argument if either link name is empty.
    */
   static void validate_link_names(const std::string & base_link, const std::string & tip_link);
 
   /**
-   * @brief Build, extract, and validate the base -> tip chain of a parsed model
-   * @param model Parsed URDF model
-   * @param base_link Base link name
-   * @param tip_link Tip link name
-   * @return Validated ParsedChain
+   * @brief Build, extract, and validate the base -> tip chain of a parsed model.
    */
   static ParsedChain chain_from_model(
     const urdf::ModelInterfaceSharedPtr & model,
@@ -146,25 +145,17 @@ private:
     const std::string & tip_link);
 
   /**
-   * @brief Resolve package:// URI to absolute filesystem path
-   * @param path Path string (may be package:// URI or absolute path)
-   * @return Resolved absolute path
+   * @brief Resolve a path that may be a package:// URI or absolute to an absolute path.
    */
   static std::string resolve_package_path(const std::string & path);
 
   /**
-   * @brief Load and parse URDF file
-   * @param urdf_path Path to URDF file
-   * @return Parsed URDF model
+   * @brief Load and parse a URDF file.
    */
   static urdf::ModelInterfaceSharedPtr load_urdf(const std::string & urdf_path);
 
   /**
-   * @brief Build kinematic chain from base to tip link
-   * @param model Parsed URDF model
-   * @param base_link Base link name
-   * @param tip_link Tip link name
-   * @return Ordered vector of links from base to tip
+   * @brief Build the link chain, ordered base to tip.
    */
   static std::vector<urdf::LinkConstSharedPtr> build_link_chain(
     const urdf::ModelInterfaceSharedPtr & model,
@@ -172,44 +163,33 @@ private:
     const std::string & tip_link);
 
   /**
-   * @brief Extract actuated joints from link chain, accumulating fixed joint transforms
+   * @brief Extract actuated joints from the link chain, accumulating fixed joint transforms
    * into the next actuated joint's origin transform.
-   * @param link_chain Ordered vector of links
-   * @return Vector of actuated joint information
    */
   static std::vector<JointInfo> extract_joints_from_chain(
     const std::vector<urdf::LinkConstSharedPtr> & link_chain);
 
   /**
-   * @brief Extract tool transform from fixed joints after last actuated joint (typically
-   * the welding torch).
-   * @param link_chain Ordered vector of links
-   * @param actuated_joints Vector of actuated joints (to find last one)
-   * @return Accumulated tool transform
+   * @brief Accumulate the fixed joints after the last actuated joint (typically the
+   * welding torch) into one tool transform.
    */
   static Eigen::Isometry3d extract_tool_transform(
     const std::vector<urdf::LinkConstSharedPtr> & link_chain,
     const std::vector<JointInfo> & actuated_joints);
 
   /**
-   * @brief Convert URDF pose to Eigen transform
-   * @param pose URDF pose (position + quaternion)
-   * @return Eigen isometry (4x4 homogeneous transform)
+   * @brief Convert a URDF pose to an Eigen transform.
    */
   static Eigen::Isometry3d urdf_pose_to_eigen(const urdf::Pose & pose);
 
   /**
-   * @brief Validate extracted joint chain: exactly 6 revolute joints, normalized axes,
+   * @brief Validate the extracted joint chain: exactly 6 revolute joints, normalized axes,
    * and finite limits with q_min < q_max.
-   * @param joints Vector of joint information to validate
    */
   static void validate_chain(const std::vector<JointInfo> & joints);
 
   /**
-   * @brief Parses a raw URDF XML string into a urdf::Model object in memory.
-   *
-   * @param urdf_string The raw XML string containing the URDF robot description.
-   * @return urdf::ModelInterfaceSharedPtr A shared pointer to the parsed URDF model.
+   * @brief Parse a raw URDF XML string into an in-memory model.
    */
   static urdf::ModelInterfaceSharedPtr load_urdf_from_string(const std::string & urdf_string);
 };

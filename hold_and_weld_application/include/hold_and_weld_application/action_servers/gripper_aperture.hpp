@@ -35,7 +35,7 @@ struct FingerJointBounds
 };
 
 /**
- * @brief Finger positions commanded for the open and closed gripper states.
+ * @brief Finger joint positions [m] commanded for the open and closed gripper states.
  */
 struct GripperApertures
 {

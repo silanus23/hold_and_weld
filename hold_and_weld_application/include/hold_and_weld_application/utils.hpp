@@ -32,7 +32,6 @@ namespace hold_and_weld
 {
 
 /**
- * @struct WeldSeam
  * @brief One seam of a weld path JSON, as parsed by parse_weld_seams().
  *
  * Every position is in the world (planning) frame, in metres.
@@ -111,13 +110,13 @@ inline bool is_valid_auto_trigger_delay(double delay_sec)
  * @brief Wait for a ROS2 service to become available with a timeout and periodic logging.
  *
  * Polls the service once per second. Logs a warning every 10 seconds if still waiting.
- * Returns false (with an ERROR log) if the timeout is exceeded or rclcpp is shut down.
+ * A timeout_sec <= 0 returns false at once. Every false return logs an ERROR.
  *
  * @tparam ClientT rclcpp::Client<ServiceT> type
- * @param client        The service client to wait on
- * @param service_name  Human-readable name for log messages
- * @param logger        ROS logger to use
- * @param timeout_sec   Maximum seconds to wait (default 60)
+ * @param client The service client to wait on
+ * @param service_name Human-readable name for log messages
+ * @param logger ROS logger to use
+ * @param timeout_sec Maximum seconds to wait
  * @return true if the service became available, false on timeout or shutdown
  */
 template<typename ClientT>
@@ -155,13 +154,13 @@ bool wait_for_service(
  * @brief Wait for a ROS2 action server to become available with a timeout and periodic logging.
  *
  * Polls the action server once per second. Logs a warning every 10 seconds if still waiting.
- * Returns false (with an ERROR log) if the timeout is exceeded or rclcpp is shut down.
+ * A timeout_sec <= 0 returns false at once. Every false return logs an ERROR.
  *
  * @tparam ActionClientT rclcpp_action::Client<ActionT> type
- * @param client        The action client to wait on
- * @param server_name   Human-readable name for log messages
- * @param logger        ROS logger to use
- * @param timeout_sec   Maximum seconds to wait (default 60)
+ * @param client The action client to wait on
+ * @param server_name Human-readable name for log messages
+ * @param logger ROS logger to use
+ * @param timeout_sec Maximum seconds to wait
  * @return true if the action server became available, false on timeout or shutdown
  */
 template<typename ActionClientT>
@@ -196,9 +195,12 @@ bool wait_for_action_server(
 }
 
 /**
- * @brief Controller name owning an action topic: the segment before the action name,
- *        so namespaces are skipped, e.g.
- *        "/cell/robot1_gripper_controller/follow_joint_trajectory" -> "robot1_gripper_controller".
+ * @brief Controller name owning an action topic: the segment before the action name, so
+ * namespaces are skipped.
+ *
+ * E.g. "/cell/robot1_gripper_controller/follow_joint_trajectory" ->
+ * "robot1_gripper_controller".
+ *
  * @param action_topic Action topic of a controller, "/<ns...>/<controller>/<action>".
  * @return The controller name, or empty if the topic has no controller segment.
  */

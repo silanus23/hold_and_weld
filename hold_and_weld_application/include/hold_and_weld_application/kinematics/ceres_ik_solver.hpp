@@ -32,10 +32,12 @@ namespace kinematics
 {
 
 /**
- * @brief Ceres cost functor for IK optimization. Residuals 0-2: position error (x, y, z)
- * [m]. Residuals 3-5: weighted orientation error, the vector part of the shortest-path
- * error quaternion (axis * sin(theta/2)). Residuals 6-11: seed penalty, a restoring force
- * that keeps the solution near the initial guess for trajectory continuity.
+ * @brief Ceres cost functor for IK optimization.
+ *
+ * Residuals 0-2: position error (x, y, z) [m]. Residuals 3-5: weighted orientation error,
+ * the vector part of the shortest-path error quaternion (axis * sin(theta/2)). Residuals
+ * 6-11: seed penalty, a restoring force that keeps the solution near the initial guess for
+ * trajectory continuity.
  */
 class IKCostFunctor
 {
@@ -77,12 +79,13 @@ private:
 };
 
 /**
- * @brief Fast inverse kinematics solver using Ceres optimization. Warm-starts for fast
- * convergence (1-5ms with good seed), enforces hard joint limits via parameter bounds,
- * and applies a seed penalty for configuration continuity. Designed for validation
- * pipelines where IK is called sequentially along a trajectory, each solution seeding
- * the next. solve() changes no members, so concurrent solves are safe as long as no
- * thread calls a setter at the same time.
+ * @brief Inverse kinematics solver using Ceres optimization.
+ *
+ * Warm-starts for fast convergence, enforces hard joint limits via parameter bounds, and
+ * applies a seed penalty for configuration continuity. Designed for validation pipelines
+ * where IK is called sequentially along a trajectory, each solution seeding the next.
+ * solve() changes no members, so concurrent solves are safe as long as no thread calls a
+ * setter at the same time.
  */
 class CeresIKSolver
 {
@@ -92,15 +95,14 @@ public:
   /**
    * @brief Construct IK solver
    * @param fk_solver Forward kinematics solver (shared; must not be null)
-   * @param rotation_weight Weight for orientation error vs position error (default 1.0)
+   * @param rotation_weight Weight for orientation error vs position error
    */
   explicit CeresIKSolver(
     std::shared_ptr<KinematicsSolver> fk_solver,
     double rotation_weight = 1.0);
 
   /**
-   * @brief Solve inverse kinematics with warm start, minimizing position + orientation
-   * error plus a seed penalty for configuration continuity, subject to hard joint limits.
+   * @brief Solve IK warm-started from @p q_seed.
    * @param target_pose Desired TCP pose in base frame
    * @param q_seed Initial guess for joint angles (warm start, Eigen vector). May lie
    *               slightly outside the joint limits; the solution never does.

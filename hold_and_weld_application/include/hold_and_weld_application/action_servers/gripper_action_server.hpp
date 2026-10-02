@@ -51,7 +51,6 @@ namespace application
 {
 
 /**
- * @struct GripperJob
  * @brief One pick-and-place job from the positions YAML.
  *
  * Poses are end-effector goals for the arm group, in MoveIt's planning frame.
@@ -66,7 +65,6 @@ struct GripperJob
 };
 
 /**
- * @class GripperActionServer
  * @brief ROS2 lifecycle action server for controlling gripper operations with MoveIt integration.
  *
  * Runs the pick-and-place pipeline (open, approach, pick, close, attach, retract, place)
@@ -108,7 +106,11 @@ public:
 
   // Lifecycle callbacks
   /**
-   * @brief Configure lifecycle transition callback.
+   * @brief Validate parameters, wait for MoveIt and controller_manager, set up MoveIt and
+   * load the job.
+   *
+   * A job that fails to load does not fail the transition; goals are rejected instead.
+   *
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -116,7 +118,8 @@ public:
   on_configure(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Activate lifecycle transition callback.
+   * @brief Start the auto-trigger timer if auto_trigger is set, a job is loaded and it has
+   * not fired since configure.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -124,7 +127,7 @@ public:
   on_activate(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Deactivate lifecycle transition callback.
+   * @brief Abort a queued goal and stop a running one, waiting for it to end.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -132,7 +135,7 @@ public:
   on_deactivate(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Cleanup lifecycle transition callback.
+   * @brief Stop the worker and release MoveIt, the action server and the clients.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -140,7 +143,7 @@ public:
   on_cleanup(const rclcpp_lifecycle::State & state);
 
   /**
-   * @brief Shutdown lifecycle transition callback.
+   * @brief Release everything via on_cleanup(); reachable from any primary state.
    * @param state Current lifecycle state.
    * @return Transition callback result.
    */
@@ -162,26 +165,21 @@ private:
   static constexpr int kGripperResultMarginSec = 8;
 
   /**
-   * @brief Handle incoming goal requests from action clients.
-   * @param uuid Unique identifier for the goal.
-   * @param goal Goal message containing the trigger gripper request.
-   * @return GoalResponse indicating whether the goal is accepted.
+   * @brief Reject a goal while the node is inactive, another is queued or running, or no
+   * job is loaded.
    */
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const TriggerGripper::Goal> goal);
 
   /**
-   * @brief Handle cancellation requests for active goals.
-   * @param goal_handle Handle to the goal being cancelled.
-   * @return CancelResponse indicating whether cancellation is accepted.
+   * @brief Accept a cancel and stop the running job.
    */
   rclcpp_action::CancelResponse handle_cancel(
     const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
-   * @brief Handle accepted goals by queuing them for the persistent worker thread.
-   * @param goal_handle Handle to the accepted goal.
+   * @brief Queue an accepted goal for the worker thread.
    */
   void handle_accepted(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
@@ -210,23 +208,19 @@ private:
   void request_stop();
 
   /**
-   * @brief Block until the running job (if any) has returned.
-   * @param timeout How long to wait; none waits forever.
+   * @brief Block until the running job (if any) has returned, waiting at most @p timeout
+   * (none: forever).
    * @return false if the job is still running when the timeout expires.
    */
   bool wait_for_running_job(std::optional<std::chrono::nanoseconds> timeout = std::nullopt);
 
   /**
    * @brief Execute the gripper job for a given goal (with action server feedback).
-   * @param goal_handle Handle to the goal being executed.
    */
   void execute_job(const std::shared_ptr<GoalHandleTriggerGripper> goal_handle);
 
   /**
    * @brief Publish feedback for the current goal.
-   * @param goal_handle Handle to the goal.
-   * @param step Current step description.
-   * @param percentage Completion percentage.
    */
   void publish_feedback(
     const std::shared_ptr<GoalHandleTriggerGripper> goal_handle,
@@ -234,11 +228,9 @@ private:
     float percentage);
 
   /**
-   * @brief Execute the pick-and-place sequence.
-   * @param feedback_callback Called at each step with (step_name, completion_percentage).
-   * @param should_stop Returns true once the job must stop (cancel or transition); checked
-   *        before every step and every retry, so no new motion starts after it.
-   * @return true if the entire job completed successfully, false otherwise.
+   * @brief Execute the pick-and-place sequence, reporting (step, percentage) through
+   * @p feedback_callback and checking @p should_stop before every step and retry, so no
+   * new motion starts after a cancel or transition.
    */
   bool run_job(
     const std::function<void(const std::string &, float)> & feedback_callback,
@@ -246,7 +238,6 @@ private:
 
   /**
    * @brief Load the job and gripper positions from the positions YAML.
-   * @param yaml_path Path to the YAML configuration file.
    * @return false (with the reason logged) if the file or any pose in it is invalid;
    *         the previously loaded job is then cleared, never half-overwritten.
    */
@@ -270,7 +261,7 @@ private:
    *
    * The gripper spawner can still be loading when a job starts, and a configured
    * but inactive controller reports goals succeeded without moving the fingers.
-   * @param should_stop Returns true once the job must stop; ends the wait early.
+   *
    * @return false (with the reason logged) if it is not active within
    *         controller_timeout_sec, or the job was stopped.
    */
@@ -290,7 +281,6 @@ private:
    * @param pose Target end-effector pose, planning frame.
    * @param step_name Name of the motion step for logging/feedback.
    * @param should_stop Returns true once the job must stop; checked before each retry.
-   * @return true if motion was successful, false otherwise.
    */
   bool move_to_pose(
     const geometry_msgs::msg::Pose & pose, const std::string & step_name,
@@ -299,21 +289,16 @@ private:
   // Collision objects
   /**
    * @brief Attach an object to the gripper in the planning scene.
-   * @param object_id Identifier of the object to attach.
-   * @return true if attachment was successful, false otherwise.
    */
   bool attach_object(const std::string & object_id);
 
   /**
    * @brief Detach an object from the gripper in the planning scene.
-   * @param object_id Identifier of the object to detach.
-   * @return true if detachment was successful, false otherwise.
    */
   bool detach_object(const std::string & object_id);
 
   /**
-   * @brief Send a planning-scene diff through /apply_planning_scene.
-   * @param diff Scene diff; is_diff must be set.
+   * @brief Send a planning-scene diff (is_diff must be set) through /apply_planning_scene.
    * @return true once MoveIt has applied it, false if the service is unavailable, times out
    *         or reports failure.
    */
@@ -321,8 +306,6 @@ private:
 
   /**
    * @brief Allow collision between the held object and base_link (workpiece) for placement.
-   * @param target_id Planning-scene id of the held object.
-   * @return true if collision matrix was updated successfully, false otherwise.
    */
   bool allow_collision_for_placement(const std::string & target_id);
 
