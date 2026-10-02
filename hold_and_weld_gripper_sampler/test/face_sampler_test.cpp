@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -909,6 +911,42 @@ TEST(FaceSamplerTest, BoundingWireIsNullForEmptySamples)
   ASSERT_FALSE(face.IsNull());
 
   EXPECT_TRUE(bounding_wire_in_uv(face, {}).IsNull());
+}
+
+TEST(FaceSamplerTest, OversizedPhysicalGridReportsUnitsAndAllocationBeforeReserving)
+{
+  const auto face = top_planar_face(BRepPrimAPI_MakeBox(600.0, 400.0, 250.0).Shape());
+  FaceSamplingConfig config;
+  config.sample_density = 0.005;
+  try {
+    sample_face_region(face, config);
+    FAIL() << "Oversized grid was accepted";
+  } catch (const std::runtime_error & e) {
+    const std::string message = e.what();
+    EXPECT_NE(message.find("grid="), std::string::npos);
+    EXPECT_NE(message.find("estimated sample bytes="), std::string::npos);
+    EXPECT_NE(message.find("STEP millimetres versus ROS metres"), std::string::npos);
+  }
+}
+
+TEST(FaceSamplerTest, RejectsOverflowingUniformGridAndInvalidSpacing)
+{
+  const auto face = top_planar_face(BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape());
+  FaceSamplingConfig config;
+  config.grid_steps = std::numeric_limits<int>::max();
+  EXPECT_THROW(sample_face_region(face, config), std::runtime_error);
+  config.grid_steps = 2000;
+  EXPECT_THROW(sample_face_region(face, config), std::runtime_error);
+  config.grid_steps = 0;
+  for (double density : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+    std::numeric_limits<double>::quiet_NaN()})
+  {
+    config.sample_density = density;
+    EXPECT_THROW(sample_face_region(face, config), std::runtime_error);
+  }
+  config.sample_density = 1e-9;
+  const auto huge_face = top_planar_face(BRepPrimAPI_MakeBox(600.0, 400.0, 250.0).Shape());
+  EXPECT_THROW(sample_face_region(huge_face, config), std::runtime_error);
 }
 
 int main(int argc, char ** argv)

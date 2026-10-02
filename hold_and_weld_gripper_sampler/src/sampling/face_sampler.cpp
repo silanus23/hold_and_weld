@@ -19,6 +19,8 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -49,6 +51,18 @@ namespace
 {
 
 const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
+
+// Bound the full Cartesian grid, not just individual refinement tiles.
+// One million FaceSamples occupy roughly 100 MiB, before classifier overhead.
+constexpr size_t kMaxFaceSamples = 1000000;
+
+[[noreturn]] void reject_sampling(const std::string & detail)
+{
+  const std::string message = "Face sampling refused: " + detail +
+    "; check geometry units (STEP millimetres versus ROS metres) and sampling spacing";
+  RCLCPP_ERROR(logger_, "%s", message.c_str());
+  throw std::runtime_error(message);
+}
 
 constexpr int kMaxKnotSpans = 256;
 constexpr int kTileProbeSteps = 3;
@@ -114,6 +128,12 @@ void refine_span(
 {
   const double scale = span_scale(surf, along_u, lo, hi, other_min, other_max);
   const double wanted = (hi - lo) * scale / density;
+  if (!std::isfinite(wanted) || wanted > static_cast<double>(kMaxFaceSamples)) {
+    std::ostringstream detail;
+    detail << "axis requests " << wanted << " cells at spacing " << density
+           << " m, limit=" << kMaxFaceSamples;
+    reject_sampling(detail.str());
+  }
   const int cells = std::max(1, static_cast<int>(std::ceil(wanted)));
 
   if (cells > max_cells && depth < kMaxRefineDepth) {
@@ -129,6 +149,9 @@ void refine_span(
   }
 
   // Clamped, so hitting the depth ceiling costs fidelity rather than memory.
+  if (pieces->size() >= kMaxFaceSamples) {
+    reject_sampling("too many axis refinement tiles");
+  }
   pieces->emplace_back(hi, std::min(cells, max_cells));
 }
 
@@ -161,6 +184,9 @@ SampleAxis build_axis(
   SampleAxis axis;
   double start = lo;
   for (const auto & [end, cells] : pieces) {
+    if (axis.coords.size() + static_cast<size_t>(cells) + 1 > kMaxFaceSamples) {
+      reject_sampling("adaptive axis exceeds sample limit");
+    }
     const double width = (end - start) / cells;
     for (int i = 0; i < cells; ++i) {
       axis.coords.push_back(cell_centres ? start + width * (i + 0.5) : start + width * i);
@@ -184,6 +210,9 @@ SampleAxis build_axis(
 SampleAxis uniform_axis(double lo, double hi, int steps, bool cell_centres)
 {
   SampleAxis axis;
+  if (static_cast<size_t>(steps) >= kMaxFaceSamples) {
+    reject_sampling("grid_steps=" + std::to_string(steps) + " exceeds axis limit");
+  }
   const double width = (hi - lo) / steps;
   const int count = cell_centres ? steps : steps + 1;
 
@@ -249,6 +278,11 @@ std::vector<FaceSample> sample_face_region(
   FaceSamplingGrid * grid_out)
 {
   std::vector<FaceSample> samples;
+  if (config.grid_steps < 0 || (config.grid_steps == 0 &&
+    (!std::isfinite(config.sample_density) || config.sample_density <= 0.0)))
+  {
+    reject_sampling("spacing must be finite and positive, grid_steps must be nonnegative");
+  }
 
   Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
   if (surf.IsNull()) {
@@ -259,6 +293,11 @@ std::vector<FaceSample> sample_face_region(
   Standard_Real u_min, u_max, v_min, v_max;
   BRepTools::UVBounds(face, u_min, u_max, v_min, v_max);
 
+  if (!std::isfinite(u_min) || !std::isfinite(u_max) ||
+    !std::isfinite(v_min) || !std::isfinite(v_max))
+  {
+    reject_sampling("non-finite UV bounds");
+  }
   const double u_range = u_max - u_min;
   const double v_range = v_max - v_min;
   if (u_range <= 0.0 || v_range <= 0.0) {
@@ -286,6 +325,19 @@ std::vector<FaceSample> sample_face_region(
   if (u_axis.coords.empty() || v_axis.coords.empty()) {
     RCLCPP_WARN(logger_, "sample_face_region: no sample positions produced, skipping");
     return samples;
+  }
+
+  const size_t u_size = u_axis.coords.size();
+  const size_t v_size = v_axis.coords.size();
+  // Division avoids overflowing the product before checking it.
+  if (u_size > kMaxFaceSamples / v_size) {
+    std::ostringstream detail;
+    detail << "grid=" << u_size << " x " << v_size
+           << ", estimated sample bytes=" << static_cast<double>(u_size) * v_size * sizeof(FaceSample)
+           << ", limit=" << kMaxFaceSamples << " points, spacing=" << config.sample_density
+           << " m, grid_steps=" << config.grid_steps
+           << ", UV=[" << u_min << ", " << u_max << "] x [" << v_min << ", " << v_max << "]";
+    reject_sampling(detail.str());
   }
 
   if (grid_out != nullptr) {

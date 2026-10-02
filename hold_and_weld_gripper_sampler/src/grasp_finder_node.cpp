@@ -314,9 +314,9 @@ int run(const std::vector<std::string> & args)
     skipped.insert(
       skipped.end(), result.skipped_constraints.begin(), result.skipped_constraints.end());
     result.skipped_constraints = skipped;
-    if (skipped.empty()) {
+    if (skipped.empty() && result.success) {
       RCLCPP_INFO(logger, "All constraints and obstacles enforced");
-    } else {
+    } else if (!skipped.empty()) {
       std::string joined;
       for (const auto & entry : skipped) {
         joined += "\n  - " + entry;

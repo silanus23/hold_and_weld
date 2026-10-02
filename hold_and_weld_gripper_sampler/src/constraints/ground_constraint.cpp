@@ -15,6 +15,7 @@
 #include "hold_and_weld_gripper_sampler/constraints/ground_constraint.hpp"
 
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -56,7 +57,14 @@ void GroundConstraint::analyze_constraints(const geometry::Topology & topology)
     const TopoDS_Face & face = all_surfaces[i].face;
 
     std::vector<sampling::FaceSample> resting_samples;
-    const double support = measure_ground_support(face, &resting_samples);
+    double support;
+    try {
+      support = measure_ground_support(face, &resting_samples);
+    } catch (const std::exception & e) {
+      throw std::runtime_error(
+              "Ground contact sampling failed on surface " + std::to_string(surface_id) +
+              " (spacing=" + std::to_string(config_.sample_density) + " m): " + e.what());
+    }
 
     if (support < 1e-9) {
       continue;
