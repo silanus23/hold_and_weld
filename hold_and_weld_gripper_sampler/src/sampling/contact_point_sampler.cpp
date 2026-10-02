@@ -359,7 +359,6 @@ bool ContactPointSampler::find_opposing_contact(
     return false;
   }
 
-  // Helper: shoot a ray from contact_1 in direction dir, return closest hit on face_2.
   auto try_ray = [&](const gp_Dir & dir) -> bool {
       IntCurvesFace_ShapeIntersector intersector;
       intersector.Load(face_2, 1e-6);

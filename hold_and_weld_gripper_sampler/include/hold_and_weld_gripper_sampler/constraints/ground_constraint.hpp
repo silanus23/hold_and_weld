@@ -34,12 +34,15 @@ namespace constraints
 {
 
 /**
- * @brief The ground the workpiece rests on: a finite, axis-aligned footprint.
+ * @brief The ground the workpiece rests on: a finite, axis-aligned footprint
  *
  * A weld setup is a bounded thing, so the ground is modelled as a rectangle of
  * size_x by size_y centred on (center_x, center_y) at height surface_z rather
  * than as an infinite plane. Parts outside that rectangle are over open floor
  * and are not supported by it.
+ *
+ * GraspFinder fills it from GraspFinderConfig's ground_* and kissing_* fields. All
+ * lengths are in metres.
  */
 struct GroundConfig
 {
@@ -48,14 +51,17 @@ struct GroundConfig
   double center_y = 0.0;
   double size_x = 10.0;
   double size_y = 10.0;
+  /** A surface sample within this distance of surface_z counts as resting on the ground [m]. */
   double contact_band = 0.005;
+  /** Resting area fraction above which a surface is banned outright, in [0, 1]. */
   double support_threshold = 0.8;
+  /** Spacing of the face samples that measure the resting fraction [m]. */
   double sample_density = 0.005;
   double collision_tolerance = 1e-6;
 };
 
 /**
- * @brief Decides which workpiece surfaces rest on the ground, and whether a gripper pose hits it.
+ * @brief Decides which workpiece surfaces rest on the ground, and whether a gripper pose hits it
  *
  * Mostly-resting surfaces are banned outright, partly-resting ones get an exclusion wire
  * instead (same split as the kissing-surface constraint). intersects_ground() is the
@@ -65,20 +71,25 @@ class GroundConstraint
 {
 public:
   /**
-   * @brief Construct a ground constraint.
+   * @brief Construct a ground constraint
    *
    * @param config Ground footprint, contact band, and thresholds
    */
   explicit GroundConstraint(const GroundConfig & config);
 
   /**
-   * @brief Set the FCL checker used for pose-level ground queries.
+   * @brief Set the FCL checker used for pose-level ground queries
+   *
+   * Required: without a valid checker every pose is rejected.
+   *
    * @param fcl_checker Checker holding the gripper and, if configured, the ground body
    */
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
 
   /**
-   * @brief Classify every surface of the primary shape against the ground.
+   * @brief Classify every surface of the primary shape against the ground
+   *
+   * Must be called before get_banned_surface_ids() and get_sample_areas().
    *
    * @param topology Primary shape topology
    */
@@ -99,7 +110,7 @@ public:
   std::vector<core::SampleArea> get_sample_areas() const;
 
   /**
-   * @brief Check if the gripper at a pose hits the ground.
+   * @brief Check if the gripper at a pose hits the ground
    *
    * Uses GroundConfig::collision_tolerance. Returns false when the checker has
    * no ground body, and true (conservative reject) when no checker is set.
@@ -118,7 +129,8 @@ public:
   std::string get_name() const;
 
   /**
-   * @brief True if the point lies within the ground footprint in XY.
+   * @brief True if the point lies within the ground footprint in XY
+   *
    * @param x World-frame X coordinate [m]
    * @param y World-frame Y coordinate [m]
    * @return True if (x, y) falls inside the configured footprint
@@ -127,7 +139,7 @@ public:
 
 private:
   /**
-   * @brief Area fraction of a face resting on the ground.
+   * @brief Area fraction of a face resting on the ground
    *
    * @param face Face to measure
    * @param resting_samples Optional output: the samples found to be resting

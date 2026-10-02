@@ -211,14 +211,9 @@ TopoDS_Shape ShapeLoader::load_from_stl(
   RCLCPP_DEBUG(logger_, "STL loaded: %d triangles, %d nodes",
     triangulation->NbTriangles(), triangulation->NbNodes());
 
-  // Build shape from triangulation using sewing for better performance.
-  // Sewing attempts to connect adjacent faces to create a manifold shell/solid.
   BRepBuilderAPI_Sewing sewing(config_.linear_deflection);
-  // Non-manifold mode allows edges shared by more than two faces
   sewing.SetNonManifoldMode(Standard_True);
 
-  // Create faces from triangles and add to sewing.
-  // Note: OpenCASCADE uses 1-based indexing for triangulation data.
   for (int i = 1; i <= triangulation->NbTriangles(); ++i) {
     const Poly_Triangle & tri = triangulation->Triangle(i);
     Standard_Integer n1, n2, n3;

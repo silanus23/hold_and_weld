@@ -38,7 +38,9 @@ namespace sampling
 {
 
 /**
- * @brief Configuration for contact point sampling.
+ * @brief Configuration for contact point sampling
+ *
+ * Mirrors the sampling.* keys; see PARAMS.md.
  */
 struct SamplingConfig
 {
@@ -47,8 +49,9 @@ struct SamplingConfig
   double max_gripper_opening = 0.15;
   double min_angle_deg = 160.0;
   double max_angle_deg = 180.0;
+  /** In samples/cm², unlike the other densities, which are spacings in metres. */
   double normal_sample_density = 1.0;
-  // Bounds on the per-face normal sample count that normal_sample_density gives.
+  /** Bounds on the per-face normal sample count that normal_sample_density gives. */
   int min_normal_samples = 10;
   int max_normal_samples = 100;
   double alignment_threshold = 0.95;
@@ -56,7 +59,7 @@ struct SamplingConfig
 };
 
 /**
- * @brief A pair of opposing surfaces that are candidates for grasping.
+ * @brief A pair of opposing surfaces that are candidates for grasping
  */
 struct SurfacePair
 {
@@ -69,23 +72,28 @@ struct SurfacePair
 };
 
 /**
- * @brief A pair of contact points on opposing surfaces with associated geometry.
+ * @brief A pair of contact points on opposing surfaces with associated geometry
  */
 struct ContactPair
 {
+  /** First contact point in the world frame [m]. */
   gp_Pnt contact_1;
+  /** Second contact point in the world frame [m]. */
   gp_Pnt contact_2;
   int surface_id_1 = -1;
   int surface_id_2 = -1;
   TopoDS_Face face_1;
   TopoDS_Face face_2;
+  /** Outward surface normal at contact_1. */
   gp_Vec normal_1;
+  /** Outward surface normal at contact_2. */
   gp_Vec normal_2;
+  /** Distance between the contacts [m]. */
   double grip_distance = 0.0;
 };
 
 /**
- * @brief Per-run counts of discarded contact point candidates, by reason.
+ * @brief Per-run counts of discarded contact point candidates, by reason
  *
  * Populated by every call to generate_contact_pairs; reflects the most recent call.
  */
@@ -102,7 +110,7 @@ struct RejectionStats
 };
 
 /**
- * @brief Samples antipodal contact point pairs on opposing surfaces.
+ * @brief Samples antipodal contact point pairs on opposing surfaces
  *
  * For each valid surface pair, samples points on one surface and projects
  * them onto the opposing surface to find valid gripper contact locations.
@@ -120,7 +128,7 @@ public:
   explicit ContactPointSampler(const SamplingConfig & config = SamplingConfig{});
 
   /**
-   * @brief Generate antipodal contact point pairs from valid surfaces.
+   * @brief Generate antipodal contact point pairs from valid surfaces
    *
    * @param topology Primary shape topology
    * @param valid_surface_ids Surface IDs eligible for sampling
@@ -133,7 +141,7 @@ public:
     const std::vector<core::SampleArea> & exclusion_areas) const;
 
   /**
-   * @brief Rejection counters from the most recent generate_contact_pairs call.
+   * @brief Rejection counters from the most recent generate_contact_pairs call
    *
    * All counters are zero before the first call.
    *
@@ -143,7 +151,7 @@ public:
 
 private:
   /**
-   * @brief Outcome of validating a candidate contact pair.
+   * @brief Outcome of validating a candidate contact pair
    */
   enum class PairingVerdict
   {
@@ -153,12 +161,7 @@ private:
   };
 
   /**
-   * @brief Find surface pairs whose normals are antiparallel within [min_angle_deg, max_angle_deg].
-   *
-   * @param topology Primary shape topology
-   * @param valid_surface_ids Surfaces to pair
-   * @param exclusion_areas Exclusion wires for normal validation
-   * @return Valid surface pairs
+   * @brief Find surface pairs whose normals are antiparallel within [min_angle_deg, max_angle_deg]
    */
   std::vector<SurfacePair> find_surface_pairs(
     const geometry::Topology & topology,
@@ -166,12 +169,7 @@ private:
     const std::vector<core::SampleArea> & exclusion_areas) const;
 
   /**
-   * @brief Sample points on a face, respecting exclusion areas.
-   *
-   * @param face Face to sample
-   * @param surface_id Surface ID for exclusion lookup
-   * @param exclusion_areas Exclusion wires
-   * @return Sampled 3D points
+   * @brief Sample points on a face, respecting exclusion areas
    */
   std::vector<gp_Pnt> sample_surface(
     const TopoDS_Face & face,
@@ -179,7 +177,7 @@ private:
     const std::vector<core::SampleArea> & exclusion_areas) const;
 
   /**
-   * @brief Sample points on a face, optionally filtered by inclusion/exclusion wires.
+   * @brief Sample points on a face, optionally filtered by inclusion/exclusion wires
    *
    * Thin wrapper over sampling::sample_face_region that keeps only the point of
    * each sample. Each wire entry is a (wire, is_exclusion) pair: when
@@ -195,7 +193,7 @@ private:
     const std::vector<std::pair<TopoDS_Wire, bool>> & wires_with_flags) const;
 
   /**
-   * @brief Check if a 2D UV point is inside a wire using BRepClass_FaceClassifier.
+   * @brief Check if a 2D UV point is inside a wire using BRepClass_FaceClassifier
    *
    * @param point_2d UV point to test
    * @param wire Wire to test against
@@ -209,7 +207,7 @@ private:
     const TopoDS_Face & face) const;
 
   /**
-   * @brief Check if a 3D point falls within any exclusion zone on a surface.
+   * @brief Check if a 3D point falls within any exclusion zone on a surface
    *
    * @param point_3d Point to test
    * @param face Face the point belongs to
@@ -222,7 +220,7 @@ private:
     const std::optional<std::vector<RegionClassifier>> & regions) const;
 
   /**
-   * @brief Check if a 3D point falls within the allowed sampling area on a surface.
+   * @brief Check if a 3D point falls within the allowed sampling area on a surface
    *
    * Exact negation of is_point_in_exclusion.
    *
@@ -237,7 +235,7 @@ private:
     const std::optional<std::vector<RegionClassifier>> & regions) const;
 
   /**
-   * @brief Project a contact point onto the opposing face to find the antipodal contact.
+   * @brief Project a contact point onto the opposing face to find the antipodal contact
    *
    * Casts rays with IntCurvesFace_ShapeIntersector: along face_1's inward
    * normal first, then outward, then toward and away from face_2's centroid.
@@ -256,7 +254,7 @@ private:
     gp_Pnt & opposing_contact) const;
 
   /**
-   * @brief Validate that a contact pair is a direct, external (non-diagonal) grasp.
+   * @brief Validate that a contact pair is a direct, external (non-diagonal) grasp
    *
    * Checks grip axis alignment with surface normals, lateral deviation, and the
    * sidedness of the grip: contacts inside a pocket or channel are antiparallel
@@ -275,7 +273,7 @@ private:
     const TopoDS_Face & face_2) const;
 
   /**
-   * @brief Check if two faces have antiparallel normals within the allowed region.
+   * @brief Check if two faces have antiparallel normals within the allowed region
    *
    * Samples normals from the allowed area on each face and checks if any pair
    * satisfies the antiparallel angle constraint.
@@ -299,7 +297,7 @@ private:
     double max_dot) const;
 
   /**
-   * @brief Sample surface normals from the allowed region on a face.
+   * @brief Sample surface normals from the allowed region on a face
    *
    * Each entry is a (wire, is_exclusion) pair: when is_exclusion is true,
    * points inside the wire are excluded; when false, points outside are excluded.
@@ -318,7 +316,7 @@ private:
     int target_samples) const;
 
   /**
-   * @brief Remove spatially duplicate contact pairs using grid-based bucketing.
+   * @brief Remove spatially duplicate contact pairs using grid-based bucketing
    *
    * Deduplication is symmetric: a pair (A->B) and its reverse (B->A) are treated
    * as the same pair. Whichever direction is encountered first is kept.

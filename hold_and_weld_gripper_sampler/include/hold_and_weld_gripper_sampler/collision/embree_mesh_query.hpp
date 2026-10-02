@@ -53,31 +53,29 @@ class EmbreeMeshQuery
 {
 public:
   /**
-   * @brief Build the Embree scene directly from an OCCT shape.
+   * @brief Build the Embree scene directly from an OCCT shape
    *
    * The shape is triangulated using BRepMesh_IncrementalMesh with the
    * supplied linear deflection.  All faces are collected into a single
    * rtcNewGeometry(RTC_GEOMETRY_TYPE_TRIANGLE) geometry.
    *
-   * @param shape             OCCT shape to triangulate and load.
-   * @param linear_deflection Triangulation chord-height tolerance in metres.
-   *                          Smaller values produce denser meshes.
-   *                          Typical value: 0.0001 (0.1 mm).
+   * @param shape OCCT shape to triangulate and load
+   * @param linear_deflection Triangulation chord-height tolerance [m], typically 0.0001;
+   *   smaller values produce denser meshes
    */
   explicit EmbreeMeshQuery(
     const TopoDS_Shape & shape,
     double linear_deflection = 0.0001);
 
   /**
-   * @brief Build the Embree scene from pre-extracted vertex and index arrays.
+   * @brief Build the Embree scene from pre-extracted vertex and index arrays
    *
    * Useful when the caller has already run shape_to_bvh and wants to reuse
    * the same vertex/triangle data without re-meshing.
    *
-   * @param vertices  Flat vertex array — each element is {x, y, z} in metres.
+   * @param vertices Flat vertex array — each element is {x, y, z} [m]
    * @param triangles Flat triangle index array — each element holds three
-   *                  zero-based indices into @p vertices; each is checked
-   *                  against vertices.size().
+   *   zero-based indices into @p vertices; each is checked against vertices.size()
    */
   EmbreeMeshQuery(
     const std::vector<std::array<float, 3>> & vertices,
@@ -87,21 +85,20 @@ public:
   EmbreeMeshQuery(const EmbreeMeshQuery &) = delete;
   EmbreeMeshQuery & operator=(const EmbreeMeshQuery &) = delete;
 
-  // Movable.
   EmbreeMeshQuery(EmbreeMeshQuery &&) noexcept;
   EmbreeMeshQuery & operator=(EmbreeMeshQuery &&) noexcept;
 
   ~EmbreeMeshQuery();
 
   /**
-   * @brief Shoot a single ray and return the nearest intersection point.
+   * @brief Shoot a single ray and return the nearest intersection point
    *
-   * @param origin       Ray origin in world frame (metres).
-   * @param direction    Ray direction.
-   * @param max_distance Maximum ray length to consider (metres).
+   * @param origin Ray origin in world frame [m]
+   * @param direction Ray direction
+   * @param max_distance Maximum ray length to consider [m]
    *
    * @return The nearest hit point on the mesh surface, or std::nullopt if the
-   *         ray misses within @p max_distance.
+   *   ray misses within @p max_distance
    */
   std::optional<gp_Pnt> ray_intersect(
     const gp_Pnt & origin,
@@ -109,36 +106,36 @@ public:
     double max_distance) const;
 
   /**
-   * @brief Test whether a point lies inside the closed mesh (parity test).
+   * @brief Test whether a point lies inside the closed mesh (parity test)
    *
    * Shoots one ray in a fixed, non-axis-aligned direction from @p point and
    * counts every forward intersection; an odd count means inside. Hits closer
    * than 1 µm are skipped, so a point on the surface does not count its own face.
    *
-   * @param point Query point in world frame (metres).
+   * @param point Query point in world frame [m]
    *
-   * @return true  if the point is strictly inside the mesh, or if the hit count
-   *               exceeded the internal cap and could not be finished.
-   * @return false if the point is outside or on the surface.
+   * @return true if the point is strictly inside the mesh, or if the hit count
+   *   exceeded the internal cap and could not be finished; false if it is
+   *   outside or on the surface
    */
   bool point_inside(const gp_Pnt & point) const;
 
   /**
-   * @brief Whether the scene was built successfully and is ready to query.
+   * @brief Whether the scene was built successfully and is ready to query
    *
    * @return true if queries can be made
    */
   bool is_valid() const;
 
   /**
-   * @brief Number of triangles loaded into the Embree scene.
+   * @brief Number of triangles loaded into the Embree scene
    *
    * @return Triangle count
    */
   unsigned int num_triangles() const;
 
   /**
-   * @brief Number of vertices loaded into the Embree scene.
+   * @brief Number of vertices loaded into the Embree scene
    *
    * @return Vertex count
    */

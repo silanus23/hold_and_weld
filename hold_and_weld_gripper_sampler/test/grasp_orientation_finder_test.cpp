@@ -169,7 +169,6 @@ protected:
   std::shared_ptr<GeometryMapper> mapper_;
 };
 
-// Empty contact pair list must return no grasps.
 TEST_F(GraspOrientationFinderTest, EmptyContactPairsReturnsEmpty)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -183,7 +182,6 @@ TEST_F(GraspOrientationFinderTest, EmptyContactPairsReturnsEmpty)
   EXPECT_TRUE(grasps.empty());
 }
 
-// A valid opposing-face contact pair on a grippable box produces candidates with in-range scores.
 TEST_F(GraspOrientationFinderTest, FindGraspsOnSimpleBox)
 {
   TopoDS_Shape box = create_box(0.05, 0.10, 0.05);
@@ -267,7 +265,6 @@ TEST_F(GraspOrientationFinderTest, GraspCandidateHasValidTransform)
 }
 #endif
 
-// Wider dual-seed dedup tolerance must produce fewer or equal orientations than a narrow tolerance.
 TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceReducesOrientations)
 {
   TopoDS_Shape u_edge_raw = create_u_shaped_edge(0.05);
@@ -311,7 +308,6 @@ TEST_F(GraspOrientationFinderTest, DualSeedDedupToleranceReducesOrientations)
   EXPECT_LE(grasps_dedup.size(), grasps_no_dedup.size());
 }
 
-// Three angle offsets must produce at least as many candidates as one offset.
 TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates)
 {
   // Gripper approaches from +Z, fingers straddle in Y, grips across X.
@@ -360,7 +356,6 @@ TEST_F(GraspOrientationFinderTest, MultipleAngleOffsetsProduceMultipleCandidates
   EXPECT_GE(grasps_triple.size(), grasps_single.size());
 }
 
-// Empty angle_offsets must behave identically to an explicit {0.0} offset.
 TEST_F(GraspOrientationFinderTest, EmptyAngleOffsetsDefaultsToZero)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -398,7 +393,6 @@ TEST_F(GraspOrientationFinderTest, EmptyAngleOffsetsDefaultsToZero)
   EXPECT_EQ(grasps_empty.size(), grasps_zero.size());
 }
 
-// Every returned grasp must have a quality_score in [0, 1].
 TEST_F(GraspOrientationFinderTest, QualityScoreInValidRange)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -429,7 +423,6 @@ TEST_F(GraspOrientationFinderTest, QualityScoreInValidRange)
   }
 }
 
-// max_edge_candidates=2 must produce fewer or equal candidates than no limit.
 TEST_F(GraspOrientationFinderTest, MaxEdgeCandidatesLimitsOutput)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -501,7 +494,6 @@ TEST_F(GraspOrientationFinderTest, RejectsUnreachableContactWhenNoEdgesInRange)
   EXPECT_TRUE(grasps.empty());
 }
 
-// Approach direction of every grasp must be perpendicular to the grip axis and unit-length.
 TEST_F(GraspOrientationFinderTest, ApproachDirectionPerpendicularToGripAxis)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -576,7 +568,6 @@ TEST_F(GraspOrientationFinderTest, ProcessesMultipleContactPairs)
   }
 }
 
-// Larger finger_length reaches more edges and must produce at least as many candidates.
 TEST_F(GraspOrientationFinderTest, LargerFingerLengthFindsMoreEdges)
 {
   TopoDS_Shape box = create_box(0.1, 0.1, 0.1);
@@ -663,7 +654,6 @@ TEST_F(GraspOrientationFinderTest, CurvedEdgeHasMultipleMinima)
   }
 }
 
-// max_orientations_per_pair=2 must cap output at 2 and produce <= results than no limit.
 TEST_F(GraspOrientationFinderTest, MaxOrientationsPerPairLimitsResults)
 {
   TopoDS_Shape u_edge_raw = create_u_shaped_edge(0.05);

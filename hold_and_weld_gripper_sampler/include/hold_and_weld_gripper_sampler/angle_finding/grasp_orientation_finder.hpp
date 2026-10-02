@@ -57,6 +57,8 @@ namespace angle_finding
 
 /**
  * @brief Configuration for grasp orientation finding
+ *
+ * Mirrors the orientation.* keys; see PARAMS.md.
  */
 struct OrientationConfig
 {
@@ -78,7 +80,10 @@ struct OrientationConfig
   bool debug_full_sweep = false;
   double debug_sweep_step_deg = 10.0;
 
-  // Kept for config-parser compatibility — not used by the radial-map algorithm
+  /**
+   * Not used by the radial-map algorithm, like the three fields below; parsed so
+   * older configs still load.
+   */
   size_t max_edge_candidates = 3;
   double dual_seed_dedup_tolerance_deg = 3.0;
   size_t max_edges_per_contact = 0;
@@ -89,8 +94,8 @@ struct OrientationConfig
  * @brief Classification of a surface sample relative to the contact plane
  *
  *   FLAT — surface exists at the contact elevation (no edge here)
- *   HIGH — surface rises above the contact plane (wall, instant ban)
- *   LOW  — no hit (cliff / drop-off, graspable direction)
+ *   HIGH — surface rises above the contact plane (wall; trims or splits LOW arcs)
+ *   LOW  — no hit, or a hit below the contact plane (cliff, graspable direction)
  */
 enum class SurfaceState : uint8_t { FLAT, HIGH, LOW };
 
@@ -99,8 +104,11 @@ enum class SurfaceState : uint8_t { FLAT, HIGH, LOW };
  */
 struct RadialSegment
 {
+  /** Arc start around the contact [rad]. */
   double start_rad;
+  /** Arc end [rad]; exceeds 2π when the arc crosses the 0/2π seam. */
   double end_rad;
+  /** Radius of the ring the arc lies on [m]. */
   double radius;
   SurfaceState state;
 };
@@ -137,19 +145,26 @@ inline constexpr std::array<SurfaceState, 3> kAllSurfaceStates = {
  */
 struct GraspCandidate
 {
+  /** First contact point in the world frame [m]. */
   gp_Pnt contact_1;
+  /** Second contact point in the world frame [m]. */
   gp_Pnt contact_2;
+  /** Unit direction the gripper moves in toward the part; the gripper +Z axis. */
   gp_Vec approach_direction;
+  /** Gripper base pose in the world frame; +Y runs from contact_1 to contact_2. */
   gp_Trsf gripper_transform;
+  /** Translation part of gripper_transform [m]. */
   gp_Pnt base_position;
   int surface_id_1 = -1;
   int surface_id_2 = -1;
+  /** Distance between the contacts [m]. */
   double grip_distance = 0.0;
+  /** Fraction of the full turn around the grip axis that is graspable, in [0, 1]. */
   double quality_score = 0.0;
 };
 
 /**
- * @brief Per-run counts of contact pairs and orientations, by outcome.
+ * @brief Per-run counts of contact pairs and orientations, by outcome
  *
  * Populated by every call to find_valid_grasps; reflects the most recent call.
  */
@@ -165,7 +180,7 @@ struct OrientationStats
   size_t pairs_no_seeds = 0;
   size_t pairs_merged_empty = 0;
   size_t pairs_killed_cluster = 0;
-  // Degenerate geometry (zero normal, coincident contacts) or an exception.
+  /** Degenerate geometry (zero normal, coincident contacts) or an exception. */
   size_t pairs_failed = 0;
   size_t total_seeds_before_cap = 0;
   size_t total_seeds_after_cap = 0;
@@ -202,8 +217,8 @@ inline Grasp to_grasp(const GraspCandidate & candidate)
  * Algorithm:
  * 1. Build a local tangent frame per contact from its own surface normal.
  * 2. Sweep the outer ring (r = finger_length) using Embree raycasting in the
- *    local tangent plane. Miss = LOW (cliff), hit = FLAT or HIGH based on
- *    elevation relative to contact point. FLAT and HIGH are stored for
+ *    local tangent plane. A miss or a hit below the contact is LOW (cliff);
+ *    other hits are FLAT or HIGH by elevation. FLAT and HIGH are stored for
  *    diagnostics; only LOW segments survive as grasp candidates.
  * 3. Calibrate each contact's angular segments to a shared reference frame
  *    before merging: a common zero direction, and both sweeps turning the same
@@ -216,23 +231,23 @@ inline Grasp to_grasp(const GraspCandidate & candidate)
  *    too narrow after trimming (< min_cliff_width_deg) are discarded.
  * 6. Intersect surviving LOW arcs from both contacts, then cluster -> one
  *    approach seed per cliff.
- * 7. Validate each seed against primary collision, exclusion zones, the
- *    ground, and secondary shapes via FCL.
+ * 7. Validate each seed against jaw clearance, primary collision, exclusion
+ *    zones, the ground, and secondary shapes via FCL.
  */
 class GraspOrientationFinder
 {
 public:
   /**
-   * @brief Construct the finder; collision checkers are attached afterwards via the setters.
+   * @brief Construct the finder; collision checkers are attached afterwards via the setters
    *
    * Throws std::invalid_argument if a step size in @p config is not positive,
    * since the sweeps would never terminate.
    *
-   * @param primary_shape        Workpiece the contacts lie on
-   * @param gripper              Gripper geometry and finger axes
+   * @param primary_shape Workpiece the contacts lie on
+   * @param gripper Gripper geometry and finger axes
    * @param exclusion_constraint Exclusion zones to reject poses against, or nullptr
-   * @param kissing_constraint   Secondary shapes to reject poses against, or nullptr
-   * @param config               Orientation-finding parameters
+   * @param kissing_constraint Secondary shapes to reject poses against, or nullptr
+   * @param config Orientation-finding parameters
    */
   GraspOrientationFinder(
     const TopoDS_Shape & primary_shape,
@@ -243,21 +258,23 @@ public:
   );
 
   /**
-   * @brief Attach the jaw-mouth broad-phase check, run before the exact pose checks.
+   * @brief Attach the jaw-mouth broad-phase check, run before the exact pose checks
+   *
    * @param jaw_clearance_check Check to use, or nullptr to skip it
    */
   void set_jaw_clearance_check(
     std::shared_ptr<const geometry::JawClearanceCheck> jaw_clearance_check);
 
   /**
-   * @brief Attach the ground constraint every candidate pose is tested against.
+   * @brief Attach the ground constraint every candidate pose is tested against
+   *
    * @param ground_constraint Constraint to use, or nullptr to skip the ground check
    */
   void set_ground_constraint(
     std::shared_ptr<const constraints::GroundConstraint> ground_constraint);
 
   /**
-   * @brief Attach the checker for gripper-vs-workpiece collision.
+   * @brief Attach the checker for gripper-vs-workpiece collision
    *
    * Required: without a valid checker every pose counts as colliding, so
    * find_valid_grasps returns nothing.
@@ -267,7 +284,7 @@ public:
   void set_fcl_checker(std::shared_ptr<const geometry::FCLCollisionChecker> fcl_checker);
 
   /**
-   * @brief Attach the ray-query scene used to build the radial maps.
+   * @brief Attach the ray-query scene used to build the radial maps
    *
    * Without a valid scene every direction reads as a cliff, so every seed is
    * tried and every quality score is 1.0.
@@ -277,12 +294,12 @@ public:
   void set_embree_checker(std::shared_ptr<const geometry::EmbreeMeshQuery> embree_checker);
 
   /**
-   * @brief Find collision-free gripper poses for each contact pair.
+   * @brief Find collision-free gripper poses for each contact pair
    *
    * A pair that raises an exception is logged and skipped; the rest still run.
    *
    * @param contact_pairs Antipodal contact pairs from the contact sampler
-   * @param topology      Unused; kept for interface stability
+   * @param topology Unused; kept for interface stability
    * @return Every pose that passed all checks (at most max_orientations_per_pair per
    *         pair when that is set)
    */
@@ -292,7 +309,7 @@ public:
   );
 
   /**
-   * @brief Counters from the most recent find_valid_grasps call.
+   * @brief Counters from the most recent find_valid_grasps call
    *
    * All counters are zero before the first call.
    *
@@ -301,19 +318,19 @@ public:
   const OrientationStats & last_stats() const {return last_stats_;}
 
   /**
-   * @brief Build a RadialMaps for one contact point using Embree raycasting.
+   * @brief Build a RadialMaps for one contact point using Embree raycasting
    *
-   * Rays are cast in the local tangent plane defined by lx/ly (built from
+   * Rays are cast in the local tangent plane defined by tangent_axis_x/y (built from
    * the contact's own surface normal). Segments are stored in the calibrated
    * shared angular frame (local_angle - angle_offset), so both contacts in a
    * pair are comparable after this call.
    *
-   * @param contact        Contact point on the workpiece surface
-   * @param normal         Outward surface normal at the contact
-   * @param tangent_axis_x Local tangent frame X axis — points in the angle=0° direction of the radial sweep
-   * @param tangent_axis_y Local tangent frame Y axis — points in the angle=90° direction of the radial sweep
-   * @param lifted_center  contact + normal * ray_lift_offset (pre-computed)
-   * @param angle_offset   Rotation from local frame to shared reference [rad]
+   * @param contact Contact point on the workpiece surface
+   * @param normal Outward surface normal at the contact
+   * @param tangent_axis_x Local tangent frame X axis; the sweep's angle=0° direction
+   * @param tangent_axis_y Local tangent frame Y axis; the sweep's angle=90° direction
+   * @param lifted_center contact + normal * ray_lift_offset (pre-computed)
+   * @param angle_offset Rotation from local frame to shared reference [rad]
    * @return Arcs of each state; a LOW arc crossing the seam ends past 2π
    */
   RadialMaps create_radial_maps(
@@ -339,13 +356,13 @@ private:
   OrientationStats last_stats_;
 
   /**
-   * @brief Classify a single ray hit by its elevation above the contact plane.
+   * @brief Classify a single ray hit by its elevation above the contact plane
    *
-   * @param hit_found  Whether the ray hit anything; a miss is LOW
-   * @param hit_point  Where the ray hit, world frame; ignored on a miss
-   * @param contact    The contact point the plane passes through, world frame
+   * @param hit_found Whether the ray hit anything; a miss is LOW
+   * @param hit_point Where the ray hit, world frame; ignored on a miss
+   * @param contact The contact point the plane passes through, world frame
    * @param normal_vec Unit outward surface normal at contact
-   * @param tol        Elevation band treated as FLAT [m]
+   * @param tol Elevation band treated as FLAT [m]
    * @return HIGH above the band, LOW below it or on a miss, FLAT within it
    */
   SurfaceState classify_hit(
@@ -357,11 +374,7 @@ private:
   ) const;
 
   /**
-   * @brief Intersect LOW segments from two contact RadialMaps.
-   *
-   * @param maps_1 Radial maps around the first contact
-   * @param maps_2 Radial maps around the second contact
-   * @return Angular segments LOW around both contacts
+   * @brief Intersect LOW segments from two contact RadialMaps
    */
   std::vector<RadialSegment> merge_low_segments(
     const RadialMaps & maps_1,
@@ -369,22 +382,19 @@ private:
   ) const;
 
   /**
-   * @brief Group angularly close segments into clusters and discard narrow ones.
-   *
-   * @param segments Merged LOW segments
-   * @return Clusters wide enough to keep
+   * @brief Group angularly close segments into clusters and discard narrow ones
    */
   std::vector<std::vector<RadialSegment>> cluster_and_filter(
     const std::vector<RadialSegment> & segments
   ) const;
 
   /**
-   * @brief Gripper base pose that puts the TCP midway between the contacts.
+   * @brief Gripper base pose that puts the TCP midway between the contacts
    *
    * @param contact_1 First contact; the jaw closes along contact_1 -> contact_2
    * @param contact_2 Second contact
-   * @param approach  Approach direction; its component along the grip axis is dropped
-   * @param out_base  Receives the base origin in world frame
+   * @param approach Approach direction; its component along the grip axis is dropped
+   * @param out_base Receives the base origin in world frame
    * @return Base pose in world frame
    */
   gp_Trsf compute_gripper_transform(
@@ -395,21 +405,21 @@ private:
   ) const;
 
   /**
-   * @brief Primary-shape collision check.
+   * @brief Primary-shape collision check
    *
-   * @param transform     Gripper base pose in world frame
+   * @param transform Gripper base pose in world frame
    * @param grip_distance Jaw opening [m]
    * @return true on collision, or when no valid checker is attached
    */
   bool collides_with_primary(const gp_Trsf & transform, double grip_distance) const;
 
   /**
-   * @brief Approach angles to try within each cluster, interleaved across clusters.
+   * @brief Approach angles to try within each cluster, interleaved across clusters
    *
    * Interleaving lets the per-pair cap take seeds from every cluster in turn.
    *
    * @param clusters Clusters from cluster_and_filter
-   * @param rng      Generator for randomize_seeds; unused otherwise
+   * @param rng Generator for randomize_seeds; unused otherwise
    * @return Seed angles in the shared frame [rad]
    */
   std::vector<double> seeds_from_clusters(
@@ -418,11 +428,11 @@ private:
   ) const;
 
   /**
-   * @brief Run every pose check, stopping at the first that rejects.
+   * @brief Run every pose check, stopping at the first that rejects
    *
-   * @param transform     Gripper base pose in world frame
+   * @param transform Gripper base pose in world frame
    * @param grip_distance Jaw opening [m]
-   * @param stats         Receives one rejection count for the check that failed
+   * @param stats Receives one rejection count for the check that failed
    * @return true if the pose passed every check
    */
   bool passes_pose_checks(

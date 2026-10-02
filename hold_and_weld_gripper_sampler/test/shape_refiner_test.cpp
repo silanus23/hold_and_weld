@@ -37,13 +37,11 @@ using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 
 namespace test_constants
 {
-// Default ShapeRefiner configuration
 constexpr double kMaxCylinderRadius = 0.100;
 constexpr double kMaxArcLength = 0.200;
 constexpr double kEnclaveAreaRatio = 0.005;
 constexpr double kEnclaveAngleThreshold = 45.0;
 
-// Expected face counts for common primitives
 constexpr int kBoxFaceCount = 6;
 constexpr int kCylinderFaceCount = 3;
 }  // namespace test_constants
@@ -137,7 +135,6 @@ protected:
   std::unique_ptr<ShapeRefiner> refiner_;
 };
 
-// Through-hole plate loses at most 2 faces after refinement.
 TEST_F(ShapeRefinerTest, Refine_WithSimpleThroughHole_PreservesMostFaces)
 {
   TopoDS_Shape input = create_plate_with_hole(0.1, 0.025);
@@ -149,7 +146,6 @@ TEST_F(ShapeRefinerTest, Refine_WithSimpleThroughHole_PreservesMostFaces)
   EXPECT_GE(output_faces, input_faces - 2);
 }
 
-// Deep pocket with steep walls under a strict refiner loses at most 2 faces.
 TEST_F(ShapeRefinerTest, Refine_WithDeepPocketSteepWalls_PreservesFaces)
 {
   ShapeRefiner strict_refiner(0.1, 0.2, 0.01, 30.0);
@@ -162,7 +158,6 @@ TEST_F(ShapeRefinerTest, Refine_WithDeepPocketSteepWalls_PreservesFaces)
   EXPECT_GE(output_faces, input_faces - 2);
 }
 
-// Pocket with small fillets produces no more faces than the input.
 TEST_F(ShapeRefinerTest, Refine_WithComplexPocketFillets_ReducesOrMaintainsFaces)
 {
   TopoDS_Shape base = create_plate_with_pocket(0.1, 0.01, 0.003);
@@ -238,7 +233,6 @@ TEST_F(ShapeRefinerTest, Refine_WithTubeGeometry_SplitsBothCylinders)
   EXPECT_GT(output_faces, input_faces);
 }
 
-// All-planar box produces at most one extra face (no curved faces to split).
 TEST_F(ShapeRefinerTest, Refine_WithFlatPlate_NoRefinementNeeded)
 {
   TopoDS_Shape input = BRepPrimAPI_MakeBox(0.1, 0.08, 0.005).Shape();
@@ -251,7 +245,6 @@ TEST_F(ShapeRefinerTest, Refine_WithFlatPlate_NoRefinementNeeded)
   EXPECT_LE(output_faces, input_faces + 1);
 }
 
-// Box has 6 planar faces; refinement must not remove any planar face.
 TEST_F(ShapeRefinerTest, Refine_WithBoxAllPlanar_PreservesAllPlanarFaces)
 {
   TopoDS_Shape input = BRepPrimAPI_MakeBox(0.05, 0.06, 0.07).Shape();
@@ -264,7 +257,6 @@ TEST_F(ShapeRefinerTest, Refine_WithBoxAllPlanar_PreservesAllPlanarFaces)
   EXPECT_GE(output_planar, test_constants::kBoxFaceCount);
 }
 
-// Complex fused/cut part produces a non-zero face count no more than 3x the input.
 TEST_F(ShapeRefinerTest, Refine_WithComplexPart_ProducesReasonableFaceCount)
 {
   TopoDS_Shape input = create_complex_part();

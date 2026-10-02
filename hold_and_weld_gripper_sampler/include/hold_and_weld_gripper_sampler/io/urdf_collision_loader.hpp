@@ -29,7 +29,7 @@ namespace io
 {
 
 /**
- * @brief Collision geometry of one URDF link, placed in the URDF root frame.
+ * @brief Collision geometry of one URDF link, placed in the URDF root frame
  */
 struct UrdfLinkCollision
 {
@@ -41,7 +41,7 @@ struct UrdfLinkCollision
 };
 
 /**
- * @brief Collision geometry of a whole URDF.
+ * @brief Collision geometry of a whole URDF
  *
  * Box, cylinder and sphere are built; malformed ones throw. <mesh> and any other
  * geometry is not built and is listed in skipped instead, so each caller decides
@@ -56,7 +56,7 @@ struct UrdfCollisionModel
 };
 
 /**
- * @brief Build every link's collision geometry and place it by walking the joint tree.
+ * @brief Build every link's collision geometry and place it by walking the joint tree
  *
  * A link that no joint names as child is a root and sits at the identity, so several
  * unconnected links all share the root frame.
@@ -67,7 +67,7 @@ struct UrdfCollisionModel
 UrdfCollisionModel load_urdf_collision(const std::string & urdf_string);
 
 /**
- * @brief Build one link's collision geometry in its own link frame.
+ * @brief Build one link's collision geometry in its own link frame
  *
  * @param link The <link> element
  * @param skipped Receives one entry per collision element that was not built
@@ -78,10 +78,10 @@ TopoDS_Shape link_collision_shape(
   std::vector<std::string> & skipped);
 
 /**
- * @brief Parse a URDF <origin> element; malformed xyz/rpy throws.
+ * @brief Parse a URDF <origin> element; malformed xyz/rpy throws
  *
  * @param origin The <origin> element, or nullptr for the identity
- * @return Translation then fixed-axis roll-pitch-yaw rotation, as URDF defines it
+ * @return Translation, then rotation R = Rz(yaw)·Ry(pitch)·Rx(roll), the URDF convention
  */
 gp_Trsf parse_origin(const tinyxml2::XMLElement * origin);
 

@@ -241,8 +241,7 @@ TEST(FaceSamplerTest, SampleCountScalesWithDensityOnPlanarFace)
   EXPECT_EQ(sample_face_region(face, steps_config).size(), 49u);
 }
 
-// The ground predicate: area fraction of a face lying within a Z band. This is
-// the measurement that replaces triangle-centroid contact ratio.
+// The ground predicate: area fraction of a face lying within a Z band.
 TEST(FaceSamplerTest, AreaFractionMeasuresPartialGroundContact)
 {
   // Box rolled 45 degrees about X, balanced on one edge at z = 0. The old
@@ -289,8 +288,7 @@ TEST(FaceSamplerTest, AreaFractionIsZeroForEmptySamples)
   EXPECT_EQ(area_fraction({}, [](const FaceSample &) {return true;}), 0.0);
 }
 
-// kNodes must keep the legacy grid so repointing the existing point samplers at
-// this function is a refactor, not a behaviour change.
+// kNodes keeps the grid the point samplers rely on, UV endpoints included.
 TEST(FaceSamplerTest, NodeLayoutIncludesUvEndpoints)
 {
   const TopoDS_Shape box = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();

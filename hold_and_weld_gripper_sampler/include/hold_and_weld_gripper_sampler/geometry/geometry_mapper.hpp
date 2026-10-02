@@ -32,7 +32,7 @@ namespace geometry
 {
 
 /**
- * @brief Loads CAD geometry and extracts topology for grasp sampling.
+ * @brief Loads CAD geometry and extracts topology for grasp sampling
  *
  * Supports URDF strings, URDF files, STEP files, and raw OCCT shapes.
  * URDF links are placed by their joint <origin>s (joints at position zero), see
@@ -47,7 +47,7 @@ public:
   ~GeometryMapper();
 
   /**
-   * @brief Load topology from a URDF XML string.
+   * @brief Load topology from a URDF XML string
    *
    * @param urdf_string Complete URDF XML content
    * @return Extracted topology
@@ -55,7 +55,7 @@ public:
   Topology load_from_urdf_string(const std::string & urdf_string);
 
   /**
-   * @brief Load topology from a URDF file.
+   * @brief Load topology from a URDF file
    *
    * @param urdf_path Path to URDF file
    * @return Extracted topology
@@ -63,7 +63,9 @@ public:
   Topology load_from_urdf_file(const std::string & urdf_path);
 
   /**
-   * @brief Load topology from a STEP file with transform.
+   * @brief Load topology from a STEP file with transform
+   *
+   * The shape is rotated about its own origin first, then translated.
    *
    * @param step_path Path to STEP file
    * @param translation Translation to apply in world frame [m]
@@ -77,7 +79,7 @@ public:
   );
 
   /**
-   * @brief Load topology from an existing OCCT shape.
+   * @brief Load topology from an existing OCCT shape
    *
    * @param shape OCCT shape to extract topology from
    * @param name Optional name tag for the shape
@@ -89,7 +91,7 @@ public:
   );
 
   /**
-   * @brief Find the topology surface ID corresponding to an OCCT face.
+   * @brief Find the topology surface ID corresponding to an OCCT face
    *
    * @param occt_face Face to look up
    * @return 0-indexed surface ID
@@ -97,7 +99,7 @@ public:
   int find_topology_surface_id(const TopoDS_Face & occt_face) const;
 
   /**
-   * @brief Get the OCCT face corresponding to a topology surface ID.
+   * @brief Get the OCCT face corresponding to a topology surface ID
    *
    * @param surface_id 0-indexed surface ID
    * @return Corresponding OCCT face
@@ -105,7 +107,7 @@ public:
   TopoDS_Face get_occt_face(int surface_id) const;
 
   /**
-   * @brief Get the internal face index map.
+   * @brief Get the internal face index map
    *
    * @return Const reference to the indexed face map
    */
@@ -113,23 +115,17 @@ public:
 
 private:
   /**
-   * @brief Parse URDF XML string and create an OCCT compound shape.
-   *
-   * @param urdf_string Complete URDF XML content
-   * @return OCCT compound shape
+   * @brief Parse URDF XML string and create an OCCT compound shape
    */
   TopoDS_Shape create_shape_from_urdf_string(const std::string & urdf_string);
 
   /**
-   * @brief Load and parse a URDF file into an OCCT compound shape.
-   *
-   * @param urdf_path Path to URDF file
-   * @return OCCT compound shape
+   * @brief Load and parse a URDF file into an OCCT compound shape
    */
   TopoDS_Shape create_shape_from_urdf_file(const std::string & urdf_path);
 
   /**
-   * @brief Load a STEP file and apply transform.
+   * @brief Load a STEP file and apply transform
    *
    * @param step_path Path to STEP file
    * @param translation Translation to apply [m]
@@ -143,11 +139,7 @@ private:
   );
 
   /**
-   * @brief Extract topology from an OCCT shape and populate the face map.
-   *
-   * @param shape OCCT shape to process
-   * @param link_name Name tag for the shape
-   * @return Extracted topology
+   * @brief Extract topology from an OCCT shape and populate the face map
    */
   Topology create_topology_from_shape(
     const TopoDS_Shape & shape,

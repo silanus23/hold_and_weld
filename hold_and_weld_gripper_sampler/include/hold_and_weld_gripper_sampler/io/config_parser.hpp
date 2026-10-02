@@ -34,6 +34,8 @@ namespace io
 
 /**
  * @brief Parsed primary workpiece configuration
+ *
+ * Mirrors the primary.* keys; see PARAMS.md.
  */
 struct PrimaryConfig
 {
@@ -45,21 +47,31 @@ struct PrimaryConfig
 
 /**
  * @brief Parsed secondary shape configuration
+ *
+ * Mirrors one secondaries[] entry; see PARAMS.md. Only the fields of its type are set.
  */
 struct SecondaryConfig
 {
   std::string id;
-  std::string type;  // "step", "urdf", "box", "cylinder", "ground_plane"
+  /** "step", "urdf", "box", "cylinder" or "ground_plane". */
+  std::string type;
 
+  /** step_path or urdf_path, resolved. */
   std::string file_path;
 
+  /** Box size [m]. */
   Eigen::Vector3d dimensions = Eigen::Vector3d::Zero();
 
+  /** Cylinder radius [m]. */
   double radius = 0.0;
+  /** Cylinder height [m]. */
   double height = 0.0;
 
+  /** Ground plane extent in X [m]. */
   double size_x = 2.0;
+  /** Ground plane extent in Y [m]. */
   double size_y = 2.0;
+  /** Ground plane surface height [m]. */
   double z_position = 0.0;
 
   Eigen::Vector3d translation = Eigen::Vector3d::Zero();
@@ -68,11 +80,15 @@ struct SecondaryConfig
 
 /**
  * @brief Parsed output configuration
+ *
+ * Mirrors the output.* keys; see PARAMS.md.
  */
 struct OutputConfig
 {
-  std::string json_path;  // empty = hold_and_weld_application's grasps/grasps.json
-  size_t max_grasps = 0;  // 0 = all
+  /** Empty means hold_and_weld_application's grasps/grasps.json. */
+  std::string json_path;
+  /** 0 means all. */
+  size_t max_grasps = 0;
   double min_quality = 0.0;
   bool fail_on_skipped_constraint = false;
 };
@@ -87,6 +103,7 @@ struct ParsedConfig
   PrimaryConfig primary;
 
   std::string gripper_urdf_path;
+  /** Cap on the URDF opening [m]; can only lower it. */
   std::optional<double> gripper_max_opening;
 
   std::vector<SecondaryConfig> secondaries;
@@ -107,7 +124,8 @@ struct ParsedConfig
  * @brief Parser for GraspFinder YAML configuration files
  *
  * Loads configuration from YAML files following the ROS2 parameter format.
- * Supports both full configuration files and partial overrides.
+ * Each private parse_X helper records the reason through set_error() before
+ * returning false; callers only need to propagate the false.
  */
 class ConfigParser
 {
@@ -237,6 +255,10 @@ private:
 
   /**
    * @brief Parse transform (translation + rotation) from YAML node
+   *
+   * @param node Node holding the optional translation and rotation keys
+   * @param translation Output translation [m]; left unchanged if the key is absent
+   * @param rotation Output rotation; left unchanged if the key is absent
    */
   void parse_transform(
     const YAML::Node & node,

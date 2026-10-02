@@ -110,7 +110,7 @@ Without one, `implicit_ground` decides whether a ground is assumed anyway.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `exclusion_zones.polygons[].id` | string | — | Unique identifier |
-| `exclusion_zones.polygons[].corners` | list of x/y/z | — | Polygon corner points. Minimum 3. [m] |
+| `exclusion_zones.polygons[].corners` | list of x/y/z | — | Coplanar polygon corner points. Minimum 3; corners 0-2 must not be collinear. Their winding sets the corner normal by the right-hand rule (counter-clockwise seen from the side the volume extrudes toward). [m] |
 | `exclusion_zones.polygons[].projection_depth` | double | — | How far the zone volume reaches from the corners' plane along the corner normal [m] |
 | `exclusion_zones.polygons[].clearance` | double | 0.01 | Safety margin [m]. As for circles: the volume starts this far behind the plane; the pose-check volume is grown by it again. |
 

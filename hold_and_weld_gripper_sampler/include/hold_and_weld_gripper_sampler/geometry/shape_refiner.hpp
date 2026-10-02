@@ -40,16 +40,16 @@ public:
   /**
    * @brief Constructor
    *
-   * @param max_cylinder_radius Maximum cylinder radius before radial splitting [m].
-   *        Stored but not used yet — the radial split (get_cylinder_splits) is not implemented.
-   * @param max_arc_length Maximum edge arc length before surface splitting [m]. Must be > 0.
+   * @param max_cylinder_radius Maximum cylinder radius before radial splitting [m]
+   *        TODO(silanus23): stored but not used; get_cylinder_splits is not implemented.
+   * @param max_arc_length Maximum edge arc length before surface splitting [m]. Must be > 0
    * @param enclave_area_ratio Maximum enclave area as fraction of total area (e.g. 0.005 = 0.5%)
-   * @param enclave_angle_threshold Maximum wall angle for enclave suppression [degrees].
+   * @param enclave_angle_threshold Maximum wall angle for enclave suppression [deg]
    *        Enclaves with walls steeper than this are kept as real features.
    * @param max_face_area_ratio Maximum single-face area as fraction of total area before a
    *        warning is emitted and an additional edge-based split is attempted (e.g. 0.3 = 30%).
    * @param planarity_tolerance_deg Maximum corner-normal deviation for a non-plane face to
-   *        still count as flat and be left unsplit [degrees].
+   *        still count as flat and be left unsplit [deg].
    * @param inflection_samples Curvature samples per scan line when looking for inflection
    *        points to split at. Must be >= 2.
    */
@@ -63,7 +63,7 @@ public:
     int inflection_samples = 25);
 
   /**
-   * @brief Refine a shape by removing enclaves and splitting large surfaces.
+   * @brief Refine a shape by removing enclaves and splitting large surfaces
    *
    * Surfaces still larger than max_face_area_ratio of the total area after arc-length
    * splitting trigger a WARN log. This may indicate gentle BSplines, lofted surfaces, or
@@ -84,7 +84,7 @@ private:
   int inflection_samples_;
 
   /**
-   * @brief Identify enclave features (small pockets/holes) to remove.
+   * @brief Identify enclave features (small pockets/holes) to remove
    *
    * @param shape Input shape
    * @param global_total_area Total surface area of the shape
@@ -96,7 +96,7 @@ private:
     TopTools_ListOfShape & kill_list) const;
 
   /**
-   * @brief Collect all faces forming an enclave via BFS from inner wire.
+   * @brief Collect all faces forming an enclave via BFS from inner wire
    *
    * @param footprint Inner wire defining the enclave boundary
    * @param parent_face Face containing the inner wire
@@ -110,15 +110,10 @@ private:
     TopTools_ListOfShape & enclave_faces) const;
 
   /**
-   * @brief Determine if an enclave should be suppressed.
+   * @brief Determine if an enclave should be suppressed
    *
    * Suppressed when area < enclave_area_ratio of global area and all walls
    * are shallow (< enclave_angle_threshold). Any steep wall keeps the enclave.
-   *
-   * @param parent_face Face containing the enclave
-   * @param enclave_faces Faces forming the enclave
-   * @param global_total_area Total surface area
-   * @return true if enclave should be removed
    */
   bool should_suppress_enclave(
     const TopoDS_Face & parent_face,
@@ -126,7 +121,7 @@ private:
     double global_total_area) const;
 
   /**
-   * @brief Find inflection points on BSpline/Bezier surfaces.
+   * @brief Find inflection points on BSpline/Bezier surfaces
    *
    * Detects curvature sign changes by sampling Gaussian curvature
    * along the specified parameter direction.
@@ -141,12 +136,10 @@ private:
     std::vector<double> & splits) const;
 
   /**
-   * @brief Get split parameters for perfect cylinders.
+   * @brief Get split parameters for perfect cylinders
    *
-   * Declared only — not implemented or called yet.
-   *
-   * Checks radius against max_cylinder_radius first, then falls back
-   * to arc length check.
+   * TODO(silanus23): declared only, not implemented or called. Check radius
+   * against max_cylinder_radius first, then fall back to an arc length check.
    *
    * @param face Cylindrical face
    * @param u_splits Output U parameter splits
@@ -156,9 +149,9 @@ private:
     std::vector<double> & u_splits) const;
 
   /**
-   * @brief Get split parameters for cones and other analytical surfaces.
+   * @brief Get split parameters for cones and other analytical surfaces
    *
-   * Declared only — not implemented or called yet.
+   * TODO(silanus23): declared only, not implemented or called.
    *
    * @param face Face to split
    * @param u_splits Output U parameter splits
@@ -170,7 +163,7 @@ private:
     std::vector<double> & v_splits) const;
 
   /**
-   * @brief Check edge arc lengths and compute split parameters if limit exceeded.
+   * @brief Check edge arc lengths and compute split parameters if limit exceeded
    *
    * Handles both U and V directions to support partial spheres and bitten donuts.
    * Falls back to analytical estimation for surfaces without edges (closed spheres).
@@ -185,25 +178,19 @@ private:
     std::vector<double> & v_splits) const;
 
   /**
-   * @brief Check if a face is physically planar within planarity_tolerance_deg_.
-   *
-   * @param face Face to check
-   * @return true if face is planar
+   * @brief Check if a face is physically planar within planarity_tolerance_deg_
    */
   bool is_physically_planar(const TopoDS_Face & face) const;
 
   /**
-   * @brief Calculate a safe normal vector for a face at its center.
+   * @brief Outward normal at the face's UV centre
    *
-   * Respects face orientation.
-   *
-   * @param face Face to compute normal for
-   * @return Normal direction
+   * @return The normal, or +Z with a WARN when it is undefined there
    */
   gp_Dir calculate_safe_normal(const TopoDS_Face & face) const;
 
   /**
-   * @brief Phase 1: open closed faces with ShapeUpgrade_ShapeDivideClosed.
+   * @brief Phase 1: open closed faces with ShapeUpgrade_ShapeDivideClosed
    *
    * Runs when any face covering a full U period has an arc length above
    * max_arc_length_. Every closed face is cut once, into two halves; phase 2 then

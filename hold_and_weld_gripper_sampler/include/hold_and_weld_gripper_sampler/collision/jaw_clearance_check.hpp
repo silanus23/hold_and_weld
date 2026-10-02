@@ -32,6 +32,8 @@ namespace geometry
 
 /**
  * @brief Configuration for the jaw-clearance check
+ *
+ * Mirrors the jaw_clearance.* keys; see PARAMS.md.
  */
 struct JawClearanceConfig
 {
@@ -58,7 +60,7 @@ public:
    *
    * @param config Enable flag and clearance margin
    * @param gripper Parsed gripper — supplies the TCP offset the cylinder ends at
-   * @param finger_length Cylinder length along the jaw axis (meters)
+   * @param finger_length Cylinder length along the jaw axis [m]
    */
   JawClearanceCheck(
     const JawClearanceConfig & config,
@@ -66,7 +68,9 @@ public:
     double finger_length);
 
   /**
-   * @brief Set FCL collision checker for fast collision queries
+   * @brief Set the FCL checker used for pose-level queries
+   *
+   * Required: without a valid checker every pose is rejected.
    *
    * @param fcl_checker Shared pointer to FCL collision checker
    */

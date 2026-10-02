@@ -107,21 +107,18 @@ protected:
   TopoDS_Shape primary_;
 };
 
-// Checker must be usable immediately after construction.
 TEST_F(FCLTest, IsValidAfterConstruction)
 {
   FCLCollisionChecker checker(gripper_, primary_);
   EXPECT_TRUE(checker.is_valid());
 }
 
-// Gripper placed at origin (inside the primary box) must register as collision.
 TEST_F(FCLTest, CollidesWhenInsidePrimary)
 {
   FCLCollisionChecker checker(gripper_, primary_);
   EXPECT_TRUE(checker.collides_with_primary(translation(0.0, 0.0, 0.0), 0.02, 0.001));
 }
 
-// Gripper 1 m above the primary must be clear.
 TEST_F(FCLTest, NoCollisionWhenFarFromPrimary)
 {
   FCLCollisionChecker checker(gripper_, primary_);
@@ -142,7 +139,6 @@ TEST_F(FCLTest, GripperOrientation_AffectsCollisionResult)
   EXPECT_FALSE(checker.collides_with_primary(away, 0.02, 0.001));
 }
 
-// Exclusion sphere placed 100 mm above origin — gripper at that position must collide.
 TEST_F(FCLTest, ExclusionVolumeDetected)
 {
   FCLCollisionChecker checker(gripper_, primary_);
@@ -152,7 +148,6 @@ TEST_F(FCLTest, ExclusionVolumeDetected)
   EXPECT_TRUE(checker.collides_with_exclusions(translation(0.0, 0.0, 0.1), 0.02, 0.001));
 }
 
-// Secondary cylinder placed 150 mm above origin — gripper at that position must collide.
 TEST_F(FCLTest, SecondaryShapeDetected)
 {
   FCLCollisionChecker checker(gripper_, primary_);
@@ -214,7 +209,6 @@ TEST_F(FCLTest, NonLevelGroundFallsBackToHalfspace)
   EXPECT_FALSE(checker.has_finite_ground());
 }
 
-// Ground surface height is honoured by the finite model, not just the infinite one.
 TEST_F(FCLTest, FiniteGround_HonoursSurfaceHeight)
 {
   FCLCollisionChecker checker(gripper_, primary_);
@@ -243,7 +237,6 @@ TEST_F(FCLTest, CylinderQuery_HitsObstaclesOnly)
   EXPECT_FALSE(checker.cylinder_collides_with_obstacles(at_origin, 0.01, 0.10));
 }
 
-// Degenerate dimensions must not be treated as a collision.
 TEST_F(FCLTest, CylinderQuery_NonPositiveDimensionsAreNoOp)
 {
   FCLCollisionChecker checker(gripper_, primary_);
@@ -268,7 +261,6 @@ protected:
   std::shared_ptr<EmbreeMeshQuery> query_;
 };
 
-// Scene must be ready to query immediately after construction.
 TEST_F(EmbreeTest, IsValidAfterConstruction)
 {
   EXPECT_TRUE(query_->is_valid());
@@ -276,7 +268,6 @@ TEST_F(EmbreeTest, IsValidAfterConstruction)
   EXPECT_GT(query_->num_vertices(), 0u);
 }
 
-// Ray fired from outside the +X face straight toward it must hit near the face boundary.
 TEST_F(EmbreeTest, RayHitsFromOutside)
 {
   gp_Pnt origin(kHalfX + 0.05, 0.0, 0.0);
@@ -296,7 +287,6 @@ TEST_F(EmbreeTest, RayHitsOffCenter)
   EXPECT_NEAR(hit->X(), kHalfX, 0.002);
 }
 
-// Ray fired upward from well above the prism must miss.
 TEST_F(EmbreeTest, RayMissesInClearDirection)
 {
   gp_Pnt origin(0.0, 0.0, kHalfZ + 1.0);
@@ -304,7 +294,6 @@ TEST_F(EmbreeTest, RayMissesInClearDirection)
   EXPECT_FALSE(query_->ray_intersect(origin, dir, 0.5).has_value());
 }
 
-// Ray just outside the +X face travelling parallel to it must never enter the prism.
 TEST_F(EmbreeTest, RayParallelToFace_Misses)
 {
   // Origin is offset by a small epsilon outside the face to avoid the numerically
@@ -315,13 +304,11 @@ TEST_F(EmbreeTest, RayParallelToFace_Misses)
   EXPECT_FALSE(query_->ray_intersect(origin, dir, 1.0).has_value());
 }
 
-// Point at the prism centre must be detected as inside.
 TEST_F(EmbreeTest, PointInsideDetected)
 {
   EXPECT_TRUE(query_->point_inside(gp_Pnt(0.0, 0.0, 0.0)));
 }
 
-// Point 1 m away from the prism must not be detected as inside.
 TEST_F(EmbreeTest, PointOutsideNotDetected)
 {
   EXPECT_FALSE(query_->point_inside(gp_Pnt(1.0, 0.0, 0.0)));

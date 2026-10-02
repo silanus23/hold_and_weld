@@ -296,7 +296,6 @@ std::optional<gp_Vec> surface_normal_at_point(const gp_Pnt & point, const TopoDS
     GeomAPI_ProjectPointOnSurf projector(point, surf);
 
     if (projector.NbPoints() == 0) {
-      // Projection failed — caller must handle this case
       return std::nullopt;
     }
 

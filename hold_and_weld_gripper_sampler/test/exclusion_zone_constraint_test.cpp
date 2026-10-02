@@ -67,7 +67,6 @@ protected:
   ParsedGripper gripper_;
 };
 
-// Gripper placed 1 m away from a circle exclusion zone must not collide.
 TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
 {
   exclusion_circle circle;
@@ -93,10 +92,7 @@ TEST_F(ExclusionZoneConstraintTest, NoCollisionWhenFarFromExclusionZone)
   EXPECT_FALSE(collision);
 }
 
-// TODO(silanus23): FCL collision check returns false even when the gripper is
-// placed at origin inside a circle exclusion zone. Likely a volume construction
-// or transform issue in the FCL wiring for circle exclusions.
-TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWhenInsideExclusionZone)
+TEST_F(ExclusionZoneConstraintTest, CollisionWhenInsideExclusionZone)
 {
   exclusion_circle circle;
   circle.center = Eigen::Vector3d(0.0, 0.0, 0.0);
@@ -120,7 +116,6 @@ TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWhenInsideExclusionZone)
   EXPECT_TRUE(constraint.intersects_exclusion_zone(origin_transform, 0.03));
 }
 
-// Gripper inside a line exclusion tube collides; gripper 0.5 m away does not.
 TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
 {
   exclusion_line line;
@@ -152,10 +147,7 @@ TEST_F(ExclusionZoneConstraintTest, CollisionWithLineExclusionZone)
   EXPECT_FALSE(collision);
 }
 
-// TODO(silanus23): FCL collision check returns false even when the gripper is
-// placed inside a polygon exclusion prism. Likely a volume construction or
-// transform issue in the FCL wiring for polygon exclusions.
-TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWithPolygonExclusionZone)
+TEST_F(ExclusionZoneConstraintTest, CollisionWithPolygonExclusionZone)
 {
   exclusion_polygon polygon;
   polygon.exclusion_corners = {
@@ -183,7 +175,6 @@ TEST_F(ExclusionZoneConstraintTest, DISABLED_CollisionWithPolygonExclusionZone)
   EXPECT_TRUE(constraint.intersects_exclusion_zone(origin_transform, 0.03));
 }
 
-// Degenerate zero-length line exclusion must not crash.
 TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
 {
   exclusion_line line;
@@ -207,7 +198,6 @@ TEST_F(ExclusionZoneConstraintTest, ZeroLengthLineHandled)
   EXPECT_NE(constraint.get_skipped()[0].find("line exclusion zone 0"), std::string::npos);
 }
 
-// Sub-millimetre exclusion geometry must not crash during collision query.
 TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
 {
   exclusion_circle circle;
@@ -232,7 +222,6 @@ TEST_F(ExclusionZoneConstraintTest, VerySmallExclusionRadius)
   constraint.intersects_exclusion_zone(transform, 0.03);
 }
 
-// Sample areas are empty until analyze_constraints() is called.
 TEST_F(ExclusionZoneConstraintTest, SampleAreasEmptyBeforeAnalysis)
 {
   exclusion_circle circle;
@@ -288,8 +277,8 @@ std::vector<gp_Pnt> samples_left_in_zone(
 // A weld seam running off the edge of a face: the tube cuts the top face in a
 // strip that ends at the face's own boundary, and cuts the side face in a
 // half-disk. A section of the tube against the part returns only the cut
-// curves, never the face edges that close these regions, so the wires came out
-// open and the sampler could not tell inside from outside.
+// curves, never the face edges that close these regions; without those the wires
+// are open and the sampler cannot tell inside from outside.
 TEST_F(ExclusionZoneConstraintTest, SeamRunningOffAFaceYieldsClosedWiresThatExclude)
 {
   exclusion_line seam;

@@ -47,7 +47,7 @@
 #include "hold_and_weld_gripper_sampler/geometry/occt_utils.hpp"
 
 // TODO(silanus23): Add a splitter that splits based on sudden normal trend changes.
-// TODO(silanus23): Make heuristic approches adaptive instead strict sample based
+// TODO(silanus23): Make heuristic approaches adaptive instead of strictly sample based
 
 namespace hold_and_weld_gripper_sampler
 {
@@ -167,7 +167,9 @@ TopoDS_Shape apply_face_splits(
   if (plan.empty()) {return shape;}
 
   std::vector<const FaceSplits *> all;
-  for (const auto & fs : plan) {all.push_back(&fs);}
+  for (const auto & fs : plan) {
+    all.push_back(&fs);
+  }
   TopoDS_Shape combined = try_split(shape, all);
   if (!combined.IsNull()) {return combined;}
 
@@ -500,13 +502,11 @@ void ShapeRefiner::identify_enclave_features(
     for (; wire_exp.More(); wire_exp.Next()) {
       const TopoDS_Wire & wire = TopoDS::Wire(wire_exp.Current());
 
-      // Skip the outer wire — only process inner wires (holes)
       if (!outer_wire.IsNull() && wire.IsSame(outer_wire)) {
         continue;
       }
 
       TopTools_ListOfShape enclave_faces;
-      // BFS from inner wire boundary
       collect_enclave_faces(wire, parent_face, edge_to_faces, enclave_faces);
 
       if (should_suppress_enclave(parent_face, enclave_faces, global_total_area)) {
@@ -589,7 +589,6 @@ bool ShapeRefiner::should_suppress_enclave(
     gp_Dir n_wall = calculate_safe_normal(TopoDS::Face(it.Value()));
     double angle_deg = n_parent.Angle(n_wall) * (180.0 / M_PI);
 
-    // Steep walls indicate a real feature — keep the enclave
     if (angle_deg > enclave_angle_threshold_ && angle_deg < (180.0 - enclave_angle_threshold_)) {
       return false;
     }
@@ -731,7 +730,7 @@ bool ShapeRefiner::is_physically_planar(const TopoDS_Face & face) const
   double u_params[] = {surface.FirstUParameter(), surface.LastUParameter()};
   double v_params[] = {surface.FirstVParameter(), surface.LastVParameter()};
 
-  // Checks 4 corners only — a saddle point in the interior could be missed!
+  // Checks 4 corners only, a saddle point in the interior could be missed!
   for (double u : u_params) {
     for (double v : v_params) {
       GeomLProp_SLProps props(surf, u, v, 1, 1e-6);

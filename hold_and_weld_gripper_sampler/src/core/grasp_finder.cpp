@@ -119,9 +119,8 @@ std::string GraspFinder::initialize()
           return;
         }
 
-      // Only pass the non-ground secondary shapes to add_secondary_shapes() so they
-      // land in secondary_bvhs_ and show up correctly in FCL stats.
-      // Ground shapes go through add_ground_plane_z() -> ground_halfspace_ separately.
+        // Only the non-ground secondaries go to the constructor, so they land in
+        // secondary_bvhs_ and are counted in FCL stats; the ground is added below.
         fcl_checker_ = std::make_shared<geometry::FCLCollisionChecker>(
         gripper_,
         fcl_primary_shape_,
@@ -175,7 +174,6 @@ std::string GraspFinder::initialize()
 
 GraspFinderResult GraspFinder::find()
 {
-  // Return cached result if the pipeline already ran successfully.
   if (cached_result_.has_value()) {
     return *cached_result_;
   }
@@ -271,7 +269,6 @@ GraspFinderResult GraspFinder::find()
 
     result.success = true;
 
-    // Cache so find_top() / find_best() don't re-run the pipeline.
     cached_result_ = result;
 
     auto stats = kissing_constraint_->get_collision_stats();

@@ -38,36 +38,58 @@ namespace constraints
 
 /**
  * @brief Exclusion zone defined as a line with radius
+ *
+ * Fields mirror exclusion_zones.lines in PARAMS.md.
  */
 struct exclusion_line
 {
+  /** Tube axis start in the world frame [m]. */
   Eigen::Vector3d start;
+  /** Tube axis end in the world frame [m]. */
   Eigen::Vector3d end;
+  /** Tube radius [m]. */
   double exclusion_radius = 0.0;
+  /** Safety margin [m]. */
   double clearance = 0.01;
   std::string id;
 };
 
 /**
  * @brief Exclusion zone defined as a circle on a plane
+ *
+ * Fields mirror exclusion_zones.circles in PARAMS.md.
  */
 struct exclusion_circle
 {
+  /** Circle centre in the world frame [m]. */
   Eigen::Vector3d center;
+  /** Plane normal; the volume extrudes along +normal. Need not be unit length. */
   Eigen::Vector3d normal;
+  /** [m] */
   double radius = 0.0;
+  /** How far the volume reaches from the plane along +normal [m]. */
   double projection_depth = 0.0;
+  /** Safety margin [m]; the volume also starts this far behind the plane. */
   double clearance = 0.01;
   std::string id;
 };
 
 /**
  * @brief Exclusion zone defined as a polygon
+ *
+ * Fields mirror exclusion_zones.polygons in PARAMS.md.
  */
 struct exclusion_polygon
 {
+  /**
+   * Coplanar corners in the world frame [m]. Their winding sets the normal by the
+   * right-hand rule over corners 0-2, and the volume extrudes along it; corners 0-2
+   * must not be collinear.
+   */
   std::vector<Eigen::Vector3d> exclusion_corners;
+  /** How far the volume reaches from the corners' plane along the normal [m]. */
   double projection_depth = 0.0;
+  /** Safety margin [m]; the volume also starts this far behind the plane. */
   double clearance = 0.01;
   std::string id;
 };
@@ -101,10 +123,10 @@ public:
    * @param circles Optional exclusion circles (e.g. weld spots, screw heads)
    * @param polygons Optional exclusion polygons (e.g. forbidden rectangular regions)
    * @param lines Optional exclusion lines (e.g. weld seams)
-   * @param mesh_linear_deflection Max distance between mesh edge and actual curve (meters)
-   * @param mesh_angular_deflection Max angular deviation between adjacent mesh triangles (radians)
+   * @param mesh_linear_deflection Max distance between mesh edge and actual curve [m]
+   * @param mesh_angular_deflection Max angular deviation between adjacent mesh triangles [rad]
    * @param sample_density Spacing of the face samples used to find each zone's
-   *   footprint on the part (meters). Zones narrower than this can fall between samples.
+   *   footprint on the part [m]. Zones narrower than this can fall between samples.
    */
   ExclusionZoneConstraint(
     std::shared_ptr<const geometry::GeometryMapper> mapper,
@@ -118,7 +140,9 @@ public:
   );
 
   /**
-   * @brief Set FCL collision checker for fast collision queries
+   * @brief Set the FCL checker used for pose-level queries
+   *
+   * Required: without a valid checker every pose is rejected.
    *
    * @param fcl_checker Shared pointer to FCL collision checker
    */
@@ -204,8 +228,6 @@ private:
 
   std::vector<core::SampleArea> sample_areas_;
 
-  // Linear deflection: max distance between mesh edge and actual curve (meters)
-  // Angular deflection: max angular deviation between adjacent triangles (radians)
   double mesh_linear_deflection_;
   double mesh_angular_deflection_;
   double sample_density_;
@@ -216,7 +238,7 @@ private:
    * @brief Create cylindrical tube from line constraint
    *
    * @param line Line constraint definition
-   * @param include_clearance If true, add clearance to radius
+   * @param include_clearance If true, add clearance to the radius and extend both ends by it
    * @return Triangulated tube shape
    */
   TopoDS_Shape create_tube_from_line(
@@ -228,7 +250,7 @@ private:
    * @brief Create thick disk from circle constraint
    *
    * @param circle Circle constraint definition
-   * @param include_clearance If true, add clearance to radius
+   * @param include_clearance If true, add clearance to the radius and the extrusion depth
    * @return Triangulated disk shape
    */
   TopoDS_Shape create_volume_from_circle(
@@ -240,7 +262,8 @@ private:
    * @brief Create extruded prism from polygon constraint
    *
    * @param polygon Polygon constraint definition
-   * @param include_clearance If true, offset polygon by clearance
+   * @param include_clearance If true, offset the polygon and add to the extrusion depth by
+   *   clearance
    * @return Triangulated prism shape
    */
   TopoDS_Shape create_prism_from_polygon(

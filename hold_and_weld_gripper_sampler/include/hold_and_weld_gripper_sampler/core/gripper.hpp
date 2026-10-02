@@ -33,17 +33,26 @@ namespace hold_and_weld_gripper_sampler
  */
 struct ParsedGripper
 {
+  /** Finger 1 collision geometry in the base link frame, at the closed pose. */
   TopoDS_Shape finger_1;
+  /** Finger 2 collision geometry in the base link frame, at the closed pose. */
   TopoDS_Shape finger_2;
+  /** Base collision geometry in the base link frame. */
   TopoDS_Shape base;
 
+  /** Unit opening direction of finger 1 in the base link frame. */
   Eigen::Vector3d finger_1_axis;
+  /** Unit opening direction of finger 2 in the base link frame; opposite finger_1_axis. */
   Eigen::Vector3d finger_2_axis;
 
+  /** Full opening, twice the shared finger joint travel [m]. */
   double max_opening = 0.0;
 
+  /** From <gripper_type>; "parallel" when absent. */
   std::string gripper_type;
+  /** TCP position in the base link frame [m]. */
   Eigen::Vector3d tcp_offset;
+  /** TCP orientation as URDF roll, pitch, yaw [rad]. TODO(silanus23): stored but not used yet. */
   Eigen::Vector3d tcp_rpy;
 
   std::string base_link_name;
@@ -58,7 +67,7 @@ struct ParsedGripper
    * Translates each finger along its opening axis by the amount needed to
    * achieve the requested grip distance. Clamps to [0, max_opening].
    *
-   * @param grip_distance Target distance between finger contact points (meters)
+   * @param grip_distance Target distance between finger contact points [m]
    * @return Compound shape: finger_1 + finger_2 + base at configured state
    */
   TopoDS_Shape configure(double grip_distance) const;

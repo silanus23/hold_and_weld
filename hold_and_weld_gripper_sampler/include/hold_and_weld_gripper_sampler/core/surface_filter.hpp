@@ -26,7 +26,7 @@ namespace core
 {
 
 /**
- * @brief Base class for surface filtering operations.
+ * @brief Base class for surface filtering operations
  *
  * Surface filters evaluate surfaces in a topology and return a list of
  * surface IDs that pass the filter criteria. This is used during pre-filtering

@@ -67,15 +67,8 @@ inline bool is_wire_closed(const TopoDS_Wire & wire)
 }  // namespace
 
 /**
- * @brief Build an FCLCollisionChecker from a gripper and primary shape.
- *
- * This is the common sub-operation shared by all wire_fcl() helpers in the
- * test fixtures: construct the checker so that FCL BVH meshes are built for
- * the primary shape and the gripper geometry.
- *
- * @param gripper      Gripper description (fingers, base).
- * @param primary_shape Primary workpiece shape to triangulate into BVH.
- * @return Shared pointer to a ready-to-use FCLCollisionChecker.
+ * @brief Build an FCLCollisionChecker from a gripper and primary shape, shared by
+ * the fixtures' wire_fcl() helpers
  */
 inline std::shared_ptr<FCLCollisionChecker> make_fcl_checker(
   const ParsedGripper & gripper,

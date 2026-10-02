@@ -19,13 +19,11 @@ using namespace hold_and_weld_gripper_sampler::geometry;  // NOLINT
 
 namespace test_constants
 {
-// Expected topology counts for primitives
 constexpr int kBoxCorners = 8;
 constexpr int kBoxEdges = 12;
 constexpr int kBoxSurfaces = 6;
 constexpr int kCylinderSurfaces = 3;  // 1 curved + 2 caps
 
-// Unit vector magnitude
 constexpr double kUnitMagnitude = 1.0;
 constexpr double kTolerance = 1e-6;
 }  // namespace test_constants

@@ -27,7 +27,7 @@ namespace filters
 {
 
 /**
- * @brief Filters surfaces by minimum in-plane width.
+ * @brief Filters surfaces by minimum in-plane width
  *
  * Rejects surfaces whose smallest extent, measured in the plane normal to
  * Surface::normal over every in-plane direction, is below the threshold.
@@ -39,7 +39,7 @@ public:
   /**
    * @brief Constructor
    *
-   * @param min_dimension Minimum allowed dimension in meters. Must be finite and >= 0.
+   * @param min_dimension Minimum allowed dimension [m]. Must be finite and >= 0
    */
   explicit SurfaceDimensionFilter(double min_dimension);
 

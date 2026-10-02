@@ -124,7 +124,8 @@ TEST(ConfigParserTest, LineRadiusAndClearanceAreChecked)
   EXPECT_FALSE(parses(head + "      exclusion_radius: 0.005\n      clearance: -0.01\n"));
 }
 
-// Each of these used to parse and fail later, or silently become something else.
+// Each of these must be rejected at parse time, not fail later or silently become
+// something else.
 TEST(ConfigParserTest, NonFiniteDegenerateOrAmbiguousInputIsRejected)
 {
   const std::string circle =

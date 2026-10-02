@@ -37,7 +37,7 @@ namespace geometry
 {
 
 /**
- * @brief FCL-based collision checker for gripper collision queries.
+ * @brief FCL-based collision checker for gripper collision queries
  *
  * Converts OCCT shapes to FCL BVH models once at construction; subsequent
  * queries use FCL's optimized algorithms. The gripper is decomposed into
@@ -68,13 +68,14 @@ public:
     double linear_deflection = 0.0001);
 
   /**
-   * @brief Fully-wired constructor — all collision volumes provided upfront.
+   * @brief Fully-wired constructor — all collision volumes provided upfront
    *
    * @param gripper Parsed gripper with finger and base shapes
    * @param primary_shape Primary workpiece shape for collision checking
    * @param exclusion_volumes Exclusion zone shapes (with clearance already applied)
    * @param secondary_shapes Fixture / ground shapes
-   * @param enable_ground_plane Whether to add an infinite ground plane
+   * @param enable_ground_plane Whether to add a ground plane (unbounded; use
+   *   add_ground_plane() for a finite one)
    * @param ground_z Z-coordinate of the ground plane surface
    * @param linear_deflection Triangulation precision (default 0.1mm)
    */
@@ -102,20 +103,19 @@ public:
   void add_secondary_shapes(const std::vector<TopoDS_Shape> & secondary_shapes);
 
   /**
-   * @brief Add the ground the workpiece sits on.
+   * @brief Add the ground the workpiece sits on
    *
-   * With a positive footprint and an upward normal the ground is a finite box:
-   * a weld setup is bounded, and an infinite plane rejects gripper poses that
-   * reach past the edge of the table into free space. Falls back to an infinite
+   * With a positive footprint and an upward normal the ground is a finite box
+   * (see GroundConfig for why). Falls back to an infinite
    * FCL Halfspace when no footprint is given, or when the normal is not +Z
    * (a tilted ground has no axis-aligned footprint to speak of).
    *
-   * @param normal Outward unit normal of the ground surface (default (0,0,1) = floor up).
-   * @param plane_offset Signed distance from world origin along normal to the plane surface.
-   * @param size_x Footprint extent along X [m]; <= 0 selects the infinite halfspace.
-   * @param size_y Footprint extent along Y [m]; <= 0 selects the infinite halfspace.
-   * @param center_x Footprint centre along X [m].
-   * @param center_y Footprint centre along Y [m].
+   * @param normal Outward unit normal of the ground surface (default (0,0,1) = floor up)
+   * @param plane_offset Signed distance from the world origin to the surface, along normal [m]
+   * @param size_x Footprint extent along X [m]; <= 0 selects the infinite halfspace
+   * @param size_y Footprint extent along Y [m]; <= 0 selects the infinite halfspace
+   * @param center_x Footprint centre along X [m]
+   * @param center_y Footprint centre along Y [m]
    * @param thickness How far the ground body extends below its surface [m]. Only
    *   needs to exceed how far below the floor a candidate pose can reach.
    */
@@ -137,7 +137,7 @@ public:
   bool has_finite_ground() const;
 
   /**
-   * @brief Whether a ground plane has been added to this checker.
+   * @brief Whether a ground plane has been added to this checker
    *
    * @return true once add_ground_plane() has been called
    */
@@ -148,8 +148,8 @@ public:
    * @brief Check if gripper collides with primary shape
    *
    * @param gripper_transform Transform placing gripper in world frame
-   * @param grip_distance Distance between finger contact points
-   * @param tolerance Clearance required between gripper and shape [m]
+   * @param grip_distance Distance between finger contact points [m]
+   * @param tolerance Clearance required between gripper and obstacle [m]
    * @return true if collision detected (distance < tolerance), or if the checker is invalid
    */
   bool collides_with_primary(
@@ -161,8 +161,8 @@ public:
    * @brief Check if gripper collides with any exclusion volume
    *
    * @param gripper_transform Transform placing gripper in world frame
-   * @param grip_distance Distance between finger contact points
-   * @param tolerance Collision tolerance
+   * @param grip_distance Distance between finger contact points [m]
+   * @param tolerance Clearance required between gripper and obstacle [m]
    * @return true if collision detected with any exclusion volume, or if the checker is invalid
    */
   bool collides_with_exclusions(
@@ -174,8 +174,8 @@ public:
    * @brief Check if gripper collides with the ground plane
    *
    * @param gripper_transform Transform placing gripper in world frame
-   * @param grip_distance Distance between finger contact points
-   * @param tolerance Collision tolerance
+   * @param grip_distance Distance between finger contact points [m]
+   * @param tolerance Clearance required between gripper and obstacle [m]
    * @return true if collision detected with the ground plane, or if the checker is invalid
    */
   bool collides_with_ground(
@@ -187,8 +187,8 @@ public:
    * @brief Check if gripper collides with any secondary shape (excludes ground plane)
    *
    * @param gripper_transform Transform placing gripper in world frame
-   * @param grip_distance Distance between finger contact points
-   * @param tolerance Collision tolerance
+   * @param grip_distance Distance between finger contact points [m]
+   * @param tolerance Clearance required between gripper and obstacle [m]
    * @return true if collision detected with any secondary shape, or if the checker is invalid
    */
   bool collides_with_secondaries(
@@ -202,12 +202,12 @@ public:
    * Obstacles are secondary shapes and the exclusion volumes. The primary
    * shape is excluded because the jaw-clearance volume this serves always
    * contains the part being grasped; the ground is excluded because a round
-   * volume over-approximates the jaws badly against an infinite halfspace.
+   * volume over-approximates the jaws badly against a ground the part rests on.
    *
    * @param cylinder_pose Transform placing the cylinder centre in the world frame,
    * with the cylinder axis along the transform's local Z
-   * @param radius Cylinder radius
-   * @param length Cylinder length along the axis
+   * @param radius Cylinder radius [m]
+   * @param length Cylinder length along the axis [m]
    * @return true if the cylinder overlaps any obstacle, or if the checker is invalid
    */
   bool cylinder_collides_with_obstacles(
@@ -241,25 +241,21 @@ public:
 
 private:
   /**
-   * @brief Convert OCCT shape to FCL BVH model
+   * @brief Triangulate an OCCT shape at linear_deflection_ into an FCL BVH model
    *
-   * @param shape Shape to triangulate at linear_deflection_
    * @return The model, or null if the shape is null or fails to mesh
    */
   std::shared_ptr<BVHModel> shape_to_bvh(const TopoDS_Shape & shape) const;
 
   /**
    * @brief Convert gp_Trsf to FCL Transform3
-   *
-   * @param trsf Transform to convert
-   * @return Equivalent FCL transform
    */
   Transform3 to_fcl_transform(const gp_Trsf & trsf) const;
 
   /**
-   * @brief Finger poses, relative to the base, for the given jaw opening.
+   * @brief Finger poses, relative to the base, for the given jaw opening
    *
-   * @param grip_distance      Opening between the finger contact faces [m]
+   * @param grip_distance Opening between the finger contact faces [m]
    * @param finger_1_transform Receives finger 1's offset from its modelled (closed) pose
    * @param finger_2_transform Receives finger 2's offset from its modelled (closed) pose
    */
@@ -313,6 +309,7 @@ private:
   Eigen::Vector3d finger_1_axis_;
   Eigen::Vector3d finger_2_axis_;
 
+  /** Gap between the finger inner faces in the closed pose, along finger_2_axis_ [m]. */
   double rest_gap_;
 
   std::shared_ptr<BVHModel> primary_bvh_;
@@ -375,7 +372,7 @@ private:
 
 public:
   /**
-   * @brief Log per-part collision statistics accumulated since construction.
+   * @brief Log per-part collision statistics accumulated since construction
    */
   void log_collision_stats() const;
 

@@ -69,7 +69,9 @@ struct WriterOptions
   bool pretty_print = true;
   int indent_size = 2;
   bool include_metadata = true;
+  /** As output.max_grasps in PARAMS.md; 0 writes all. */
   size_t max_grasps = 0;
+  /** As output.min_quality in PARAMS.md. */
   double min_quality = 0.0;
 };
 
@@ -78,7 +80,7 @@ struct WriterOptions
  *
  * Output format matches the trajectory JSON used by magic_wand.py and other
  * visualization tools. Each grasp includes:
- * - TCP pose (position + quaternion)
+ * - TCP pose (position + quaternion as [x, y, z, w], the order magic_wand.py reads)
  * - Contact points (both fingers)
  * - Quality score
  * - Surface IDs

@@ -28,64 +28,32 @@ namespace hold_and_weld_gripper_sampler
 {
 
 /**
- * @brief Represents a single grasp configuration in the world frame.
+ * @brief Represents a single grasp configuration in the world frame
  */
 struct Grasp
 {
-  /**
-   * @brief TCP (Tool Center Point) position in world frame [m]
-   *
-   * This is the target pose for the gripper during execution.
-   * Positioned at the midpoint between the two contact points.
-   */
+  /** TCP position in the world frame, midway between the contact points [m]. */
   Eigen::Vector3d tcp_position;
 
-  /**
-   * @brief TCP orientation in world frame (quaternion).
-   *
-   * Z-axis points along the approach direction (toward object).
-   */
+  /** TCP orientation in the world frame; +Z is the approach direction (toward the object). */
   Eigen::Quaterniond tcp_orientation;
 
-  /**
-   * @brief Required gripper opening distance [m]
-   *
-   * Distance between finger contact points.
-   * Must be within gripper's min/max opening range.
-   */
+  /** Distance between the contact points, within the gripper's opening range [m]. */
   double gripper_opening;
 
-  /**
-   * @brief First contact point on object surface [m, world frame]
-   *
-   * Location where first gripper finger touches the object.
-   */
+  /** First finger's contact point in the world frame [m]. */
   Eigen::Vector3d contact_point_1;
 
-  /**
-   * @brief Second contact point on object surface [m, world frame]
-   *
-   * Location where second gripper finger touches the object.
-   */
+  /** Second finger's contact point in the world frame [m]. */
   Eigen::Vector3d contact_point_2;
 
-  /**
-   * @brief Surface ID for first contact point (0-indexed)
-   *
-   * References Topology::Surface index; -1 when unset.
-   */
+  /** Topology::Surface index of contact_point_1; -1 when unset. */
   int surface_id_1;
 
-  /**
-   * @brief Surface ID for second contact point (0-indexed)
-   *
-   * References Topology::Surface index; -1 when unset.
-   */
+  /** Topology::Surface index of contact_point_2; -1 when unset. */
   int surface_id_2;
 
-  /**
-   * @brief Grasp quality score [0.0 - 1.0]. Higher is better. Default: 0.0 (unscored).
-   */
+  /** Quality score in [0, 1], higher is better; 0 when unscored. */
   double quality_score;
 
   /**
@@ -103,7 +71,7 @@ struct Grasp
   {}
 
   /**
-   * @brief Factory method to create a Grasp from pre-converted Eigen values.
+   * @brief Factory method to create a Grasp from pre-converted Eigen values
    *
    * @param tcp_pos TCP position in world frame [m]
    * @param tcp_orient TCP orientation in world frame
@@ -154,16 +122,16 @@ inline void sort_by_quality(std::vector<Grasp> & grasps)
 }
 
 /**
- * @brief Diversity-aware reordering: interleave geometrically distant grasps.
+ * @brief Diversity-aware reordering: interleave geometrically distant grasps
  *
  * Uses greedy farthest-point selection so each successive grasp differs
  * maximally from all previously selected ones. Distance combines TCP position
- * (metres) and approach-direction angle (radians). The first element is always
+ * [m] and approach-direction angle [rad]. The first element is always
  * the highest-quality grasp (seed); quality breaks ties elsewhere.
  *
- * @param grasps     Vector to reorder in place (quality-sorted before calling).
- * @param pos_weight Scale applied to TCP position distances [m].
- * @param ori_weight Scale applied to orientation distances [rad].
+ * @param grasps Vector to reorder in place (quality-sorted before calling)
+ * @param pos_weight Unitless weight on the TCP position distance, which is in metres
+ * @param ori_weight Unitless weight on the approach angle distance, which is in radians
  */
 inline void sort_by_diversity(
   std::vector<Grasp> & grasps,

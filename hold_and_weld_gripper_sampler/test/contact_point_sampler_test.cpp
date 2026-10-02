@@ -114,14 +114,12 @@ protected:
   std::shared_ptr<GeometryMapper> mapper_;
 };
 
-// Sampler constructs with default config without throwing.
 TEST_F(ContactPointSamplerTest, DefaultConstructor)
 {
   ContactPointSampler sampler;
   SUCCEED();
 }
 
-// Sampler accepts a fully populated custom config.
 TEST_F(ContactPointSamplerTest, CustomConfiguration)
 {
   SamplingConfig config;
@@ -138,7 +136,6 @@ TEST_F(ContactPointSamplerTest, CustomConfiguration)
   SUCCEED();
 }
 
-// Opposite faces of a grippable box produce pairs with antiparallel normals and in-range distances.
 TEST_F(ContactPointSamplerTest, BasicBoxPairing)
 {
   TopoDS_Shape box = BRepPrimAPI_MakeBox(0.10, 0.10, 0.04).Shape();
@@ -207,7 +204,6 @@ TEST_F(ContactPointSamplerTest, DistanceFilteringTooSmall)
   EXPECT_EQ(pairs.size(), 0);
 }
 
-// Tight angle window near 180° accepts only near-perfectly-opposing face pairs.
 TEST_F(ContactPointSamplerTest, AngleFilteringAntipodal)
 {
   TopoDS_Shape box = BRepPrimAPI_MakeBox(0.05, 0.05, 0.05).Shape();
@@ -235,7 +231,6 @@ TEST_F(ContactPointSamplerTest, AngleFilteringAntipodal)
   }
 }
 
-// Perpendicular faces (90° apart) must be rejected when min_angle_deg is 160°.
 TEST_F(ContactPointSamplerTest, AngleFilteringPerpendicular)
 {
   TopoDS_Shape box = BRepPrimAPI_MakeBox(0.10, 0.10, 0.05).Shape();
@@ -264,7 +259,6 @@ TEST_F(ContactPointSamplerTest, AngleFilteringPerpendicular)
   EXPECT_EQ(pairs.size(), 0);
 }
 
-// Excluding a central region of the top face reduces the total pair count.
 TEST_F(ContactPointSamplerTest, ExclusionZoneReducesPairs)
 {
   TopoDS_Shape box = BRepPrimAPI_MakeBox(0.10, 0.10, 0.05).Shape();
@@ -448,7 +442,6 @@ TEST_F(ContactPointSamplerTest, WedgeAngledSurfaces)
   }
 }
 
-// Empty surface list and single surface both yield zero pairs.
 TEST_F(ContactPointSamplerTest, BoundaryConditions_ZeroPairs)
 {
   TopoDS_Shape box = BRepPrimAPI_MakeBox(0.10, 0.10, 0.05).Shape();
@@ -466,7 +459,6 @@ TEST_F(ContactPointSamplerTest, BoundaryConditions_ZeroPairs)
   EXPECT_EQ(pairs_single.size(), 0);
 }
 
-// Full-face exclusions covering every surface yield zero pairs.
 TEST_F(ContactPointSamplerTest, AllSurfacesExcluded)
 {
   TopoDS_Shape box = BRepPrimAPI_MakeBox(0.10, 0.10, 0.05).Shape();

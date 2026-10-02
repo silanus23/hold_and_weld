@@ -79,11 +79,11 @@ public:
    * @param gripper Parsed gripper kinematic information
    * @param secondary_shapes Fixtures and obstacles (not the ground)
    * @param contact_threshold Surfaces with contact > this ratio are banned (default 0.8 = 80%)
-   * @param collision_tolerance Distance threshold for collision detection in meters (default 1e-6)
-   * @param contact_distance_threshold Distance under which a sample counts as touching (meters)
-   * @param mesh_linear_deflection Meshing deflection for secondary collision geometry (meters)
-   * @param mesh_angular_deflection Meshing angular deflection for secondary geometry (radians)
-   * @param contact_sample_density Spacing between contact-ratio samples (meters, default 5 mm).
+   * @param collision_tolerance Distance threshold for collision detection [m] (default 1e-6)
+   * @param contact_distance_threshold Distance under which a sample counts as touching [m]
+   * @param mesh_linear_deflection Meshing deflection for secondary collision geometry [m]
+   * @param mesh_angular_deflection Meshing angular deflection for secondary geometry [rad]
+   * @param contact_sample_density Spacing between contact-ratio samples [m] (default 0.005)
    *   Measuring a contact *fraction* needs far less resolution than placing contact points,
    *   and each sample costs an exact distance query, so this is deliberately coarser than
    *   SamplingConfig::sample_density.
@@ -101,7 +101,9 @@ public:
   );
 
   /**
-   * @brief Set FCL collision checker for fast collision queries
+   * @brief Set the FCL checker used for pose-level queries
+   *
+   * Required: without a valid checker every pose is rejected.
    *
    * @param fcl_checker Shared pointer to FCL collision checker
    */
@@ -109,6 +111,8 @@ public:
 
   /**
    * @brief Analyze contact between primary and secondaries
+   *
+   * Must be called before get_banned_surface_ids() and get_sample_areas().
    *
    * @param topology Primary shape topology
    */
@@ -130,11 +134,6 @@ public:
 
   /**
    * @brief Check if gripper at specified pose and grip distance collides with secondaries
-   *
-   * This method:
-   * 1. Configures gripper fingers to grip_distance
-   * 2. Transforms configured gripper to grasp_pose
-   * 3. Checks collision with secondary shapes
    *
    * @param grip_distance Distance between fingers (determines joint state)
    * @param grasp_transform 6-DOF pose of gripper (gp_Trsf)
@@ -165,8 +164,7 @@ public:
   /**
    * @brief Get collision rejection statistics
    *
-   * Returns statistics about why grasps were rejected during collision checking.
-   * Useful for debugging and understanding collision patterns.
+   * Counts total checks and FCL rejections since the last reset.
    *
    * @return Collision statistics structure
    */

@@ -33,7 +33,9 @@ namespace io
  */
 struct ShapeLoaderConfig
 {
+  /** Triangulation chord-height tolerance [m]. */
   double linear_deflection = 0.0001;
+  /** Triangulation angular tolerance [rad]. */
   double angular_deflection = 0.5;
   bool auto_triangulate = true;
 };
@@ -45,8 +47,8 @@ struct ShapeLoaderConfig
  * Use this for objects that only need collision detection, not grasp sampling.
  * For primary workpieces that need full topology, use GeometryMapper instead.
  *
- * Supported formats: STEP (.step, .stp), STL (.stl), and geometric primitives.
- * All loaded shapes are automatically triangulated for efficient collision detection.
+ * Supported formats: STEP (.step, .stp), STL (.stl), URDF, and geometric primitives.
+ * Loaded shapes are triangulated when ShapeLoaderConfig::auto_triangulate is set.
  */
 class ShapeLoader
 {
@@ -65,6 +67,8 @@ public:
 
   /**
    * @brief Load shape from STEP file
+   *
+   * The shape is rotated about its own origin first, then translated.
    *
    * @param step_path Path to STEP file (.step or .stp)
    * @param translation Translation to apply [m]
@@ -112,7 +116,7 @@ public:
    * @brief Create a box shape
    *
    * @param dimensions Box dimensions (x, y, z) [m]
-   * @param center Center position in world frame
+   * @param center Center position in world frame [m]
    * @param rotation Rotation to apply
    * @return Box shape
    */
@@ -126,7 +130,7 @@ public:
    *
    * @param radius Cylinder radius [m]
    * @param height Cylinder height [m]
-   * @param center Center position in world frame
+   * @param center Center position in world frame [m]
    * @param rotation Rotation to apply
    * @return Cylinder shape
    */
@@ -140,7 +144,7 @@ public:
    * @brief Create a sphere shape
    *
    * @param radius Sphere radius [m]
-   * @param center Center position in world frame
+   * @param center Center position in world frame [m]
    * @return Sphere shape
    */
   TopoDS_Shape make_sphere(
@@ -152,10 +156,10 @@ public:
    *
    * @param size_x Extent in X direction [m]
    * @param size_y Extent in Y direction [m]
-   * @param z_position Z position of the top surface of the ground plane
+   * @param z_position Z position of the top surface of the ground plane [m]
    * @param thickness Thickness of the ground box [m]
-   * @param center_x X center of the ground plane (default 0.0)
-   * @param center_y Y center of the ground plane (default 0.0)
+   * @param center_x X center of the ground plane [m]
+   * @param center_y Y center of the ground plane [m]
    * @return Ground plane shape
    */
   TopoDS_Shape make_ground_plane(
@@ -223,9 +227,6 @@ private:
 
   /**
    * @brief Resolve package:// URLs to absolute paths using ament_index_cpp
-   *
-   * @param url URL to resolve (package:// or absolute path)
-   * @return Resolved absolute path
    */
   std::string resolve_package_url(const std::string & url) const;
 };

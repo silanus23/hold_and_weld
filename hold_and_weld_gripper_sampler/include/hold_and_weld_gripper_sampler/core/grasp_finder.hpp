@@ -83,6 +83,8 @@ struct GraspFinderResult
 
 /**
  * @brief Shape refiner configuration
+ *
+ * Mirrors the shape_refiner.* keys; see PARAMS.md.
  */
 struct ShapeRefinerConfig
 {
@@ -98,6 +100,9 @@ struct ShapeRefinerConfig
 
 /**
  * @brief Configuration for GraspFinder
+ *
+ * The kissing_* fields mirror the kissing.* keys and the ground_* fields the
+ * ground_plane secondary; see PARAMS.md.
  */
 struct GraspFinderConfig
 {
@@ -106,39 +111,42 @@ struct GraspFinderConfig
   ShapeRefinerConfig shape_refiner;
   geometry::JawClearanceConfig jaw_clearance;
 
+  /** Also used as the ground constraint's support_threshold. */
   double kissing_contact_threshold = 0.8;
   double kissing_contact_distance_threshold = 0.005;
-  // Spacing of the face samples that measure secondary and ground contact ratios [m].
+  /** Spacing of the face samples that measure secondary and ground contact ratios [m]. */
   double kissing_sample_density = 0.005;
 
-  // Spacing of the face samples that find each exclusion zone's footprint [m].
+  /** Spacing of the face samples that find each exclusion zone's footprint [m]. */
   double exclusion_sample_density = 0.005;
 
-  // TODO(silanus23): still unused. GroundConstraint decides support by measured
-  // area fraction rather than by face normal, which handles faces that graze the
-  // ground at an angle; a normal test would reject those. Kept in case explicit
-  // normal-based filtering is wanted later.
+  /**
+   * TODO(silanus23): still unused. GroundConstraint decides support by measured
+   * area fraction rather than by face normal, which handles faces that graze the
+   * ground at an angle; a normal test would reject those. Kept in case explicit
+   * normal-based filtering is wanted later.
+   */
   double ground_normal_z_threshold = -0.9;
 
-  // Live: consumed by GroundConstraint. A surface sample within ground_safety_margin
-  // of ground_surface_z counts as resting on the ground.
+  /** A surface sample within this distance of ground_surface_z rests on the ground [m]. */
   double ground_safety_margin = 0.005;
 
-  // Live: the ground is a finite footprint, not an infinite plane. A weld setup is
-  // a bounded thing, and a part hanging off the edge is over open floor.
+  /** The ground is a finite footprint; see GroundConfig. */
   double ground_surface_z = 0.0;
   double ground_center_x = 0.0;
   double ground_center_y = 0.0;
   double ground_size_x = 10.0;
   double ground_size_y = 10.0;
 
-  // Collision tolerance for secondary/fixture checks. Kept tight (1e-6 m) — pre-computed
-  // queries against known geometry. Separate from orientation.collision_tolerance (1mm)
+  /**
+   * Collision tolerance for secondary/fixture checks [m]. Kept tight: pre-computed
+   * queries against known geometry. Separate from orientation.collision_tolerance.
+   */
   double collision_tolerance = 0.000001;
   std::vector<TopoDS_Shape> ground_shapes;
 
   bool use_fcl = true;
-  // YAML implicit_ground: without a ground_plane secondary, assume the ground_* defaults.
+  /** YAML implicit_ground: without a ground_plane secondary, assume the ground_* defaults. */
   bool enable_ground_plane_check = true;
   bool use_fcl_for_ground_plane = true;
 
@@ -151,13 +159,16 @@ struct GraspFinderConfig
  * @brief Coordinator class that wires all grasp sampling components together
  *
  * GraspFinder is the main entry point for finding valid grasps on a workpiece.
- * Components are initialized lazily on the first find() call in this order:
- * 1. Analyze constraints (exclusion zones, kissing surfaces)
- * 2. Build FCL collision checker
- * 3. Wire FCL to constraints and orientation finder
- * 4. Sample contact points
- * 5. Find valid grasp orientations
- * 6. Return sorted results
+ * Not thread-safe: find() and its wrappers must not be called concurrently.
+ * The first find() call initializes lazily:
+ * 1. Analyze constraints (exclusion zones, kissing surfaces, ground)
+ * 2. Build the FCL collision checker and wire it to the constraints
+ * 3. Build the jaw-clearance check, if enabled
+ *
+ * Every find() call then:
+ * 1. Sample contact points
+ * 2. Wire FCL and the checks into an orientation finder and find valid grasps
+ * 3. Return results sorted by quality
  */
 class GraspFinder
 {
@@ -233,13 +244,9 @@ private:
   GraspFinderConfig config_;
   rclcpp::Logger logger_;
 
-  // NOTE: GraspFinder is not thread-safe. find() must not be called
-  // concurrently. init_flag_ and init_error_ are accessed from a single
-  // thread only.
   mutable std::once_flag init_flag_;
   mutable std::string init_error_;
-  // Result cache: populated on the first successful find() call so that
-  // find_top() / find_best() do not re-run the full pipeline.
+  /** Set by the first successful find(), so find_top() / find_best() don't rerun the pipeline. */
   mutable std::optional<GraspFinderResult> cached_result_;
   std::shared_ptr<constraints::ExclusionZoneConstraint> exclusion_constraint_;
   std::shared_ptr<constraints::KissingSurfaceConstraint> kissing_constraint_;
@@ -259,13 +266,10 @@ private:
   std::string initialize();
 
   /**
-   * @brief Compute the set of surface IDs eligible for contact-point sampling
+   * @brief Compute the sorted surface IDs eligible for contact-point sampling
    *
    * Subtracts banned_ids (surfaces fully in contact with secondaries) from
    * the complete list of surface IDs in the primary topology.
-   *
-   * @param banned_ids Surface IDs that must be excluded from sampling
-   * @return Sorted vector of surface IDs that are available for sampling
    */
   std::vector<int> compute_valid_surface_ids(const std::vector<int> & banned_ids) const;
 
@@ -276,8 +280,6 @@ private:
    * the KissingSurfaceConstraint and, if present, the GroundConstraint and
    * concatenates them into a single vector that is forwarded to the
    * contact-point sampler.
-   *
-   * @return Combined vector of SampleArea objects from all constraints
    */
   std::vector<core::SampleArea> merge_sample_areas() const;
 

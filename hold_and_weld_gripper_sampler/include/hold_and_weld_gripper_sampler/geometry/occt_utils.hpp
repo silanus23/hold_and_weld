@@ -82,9 +82,9 @@ gp_Vec to_occt_vec(const Eigen::Vector3d & vec);
 Eigen::Vector3d to_eigen(const gp_Dir & dir);
 
 /**
- * @brief Convert ZYX Euler angles (roll, pitch, yaw) to a gp_Quaternion.
+ * @brief Convert roll, pitch, yaw to a gp_Quaternion
  *
- * Uses the aerospace (ZYX) convention: yaw applied first, then pitch, then roll.
+ * R = Rz(yaw)·Ry(pitch)·Rx(roll), the URDF convention.
  *
  * @param roll Rotation about X [rad]
  * @param pitch Rotation about Y [rad]
@@ -127,11 +127,11 @@ TopoDS_Shape apply_transform(
 IMeshTools_Parameters collision_mesh_parameters(double linear_deflection);
 
 /**
- * @brief Outward unit normal at the middle of a face's UV bounding box.
+ * @brief Outward unit normal at the middle of a face's UV bounding box
  *
  * Retries 10% into the UV box when the middle lands on a pole (sphere apex,
  * cone tip). On a trimmed or holed face the middle can lie outside the face,
- * so this represents faces whose normal barely varies.
+ * so use it only for faces whose normal barely varies.
  *
  * @param face Face to evaluate
  * @return The normal, or std::nullopt if it is undefined at both points
@@ -139,9 +139,7 @@ IMeshTools_Parameters collision_mesh_parameters(double linear_deflection);
 std::optional<gp_Vec> face_centre_normal(const TopoDS_Face & face);
 
 /**
- * @brief Extract surface normal at face center.
- *
- * Handles TopAbs_REVERSED faces correctly.
+ * @brief face_centre_normal() that throws std::runtime_error when the normal is undefined
  *
  * @param face Face to evaluate
  * @return Outward unit normal at the face's UV centre
@@ -157,7 +155,7 @@ gp_Vec extract_surface_normal(const TopoDS_Face & face);
 gp_Pnt extract_surface_center(const TopoDS_Face & face);
 
 /**
- * @brief Validate a shape's BRep topology, throwing with a defect summary if invalid.
+ * @brief Validate a shape's BRep topology, throwing with a defect summary if invalid
  *
  * Every geometry entry point (STEP import today) should call this right after
  * the shape leaves the reader/transform and before it reaches topology
@@ -216,7 +214,7 @@ Eigen::Quaterniond extract_quaternion(const gp_Trsf & transform);
  *
  * @param face_1 First face
  * @param face_2 Second face
- * @return Minimum distance in meters
+ * @return Minimum distance [m]
  */
 double face_min_distance(const TopoDS_Face & face_1, const TopoDS_Face & face_2);
 

@@ -90,7 +90,8 @@ public:
    * @brief Parse gripper from xacro file (processes xacro first)
    *
    * Runs xacro processing to expand macros before parsing.
-   * Requires xacro to be installed and available in PATH.
+   * Requires xacro to be installed and available in PATH. Both arguments are
+   * passed unsanitized to a shell command, so they must come from a trusted source.
    *
    * @param xacro_path Path to xacro file
    * @param xacro_args Optional xacro arguments (e.g., "prefix:=left_")
@@ -101,62 +102,66 @@ public:
     const std::string & xacro_args = "");
 
 private:
-  /**
-   * @brief Extract shape from link's collision geometry (all <collision> elements)
-   *
-   * @param urdf_string Complete URDF string
-   * @param link_name Name of the link to extract
-   * @return TopoDS_Shape (compound if multiple collision elements) representing the collision geometry
-   */
+  /** @brief Overload that parses urdf_string and forwards to the <robot> overload */
   TopoDS_Shape extract_link_shape(
     const std::string & urdf_string,
     const std::string & link_name);
 
+  /**
+   * @brief Extract shape from link's collision geometry (all <collision> elements)
+   *
+   * @param robot Root <robot> element
+   * @param link_name Name of the link to extract
+   * @return The collision geometry; a compound if there are multiple collision elements
+   */
   TopoDS_Shape extract_link_shape(
     tinyxml2::XMLElement * robot,
     const std::string & link_name);
 
-  /**
-   * @brief Extract joint axis direction
-   *
-   * @param urdf_string Complete URDF string
-   * @param joint_name Name of the joint
-   * @return Unit vector representing joint axis
-   */
+  /** @brief Overload that parses urdf_string and forwards to the <robot> overload */
   Eigen::Vector3d extract_joint_axis(
     const std::string & urdf_string,
     const std::string & joint_name);
 
+  /**
+   * @brief Extract joint axis direction
+   *
+   * @param robot Root <robot> element
+   * @param joint_name Name of the joint
+   * @return Unit vector representing joint axis
+   */
   Eigen::Vector3d extract_joint_axis(
     tinyxml2::XMLElement * robot,
+    const std::string & joint_name);
+
+  /** @brief Overload that parses urdf_string and forwards to the <robot> overload */
+  std::pair<double, double> extract_joint_limits(
+    const std::string & urdf_string,
     const std::string & joint_name);
 
   /**
    * @brief Extract joint position limits
    *
-   * @param urdf_string Complete URDF string
+   * @param robot Root <robot> element
    * @param joint_name Name of the joint
-   * @return Pair of (lower_limit, upper_limit) in meters
+   * @return Pair of (lower_limit, upper_limit) [m]
    */
   std::pair<double, double> extract_joint_limits(
-    const std::string & urdf_string,
+    tinyxml2::XMLElement * robot,
     const std::string & joint_name);
 
-  std::pair<double, double> extract_joint_limits(
-    tinyxml2::XMLElement * robot,
+  /** @brief Overload that parses urdf_string and forwards to the <robot> overload */
+  gp_Trsf extract_joint_origin(
+    const std::string & urdf_string,
     const std::string & joint_name);
 
   /**
    * @brief Extract joint origin transform
    *
-   * @param urdf_string Complete URDF string
+   * @param robot Root <robot> element
    * @param joint_name Name of the joint
    * @return Transform from parent link to child link origin
    */
-  gp_Trsf extract_joint_origin(
-    const std::string & urdf_string,
-    const std::string & joint_name);
-
   gp_Trsf extract_joint_origin(
     tinyxml2::XMLElement * robot,
     const std::string & joint_name);
@@ -205,7 +210,7 @@ private:
    * @brief Parse rpy string to Vector3d
    *
    * @param rpy_str String in format "roll pitch yaw"
-   * @return Parsed vector (in radians)
+   * @return Parsed vector [rad]
    */
   Eigen::Vector3d parse_rpy(const std::string & rpy_str);
 };

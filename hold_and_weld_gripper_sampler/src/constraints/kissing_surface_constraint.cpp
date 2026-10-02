@@ -116,9 +116,6 @@ void KissingSurfaceConstraint::analyze_constraints(const geometry::Topology & to
     "contact_threshold=%.1f%%",
     all_surfaces.size(), contact_threshold_ * 100.0);
 
-  // No meshing pass here any more: measure_contact_ratio samples the face's
-  // own UV domain, so primary triangulation is irrelevant to contact ratio.
-
   for (size_t i = 0; i < all_surfaces.size(); i++) {
     int surface_id = static_cast<int>(i);
     std::vector<sampling::FaceSample> contact_samples;

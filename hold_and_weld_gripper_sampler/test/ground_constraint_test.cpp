@@ -66,8 +66,7 @@ protected:
 // A box sitting flat on the ground: the bottom face is fully supported and is
 // banned outright. The four side faces are not supported, but their lowest strip
 // is inside the contact band — a contact point a couple of millimetres off the
-// floor would put a finger through it — so each gets an exclusion wire. That
-// near-ground strip was invisible to the old triangle-centroid measurement.
+// floor would put a finger through it — so each gets an exclusion wire.
 TEST_F(GroundConstraintTest, FlatRestingBoxBansBottomAndExcludesSideStrips)
 {
   const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(-0.05, -0.05, 0.0), 0.1, 0.1, 0.1).Shape();
@@ -89,7 +88,6 @@ TEST_F(GroundConstraintTest, FlatRestingBoxBansBottomAndExcludesSideStrips)
   }
 }
 
-// A box lifted clear of the ground touches nothing.
 TEST_F(GroundConstraintTest, FloatingBoxIsUntouched)
 {
   const TopoDS_Shape box =
@@ -102,10 +100,9 @@ TEST_F(GroundConstraintTest, FloatingBoxIsUntouched)
   EXPECT_TRUE(constraint.get_sample_areas().empty());
 }
 
-// The case the triangle-centroid sampler could not see at all: a box rolled 45
-// degrees balances on one edge, and the two faces meeting at that edge graze the
-// ground over a 7.07 mm strip. None is supported enough to ban, but contact
-// points must not be placed down in that strip.
+// A box rolled 45 degrees balances on one edge, and the two faces meeting at
+// that edge graze the ground over a 7.07 mm strip. None is supported enough to
+// ban, but contact points must not be placed down in that strip.
 TEST_F(GroundConstraintTest, EdgeRestingBoxProducesClosedExclusionWires)
 {
   gp_Trsf roll;
@@ -156,7 +153,6 @@ TEST_F(GroundConstraintTest, PartOutsideFootprintIsNotSupported)
   EXPECT_TRUE(outside.get_sample_areas().empty());
 }
 
-// Moving the footprint centre moves where the ground is.
 TEST_F(GroundConstraintTest, FootprintCentreIsHonoured)
 {
   const TopoDS_Shape box = translated(
@@ -211,7 +207,6 @@ TEST_F(GroundConstraintTest, CylinderOnItsSideIsExcludedNotBanned)
     << "the strip along the contact line must still be excluded";
 }
 
-// Re-running replaces the previous verdict instead of accumulating it.
 TEST_F(GroundConstraintTest, ReanalysisReplacesNotAccumulates)
 {
   const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(-0.05, -0.05, 0.0), 0.1, 0.1, 0.1).Shape();

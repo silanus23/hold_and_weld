@@ -28,41 +28,26 @@ namespace core
 {
 
 /**
- * @brief Represents a valid sampling area on a surface
+ * @brief A wire on one surface that restricts where contact points may be sampled
  *
- * After surface filtering, region filters further refine where on each
- * surface grasp samples can be generated. This allows for:
- * - Exclusion zones (keep away from specific areas)
- * - Edge avoidance (stay away from surface boundaries)
- * - Custom sampling regions (user-defined zones)
+ * Today every SampleArea is an exclusion wire produced by a constraint
+ * (exclusion zone, kissing surface, ground). Inclusion areas from
+ * RegionFilter implementations are planned; none exist yet.
  */
 struct SampleArea
 {
-  /**
-   * @brief ID of the surface this sample area belongs to (0-indexed)
-   */
+  /** ID of the surface this area lies on. */
   int surface_id;
 
-  /**
-   * @brief OCCT wire representation of the sample region boundary
-   *
-   * The wire defines a closed 2D region on the surface where grasp
-   * contact points can be sampled. Use extract_corners_from_wire()
-   * utility function to get corner positions when needed.
-   */
+  /** Closed 3D boundary wire in the world frame, lying on the surface. */
   TopoDS_Wire wire;
 
-  /**
-   * @brief Whether this area is an exclusion zone (true) or an inclusion zone (false).
-   *
-   * Exclusion zone:  points inside the wire boundary are rejected.
-   * Inclusion zone:  points outside the wire boundary are rejected.
-   */
+  /** True: points inside the wire are rejected. False: points outside it are. */
   bool is_exclusion = false;
 };
 
 /**
- * @brief Base class for region filtering operations.
+ * @brief Base class for region filtering operations. Planned; no implementations yet.
  *
  * Region filters take a list of valid surface IDs (from surface filters)
  * and return a list of SampleArea objects defining where on each surface

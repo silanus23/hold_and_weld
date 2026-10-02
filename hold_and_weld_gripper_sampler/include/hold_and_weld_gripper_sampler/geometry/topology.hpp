@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Current design uses std::vector for topology storage with O(1) element access.
-// IDs are sequential (0, 1, 2, ...) and correspond directly to vector indices.
-//
-// Future optimizations for complex parts (100+ surfaces):
-// - Add R-tree spatial index for proximity queries
-// - Use OCCT's BVH for collision acceleration
-// - Add octree for spatial partitioning
-
 #ifndef HOLD_AND_WELD_GRIPPER_SAMPLER__GEOMETRY__TOPOLOGY_HPP_
 #define HOLD_AND_WELD_GRIPPER_SAMPLER__GEOMETRY__TOPOLOGY_HPP_
 
@@ -37,112 +29,69 @@ namespace geometry
 {
 
 /**
- * @brief Represents a corner (vertex) in the object topology.
+ * @brief Represents a corner (vertex) in the object topology
  *
  * Stores position and connectivity to adjacent edges and surfaces.
  * All data is in world frame, after the load-time transform is applied.
  */
 struct Corner
 {
-  /**
-   * @brief 3D position of the corner [world frame]
-   */
+  /** Corner position in the world frame [m]. */
   gp_Pnt position;
 
-  /**
-   * @brief IDs of edges connected to this corner (0-indexed)
-   */
+  /** IDs of edges connected to this corner. */
   std::vector<int> connected_edges;
 
-  /**
-   * @brief IDs of surfaces that share this corner (0-indexed)
-   */
+  /** IDs of surfaces that share this corner. */
   std::vector<int> connected_surfaces;
 
   Corner() = default;
 };
 
 /**
- * @brief Represents an edge in the object topology.
+ * @brief Represents an edge in the object topology
  *
  * Stores the two corner endpoints and connectivity to adjacent surfaces.
  */
 struct Edge
 {
-  /**
-   * @brief OCCT edge handle
-   *
-   * Contains the underlying CAD edge geometry.
-   * Use BRep_Tool to extract geometric properties.
-   */
   TopoDS_Edge edge;
 
-  /**
-   * @brief IDs of the two corners that define this edge (0-indexed)
-   *
-   * Pair format: (corner_id_1, corner_id_2)
-   * Order is arbitrary - edge is undirected.
-   */
+  /** IDs of the two end corners; the edge is undirected, so the order is arbitrary. */
   std::pair<int, int> corner_ids;
 
-  /**
-   * @brief IDs of surfaces that share this edge (0-indexed)
-   *
-   * Typically 1-2 surfaces (boundary edge has 1, interior edge has 2).
-   * Non-manifold geometry may have more.
-   */
+  /** IDs of surfaces that share this edge: 1 on a boundary, 2 inside, more if non-manifold. */
   std::vector<int> connected_surfaces;
 
   Edge() = default;
 };
 
 /**
- * @brief Represents a surface (face) in the object topology.
+ * @brief Represents a surface (face) in the object topology
  *
  * Stores OCCT face handle, geometric properties, and connectivity.
  * All geometric data is in world frame after transformation.
  */
 struct Surface
 {
-  /**
-   * @brief OCCT face handle
-   *
-   * Contains the underlying CAD surface geometry.
-   * Use BRep_Tool to extract geometric properties.
-   */
   TopoDS_Face face;
 
   /**
-   * @brief Surface normal vector [world frame, unit length]
-   *
-   * CRITICAL: Must be orientation-corrected!
-   * If face.Orientation() == TopAbs_REVERSED, multiply by -1.
+   * Outward unit normal in the world frame, already flipped for TopAbs_REVERSED faces.
+   * Evaluated at the UV centre of the face; a fallback is stored where it is undefined there.
    */
   gp_Vec normal;
 
-  /**
-   * @brief Geometric center of the surface [world frame]
-   *
-   * Used for spatial queries and visualization.
-   */
+  /** Area centroid in the world frame [m]. */
   gp_Pnt center;
 
-  /**
-   * @brief IDs of edges bounding this surface (0-indexed)
-   */
+  /** IDs of edges bounding this surface. */
   std::vector<int> edge_ids;
 
-  /**
-   * @brief IDs of corners belonging to this surface (0-indexed)
-   */
+  /** IDs of corners belonging to this surface. */
   std::vector<int> corner_ids;
 
-  /**
-   * @brief Flag indicating if surface has inner holes (inner wires)
-   *
-   * True if the surface has more than one wire (outer boundary + inner holes).
-   * Example: A washer has one outer circle and one inner hole.
-   */
+  /** True if the face has inner wires (holes), e.g. a washer's flat face. */
   bool has_inner_holes;
 
   Surface()

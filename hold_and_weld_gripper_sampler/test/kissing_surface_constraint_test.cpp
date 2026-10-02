@@ -71,7 +71,6 @@ protected:
   ParsedGripper gripper_;
 };
 
-// Secondary 1 m away from primary must not ban any surfaces.
 TEST_F(KissingSurfaceConstraintTest, NoContactWithDistantSecondary)
 {
   gp_Trsf primary_pos;
@@ -98,10 +97,7 @@ TEST_F(KissingSurfaceConstraintTest, NoContactWithDistantSecondary)
   EXPECT_TRUE(constraint.get_sample_areas().empty());
 }
 
-// TODO(silanus23): intersects_secondary returns false even when the gripper is
-// placed inside the secondary shape. Needs investigation into how BVH volumes
-// are built for the secondary and how the gripper geometry is represented.
-TEST_F(KissingSurfaceConstraintTest, DISABLED_CollisionWhenInsideSecondary)
+TEST_F(KissingSurfaceConstraintTest, CollisionWhenInsideSecondary)
 {
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
 
@@ -123,7 +119,6 @@ TEST_F(KissingSurfaceConstraintTest, DISABLED_CollisionWhenInsideSecondary)
   EXPECT_TRUE(constraint.intersects_secondary(0.03, gp_Trsf()));
 }
 
-// 10 mm tolerance detects a 5 mm gap; 1 mm tolerance does not.
 TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
 {
   gp_Trsf secondary_pos;
@@ -184,7 +179,6 @@ TEST_F(KissingSurfaceConstraintTest, CollisionToleranceAffectsDetectionDistance)
     << "1 mm tolerance must not fire when gripper bottom face is 5 mm above secondary";
 }
 
-// Gripper intersects any of three secondaries; clear space at (0.5, 0.5, 0.5) does not.
 TEST_F(KissingSurfaceConstraintTest, CollisionWithAnySecondary)
 {
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
@@ -227,7 +221,6 @@ TEST_F(KissingSurfaceConstraintTest, CollisionWithAnySecondary)
   EXPECT_FALSE(constraint.intersects_secondary(0.03, clear_space));
 }
 
-// No secondary shapes must produce no banned IDs, no sample areas, and no collisions.
 TEST_F(KissingSurfaceConstraintTest, EmptySecondaryShapesVectorProducesNoResults)
 {
   std::vector<TopoDS_Shape> no_secondaries;
@@ -270,7 +263,6 @@ TEST_F(KissingSurfaceConstraintTest, FclGroundIsNotASecondary)
   EXPECT_FALSE(constraint.intersects_secondary(0.03, below_ground));
 }
 
-// A surface that is fully banned must not also appear in partial-exclusion sample areas.
 TEST_F(KissingSurfaceConstraintTest, BannedSurfaceIdsNotInSampleAreas)
 {
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
@@ -298,7 +290,6 @@ TEST_F(KissingSurfaceConstraintTest, BannedSurfaceIdsNotInSampleAreas)
   }
 }
 
-// A higher contact threshold bans the same or fewer surfaces than a lower threshold.
 TEST_F(KissingSurfaceConstraintTest, HighThresholdBansFewerSurfaces)
 {
   TopoDS_Shape primary = BRepPrimAPI_MakeBox(0.1, 0.1, 0.1).Shape();
@@ -329,7 +320,6 @@ TEST_F(KissingSurfaceConstraintTest, HighThresholdBansFewerSurfaces)
     constraint_low.get_banned_surface_ids().size());
 }
 
-// Re-running analyze_constraints replaces previous results rather than accumulating them.
 TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
 {
   gp_Trsf secondary_pos;
@@ -368,7 +358,6 @@ TEST_F(KissingSurfaceConstraintTest, ReanalysisReplacesNotAccumulates)
 namespace
 {
 
-// Number of edges in a wire.
 int count_wire_edges(const TopoDS_Wire & wire)
 {
   int n = 0;
@@ -423,12 +412,6 @@ TEST_F(KissingSurfaceConstraintTest, PartialGroundContactYieldsClosedExclusionWi
 // A box resting on one edge has no fully supported face: the two faces meeting
 // at the resting edge graze the ground along a line. This is the case the
 // roadmap's "topology aware" ground rejection has to get right.
-//
-// This failed while measure_contact_ratio sampled triangle centroids: both
-// grazing faces had their lowest node exactly on the ground (z = 0.00000) but
-// their lowest centroid 23.6 mm above it, so contact ratio read 0% on all six
-// faces and the part looked airborne. It passes now that the ratio comes from
-// sampling::sample_face_region, which measures the 7.07% strip directly.
 TEST_F(KissingSurfaceConstraintTest, EdgeRestingPartYieldsClosedExclusionWire)
 {
   // Box centred on x, spanning y in [-0.05, 0.05], z in [0, 0.1].

@@ -151,8 +151,6 @@ TEST(MathUnit, RpyToQuaternion_HalfPiZ)
     << " but got z=" << q.z() << " w=" << q.w();
 }
 
-// to_grasp must return tcp_orientation.norm() ≈ 1.0 and tcp_position ≈
-// midpoint of contact_1/contact_2.
 TEST(MathUnit, ToGrasp_QuaternionNormAndTranslation)
 {
   GraspCandidate candidate;

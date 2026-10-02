@@ -34,23 +34,30 @@ namespace sampling
 {
 
 /**
- * @brief One sample point inside the allowed region of a face.
+ * @brief One sample point inside the allowed region of a face
  */
 struct FaceSample
 {
+  /** Sample position in the world frame [m]. */
   gp_Pnt point;
+  /** Outward normal; valid only when has_normal is set. */
   gp_Vec normal;
   gp_Pnt2d uv;
+  /** Surface area of the grid cell this sample stands for [m²]. */
   double area_weight{0.0};
-  // UV extent of the grid cell this sample stands for; cells vary across a
-  // face, so a region's boundary has to be grown per sample.
+  /**
+   * U extent of the grid cell this sample stands for; cells vary across a
+   * face, so a region's boundary has to be grown per sample.
+   */
   double cell_du{0.0};
+  /** V extent of the grid cell this sample stands for. */
   double cell_dv{0.0};
+  /** Set when FaceSamplingConfig::compute_normals was on and the normal is defined. */
   bool has_normal{false};
 };
 
 /**
- * @brief Where samples sit relative to the UV grid cells.
+ * @brief Where samples sit relative to the UV grid cells
  */
 enum class GridLayout
 {
@@ -59,20 +66,24 @@ enum class GridLayout
 };
 
 /**
- * @brief How densely to walk a face.
+ * @brief How densely to walk a face
  */
 struct FaceSamplingConfig
 {
+  /** Target spacing between samples on the surface [m]. */
   double sample_density{0.01};
+  /** When > 0, a uniform grid of this many cells per UV axis; overrides sample_density. */
   int grid_steps{0};
   GridLayout layout{GridLayout::kNodes};
   bool compute_normals{false};
+  /** Tolerance of the in-face point classifier, in UV units. */
   double classifier_tolerance{1e-6};
+  /** A UV span needing more cells than this is split into tiles, each spaced separately. */
   int max_cells_per_tile{16};
 };
 
 /**
- * @brief The UV grid a sampling run actually used.
+ * @brief The UV grid a sampling run actually used
  *
  * du and dv are the widest cell on each axis; per-tile subdivision makes cells
  * narrower elsewhere, so per-cell extents live on each FaceSample instead.
@@ -109,7 +120,7 @@ struct RegionClassifier
 };
 
 /**
- * @brief Build one classifier per region wire of a face, to reuse across many points.
+ * @brief Build one classifier per region wire of a face, to reuse across many points
  *
  * @param face Face the wires lie on
  * @param wires_with_flags Each a wire plus an is_exclusion flag, as for sample_face_region
@@ -123,7 +134,7 @@ std::optional<std::vector<RegionClassifier>> build_region_classifiers(
   double tolerance);
 
 /**
- * @brief Whether a UV point satisfies every region restriction.
+ * @brief Whether a UV point satisfies every region restriction
  *
  * @param point_2d UV point on the face the classifiers were built for
  * @param wire_classifiers From build_region_classifiers
@@ -134,7 +145,7 @@ bool passes_wire_restrictions(
   const std::vector<RegionClassifier> & wire_classifiers);
 
 /**
- * @brief Walk the allowed region of a face on a UV grid.
+ * @brief Walk the allowed region of a face on a UV grid
  *
  * Single implementation behind every face-region walk in the package (contact
  * point sampling, normal sampling, ground classification, contact-ratio
@@ -158,7 +169,7 @@ std::vector<FaceSample> sample_face_region(
   FaceSamplingGrid * grid_out = nullptr);
 
 /**
- * @brief Area-weighted fraction of samples satisfying a predicate.
+ * @brief Area-weighted fraction of samples satisfying a predicate
  *
  * Shared measurement behind ground classification and fixture contact, which
  * differ only in the predicate. Returns 0.0 when the samples carry no area.
@@ -172,7 +183,7 @@ double area_fraction(
   const std::function<bool(const FaceSample &)> & predicate);
 
 /**
- * @brief Face on the surface of @p face, bounded by @p wire, for UV classification.
+ * @brief Face on the surface of @p face, bounded by @p wire, for UV classification
  *
  * The one place a region wire becomes something BRepTopAdaptor_FClass2d can
  * test. Built on the face's untransformed surface so wires from
@@ -187,7 +198,7 @@ double area_fraction(
 TopoDS_Face face_bounded_by_wire(const TopoDS_Face & face, const TopoDS_Wire & wire);
 
 /**
- * @brief Closed wire bounding a set of samples, built in the face's UV domain.
+ * @brief Closed wire bounding a set of samples, built in the face's UV domain
  *
  * Turns a measured region (ground contact, fixture contact) into a SampleArea
  * wire the samplers can exclude. Built from pcurve-based edges so it lies
@@ -206,7 +217,7 @@ TopoDS_Wire bounding_wire_in_uv(
   const std::vector<FaceSample> & samples);
 
 /**
- * @brief Total surface area represented by a sample set, m^2.
+ * @brief Total surface area represented by a sample set, m^2
  *
  * With GridLayout::kCellCentres this approximates the true area of the
  * allowed region, converging to it as sample_density shrinks. Trim-boundary

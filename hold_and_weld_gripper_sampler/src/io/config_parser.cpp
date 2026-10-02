@@ -34,7 +34,6 @@ namespace
 
 const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
-// Below these a zone's direction (normal, line axis) or plane is numerically meaningless.
 constexpr double kMinDirectionNorm = 1e-6;
 constexpr double kPlanarityTolerance = 1e-6;
 

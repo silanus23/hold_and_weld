@@ -116,7 +116,6 @@ protected:
   std::unique_ptr<ShapeLoader> loader_;
 };
 
-// Default-constructed loader has expected deflection values and auto-triangulate enabled.
 TEST_F(ShapeLoaderTest, DefaultConstructor_HasExpectedConfigValues)
 {
   ShapeLoader loader;
@@ -127,7 +126,6 @@ TEST_F(ShapeLoaderTest, DefaultConstructor_HasExpectedConfigValues)
   EXPECT_TRUE(config.auto_triangulate);
 }
 
-// Custom config is stored and returned verbatim by get_config().
 TEST_F(ShapeLoaderTest, CustomConfigConstructor_AppliesProvidedConfig)
 {
   ShapeLoaderConfig config;
@@ -143,7 +141,6 @@ TEST_F(ShapeLoaderTest, CustomConfigConstructor_AppliesProvidedConfig)
   EXPECT_FALSE(retrieved_config.auto_triangulate);
 }
 
-// Box bounding box matches requested dimensions; centered at origin; has 6 faces.
 TEST_F(ShapeLoaderTest, MakeBox_WithBasicDimensions_CreatesCorrectShape)
 {
   Eigen::Vector3d dimensions(
@@ -167,7 +164,6 @@ TEST_F(ShapeLoaderTest, MakeBox_WithBasicDimensions_CreatesCorrectShape)
   EXPECT_NEAR(center.z(), 0.0, test_constants::kPositionTolerance);
 }
 
-// Box volume equals product of its three dimensions.
 TEST_F(ShapeLoaderTest, MakeBox_VolumeCalculation_MatchesExpectedVolume)
 {
   Eigen::Vector3d dimensions(
@@ -184,7 +180,6 @@ TEST_F(ShapeLoaderTest, MakeBox_VolumeCalculation_MatchesExpectedVolume)
   EXPECT_NEAR(actual_volume, expected_volume, test_constants::kVolumeTolerance);
 }
 
-// Cylinder bounding box diameter equals 2*radius; height equals requested height.
 TEST_F(ShapeLoaderTest, MakeCylinder_WithBasicDimensions_HasCorrectBoundingBox)
 {
   auto cylinder = loader_->make_cylinder(test_constants::kTestRadius, test_constants::kTestHeight);
@@ -199,7 +194,6 @@ TEST_F(ShapeLoaderTest, MakeCylinder_WithBasicDimensions_HasCorrectBoundingBox)
   EXPECT_NEAR(bbox_size.z(), test_constants::kTestHeight, test_constants::kCurvedGeometryTolerance);
 }
 
-// Cylinder volume equals pi*r^2*h.
 TEST_F(ShapeLoaderTest, MakeCylinder_VolumeCalculation_MatchesExpectedVolume)
 {
   auto cylinder = loader_->make_cylinder(test_constants::kTestRadius, test_constants::kTestHeight);
@@ -211,7 +205,6 @@ TEST_F(ShapeLoaderTest, MakeCylinder_VolumeCalculation_MatchesExpectedVolume)
   EXPECT_NEAR(actual_volume, expected_volume, test_constants::kVolumeTolerance);
 }
 
-// Sphere bounding box is a cube with side 2*radius.
 TEST_F(ShapeLoaderTest, MakeSphere_WithBasicRadius_HasCorrectBoundingBox)
 {
   auto sphere = loader_->make_sphere(test_constants::kTestRadius);
@@ -227,7 +220,6 @@ TEST_F(ShapeLoaderTest, MakeSphere_WithBasicRadius_HasCorrectBoundingBox)
     test_constants::kCurvedGeometryTolerance);
 }
 
-// Sphere volume equals (4/3)*pi*r^3.
 TEST_F(ShapeLoaderTest, MakeSphere_VolumeCalculation_MatchesExpectedVolume)
 {
   auto sphere = loader_->make_sphere(test_constants::kTestRadius);
@@ -239,7 +231,6 @@ TEST_F(ShapeLoaderTest, MakeSphere_VolumeCalculation_MatchesExpectedVolume)
   EXPECT_NEAR(actual_volume, expected_volume, test_constants::kVolumeTolerance);
 }
 
-// Ground plane with custom size, position, and thickness matches all three parameters.
 TEST_F(ShapeLoaderTest, MakeGroundPlane_WithCustomParams_HasCorrectDimensions)
 {
   constexpr double custom_size_x = 3.0;
@@ -264,14 +255,12 @@ TEST_F(ShapeLoaderTest, MakeGroundPlane_WithCustomParams_HasCorrectDimensions)
   EXPECT_NEAR(z_max, custom_z_position, test_constants::kPositionTolerance);
 }
 
-// Combining an empty shape list throws std::runtime_error.
 TEST_F(ShapeLoaderTest, CombineShapes_WithEmptyVector_Throws)
 {
   std::vector<TopoDS_Shape> empty_shapes;
   EXPECT_THROW(loader_->combine_shapes(empty_shapes), std::runtime_error);
 }
 
-// Combining a single shape returns a shape with the same face count.
 TEST_F(ShapeLoaderTest, CombineShapes_WithSingleShape_ReturnsSameShape)
 {
   auto box = loader_->make_box(Eigen::Vector3d(
@@ -286,7 +275,6 @@ TEST_F(ShapeLoaderTest, CombineShapes_WithSingleShape_ReturnsSameShape)
   EXPECT_EQ(count_faces(combined), count_faces(box));
 }
 
-// Combining three shapes produces a compound whose face count is the sum of the parts.
 TEST_F(ShapeLoaderTest, CombineShapes_WithMultipleShapes_CreatesCompoundWithAllFaces)
 {
   auto box = loader_->make_box(Eigen::Vector3d(
@@ -311,7 +299,6 @@ TEST_F(ShapeLoaderTest, CombineShapes_WithMultipleShapes_CreatesCompoundWithAllF
   EXPECT_EQ(combined_faces, box_faces + sphere_faces + cylinder_faces);
 }
 
-// Combined rotation and translation correctly affects both extents and center.
 TEST_F(ShapeLoaderTest, ApplyTransform_WithCombinedTransform_AppliesBothCorrectly)
 {
   auto box = loader_->make_box(Eigen::Vector3d(
@@ -334,7 +321,6 @@ TEST_F(ShapeLoaderTest, ApplyTransform_WithCombinedTransform_AppliesBothCorrectl
   EXPECT_NEAR(center.y(), 0.0, test_constants::kPositionTolerance);
 }
 
-// Loading from nonexistent STEP, STL, or URDF paths throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromFile_WithNonexistentFile_ThrowsRuntimeError)
 {
   EXPECT_THROW(
@@ -348,7 +334,6 @@ TEST_F(ShapeLoaderTest, LoadFromFile_WithNonexistentFile_ThrowsRuntimeError)
     std::runtime_error);
 }
 
-// URDF sphere geometry produces a shape with bounding box matching 2*radius on all axes.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithSphereGeometry_CreatesCorrectShape)
 {
   std::string urdf_string =
@@ -377,7 +362,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithSphereGeometry_CreatesCorrectShap
     test_constants::kCurvedGeometryTolerance);
 }
 
-// URDF origin xyz offset is applied and reflected in the bounding box center.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithOriginTransform_AppliesTransformCorrectly)
 {
   std::string urdf_string =
@@ -402,7 +386,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithOriginTransform_AppliesTransformC
   EXPECT_NEAR(center.z(), test_constants::kOffsetZ, test_constants::kPositionTolerance);
 }
 
-// URDF with multiple links produces a compound with more faces than a single box.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithMultipleCollisions_CombinesAllShapes)
 {
   std::string urdf_string =
@@ -436,7 +419,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithMultipleCollisions_CombinesAllSha
   EXPECT_GT(face_count, test_constants::kBoxFaceCount);
 }
 
-// URDF with only visual geometry (no collision element) throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoCollisionGeometry_ThrowsRuntimeError)
 {
   std::string urdf_string =
@@ -457,7 +439,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoCollisionGeometry_ThrowsRuntime
     std::runtime_error);
 }
 
-// Malformed XML string throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithInvalidXml_ThrowsRuntimeError)
 {
   std::string urdf_string = "not valid xml <<<<";
@@ -467,7 +448,6 @@ TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithInvalidXml_ThrowsRuntimeError)
     std::runtime_error);
 }
 
-// XML missing a <robot> root element throws std::runtime_error.
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithNoRobotElement_ThrowsRuntimeError)
 {
   std::string urdf_string =
