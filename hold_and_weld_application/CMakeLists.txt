@@ -287,10 +287,6 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY config/
-  DESTINATION share/${PROJECT_NAME}/config
-)
-
 install(DIRECTORY action/
   DESTINATION share/${PROJECT_NAME}/action
 )

@@ -28,7 +28,6 @@
         z_position: 0.0
 
     exclusion_zones:
-      # Coordinates are in the world frame; distances are in metres.
       # Spread across different sides and opposite ends of the workpiece.
       sample_density: 0.005
 
@@ -87,10 +86,6 @@
       collision_tolerance: 0.001
 
     jaw_clearance:
-      # Cylinder on the jaw axis ending at the TCP, covering the open mouth:
-      # radius = grip_distance / 2 + clearance_margin, length = orientation.finger_length.
-      # Rejects candidates with a secondary or an exclusion volume in or beside the
-      # mouth. The gripped part and the ground are not tested.
       enabled: true
       clearance_margin: 0.005
 

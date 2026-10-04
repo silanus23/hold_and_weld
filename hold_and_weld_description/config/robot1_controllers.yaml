@@ -1,4 +1,4 @@
-# Single robot gripper system controller configuration
+# Gripper-only cell (gripper_bringup.launch.py)
 
 controller_manager:
   ros__parameters:

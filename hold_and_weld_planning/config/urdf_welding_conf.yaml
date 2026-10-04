@@ -2,7 +2,6 @@
 ## Part bottom sits on the plate top at z=0.8. It is ~0.43m wide against the
 ## plate's 0.40m, so the -y triangle bump overhangs the plate rim by ~3cm.
 #workpiece:
-#  auto_detect_seams: true
 #  mode: occt
 #  main_part:
 #    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
@@ -29,10 +28,8 @@
 
 # ── Elliptic part seated on the workpiece (mesh) ──────────────────────────────
 # Mesh mode cannot read elliptic_part.urdf.xacro (<mesh> collision), so the STL
-# is loaded directly. Currently fails "mesh_2 is not watertight" at
-# refine_iterations >= 16: sliver cap triangles refine into coincident points.
+# is loaded directly.
 workpiece:
-  auto_detect_seams: true
   mode: mesh
   main_part:
     main_path: "package://hold_and_weld_description/meshes/workpieces/workpiece.stl"
@@ -58,7 +55,6 @@ workpiece:
       - 0
 
 #workpiece:
-#  auto_detect_seams: true
 #  mode: mesh
 #
 #  main_part:
@@ -85,7 +81,6 @@ workpiece:
 #      - 0
 
 #workpiece:
-#  auto_detect_seams: true
 #  mode: mesh
 #
 #  main_part:
@@ -113,11 +108,7 @@ workpiece:
 
 # ── T-joint cube 45° (around Y-axis) ──────────────────────────────────────────
 #workpiece:
-#  auto_detect_seams: true
 #  mode: mesh
-#  # NOTE: only mode / auto_detect_seams / part paths / world_pose are read from
-#  # this block. seam_method, epsilon and every other tuning key belong under
-#  # `parameters:` below — put here they are silently ignored.
 #  main_part:
 #    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
 #    world_pose:
@@ -143,7 +134,6 @@ workpiece:
 # ──────────────────────────────────────────────────────────────────────────────
 
 #workpiece:
-#  auto_detect_seams: true
 #  mode: mesh
 #  main_part:
 #    main_path: "package://hold_and_weld_description/urdf/environment/workpiece.urdf.xacro"
@@ -167,6 +157,9 @@ workpiece:
 #      - 0
 #      - 0
 #      - 1.5708
+
+# Every tuning key goes under parameters (see PARAMS.md); under workpiece it is
+# silently ignored.
 parameters:
   # ── Planner ────────────────────────────────────────────────────────────────
   gap: 0.04
@@ -175,81 +168,21 @@ parameters:
   waypoint_spacing: 0.01
 
   # ── Contact boundary tuning ────────────────────────────────────────────────
-  # Both are multipliers on mesh-derived lengths, not absolute distances, so
-  # they do not need changing when part size changes. Defaults are measured.
-  #
-  # near_contact_edge_fraction: how far off the other mesh a sharp edge may sit
-  #   and still count as seam, as a fraction of this mesh's MEDIAN edge length
-  #   (on top of epsilon). Guards against welding a part's own edges away from
-  #   the joint — the rim of a cylinder where it overhangs the plate is a real
-  #   90-degree edge but is not a weld.
-  #
-  #   The slack exists to absorb TESSELLATION error, measured at 0.051mm here,
-  #   so keep it small. Swept on this scene at refine 40 / epsilon 0.002
-  #   against 1098.87mm analytic:
-  #
-  #       ncf    total_mm    err_mm    worst stray off plate
-  #       0.50    1135.18    +36.31           5.076mm
-  #       0.20    1126.35    +27.48           3.273mm
-  #       0.10    1103.58     +4.71           2.653mm
-  #       0.05    1101.93     +3.06           2.280mm
-  #
-  #   At 0.50 the bound is 2.00 + 0.5*6.25 = 5.12mm and the strays came in at
-  #   5.076mm — admitted with 0.04mm to spare. The floor on stray distance is
-  #   epsilon itself (~2mm), not this, so below ~0.05 there is nothing left to
-  #   win. NOTE this does NOT change the segment COUNT: 8 seams at every value
-  #   above. That fragmentation is edge-flag flicker driving
-  #   PathCreator._split_on_contact_type and needs code, not config.
-  #
-  #   Only meaningful when the mesh resolves the joint — on a 12-face box the
-  #   median edge is 500mm and even a small fraction admits almost anything.
-  #   If stray far-from-joint seams appear, refine the mesh first.
-  #
-  # stitch_gap_factor: endpoint gap below which two chain pieces from
-  #   DIFFERENT meshes are joined, as a multiple of the local sampling density
-  #   of the two pieces. The meshes share no vertices, so a handoff gap of
-  #   about one segment is expected. Raise if pieces that clearly belong to one
-  #   seam stay separate; lower if unrelated seams get spliced end to end.
+  # Measured on this scene (refine 40, epsilon 0.002, 1098.87 mm analytic):
+  # 0.10 -> +4.71 mm, 0.50 -> +36.31 mm. The seam count (8) does not change with
+  # it; that fragmentation comes from PathCreator._split_on_contact_type.
   near_contact_edge_fraction: 0.1
   #stitch_gap_factor: 3.0
 
   # ── Mesh intersection ──────────────────────────────────────────────────────
   epsilon: 0.002
-  # job_planner defaults this to 16; 40 is the last value measured clean here.
-  #
-  # Refinement now buys PRECISION, not just coverage: the kernel refinement
-  # slides each point onto the half level set of contact coverage, and that
-  # level set approximates the true rim better the more triangles describe
-  # it. Below refine ~20 the kernel is worse than snapping to a vertex; see
-  # PARAMS.md (Sub-vertex refinement) for the measured error curve. Cost is
-  # ~4x per doubling.
-  #
-  # HARD UPPER BOUND, do not exceed without re-checking: wall row height is
-  # 250mm/refine and the bottom row's centroid sits at h/3, so wall faces get
-  # wrongly marked as contact once h/3 <= epsilon, i.e.
-  #     refine >= 250 / (3 * epsilon_mm) = 41.7 at epsilon 2mm.
-  # Measured clean at 40, broken at 42 (climb 1.984mm, sharp edges 1870 => 969).
-  # _validate_epsilon already warns at 40 — that warning is the cliff being
-  # 4% away, not an error. Raising refine REQUIRES lowering epsilon.
+  # Last value measured clean on this scene; the upper bound is in PARAMS.md.
   refine_iterations: 40
 
-  # ── Path classification (PathCreator) ──────────────────────────────────────
-  # These are the keys that actually decide line vs arc vs PTP. All are shown
-  # at their built-in defaults (PathCreatorParams in mesh/params.py); uncomment
-  # to override. Cascade: chord within path_tolerance => LINE (preferred), fit
-  # within arc_strictness x that AND subtend >= min_arc_angle_deg AND consume
-  # 1.5x the run a line would => ARC, else PTP. The asymmetry is deliberate —
-  # a false PTP is safe, a false arc breaks the torch.
-  #
-  # path_tolerance: 0.001      # metres; master fit tolerance
-  # arc_strictness: 0.5        # arc tolerance = this x path_tolerance
-  # min_arc_angle_deg: 15.0    # below this an arc is not worth calling an arc
-  # max_line_length: 0.5       # metres; hard split, not geometric
-  # max_arc_length: 0.5        # metres; hard split. This is why a 706.79mm
-  #                            # semicircle comes out as 2 arcs of 353.39mm.
-  # max_ptp_length: 0.1        # metres
-  #
-  # num_smooth_points is NOT read in mesh mode — it is OCCT-only
-  # (SeamExtractorOCCT, points sampled per intersection edge). job_planner
-  # sets a default of 100 and seam_generator prints it, but nothing under
-  # mesh/ ever reads it. It has no effect on this config.
+  # ── Path classification overrides, at their defaults ───────────────────────
+  # path_tolerance: 0.001
+  # arc_strictness: 0.5
+  # min_arc_angle_deg: 15.0
+  # max_line_length: 0.5
+  # max_arc_length: 0.5
+  # max_ptp_length: 0.1

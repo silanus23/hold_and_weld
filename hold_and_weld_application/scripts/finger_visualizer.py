@@ -74,11 +74,11 @@ class FingerVisualizer(Node):
         self.get_logger().info('FINGER VISUALIZER STARTING')
         self.get_logger().info('=' * 50)
 
-        app_pkg = get_package_share_directory('hold_and_weld_application')
+        bringup_pkg = get_package_share_directory('hold_and_weld_bringup')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
 
         objects_yaml_path = os.path.join(
-            app_pkg, 'config', 'collision_objects', 'objects.yaml'
+            bringup_pkg, 'config', 'objects', 'objects.yaml'
         )
         with open(objects_yaml_path, 'r') as fh:
             objects_cfg = yaml.safe_load(fh).get('/**', {}).get(

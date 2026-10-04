@@ -135,7 +135,7 @@
 #     child_link:
 #       urdf_path: 'urdf/environment/elliptic_part.urdf.xacro'
 #       id: 'child_link'
-#       spawn_name: 'robotiq_cube_tjoint_straight'
+#       spawn_name: 'elliptic_part_straight'
 #       pose:
 #         x: 1.2
 #         y: 0.3

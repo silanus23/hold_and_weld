@@ -41,9 +41,9 @@ class AddCollisionObjects(Node):
         self.declare_parameter('spawn_at_end_pose', False)
         spawn_at_end_pose = self.get_parameter('spawn_at_end_pose').value
 
-        app_pkg = get_package_share_directory('hold_and_weld_application')
+        bringup_pkg = get_package_share_directory('hold_and_weld_bringup')
         desc_pkg = get_package_share_directory('hold_and_weld_description')
-        objects_yaml_path = os.path.join(app_pkg, 'config', 'collision_objects', 'objects.yaml')
+        objects_yaml_path = os.path.join(bringup_pkg, 'config', 'objects', 'objects.yaml')
 
         with open(objects_yaml_path, 'r') as file:
             objects_yaml_dict = yaml.safe_load(file)

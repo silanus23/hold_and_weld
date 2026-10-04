@@ -220,7 +220,7 @@ test rather than a sampling constraint: `JawClearanceCheck`, in `collision/`.
 
 ## Mesh Deflection
 
-Controls OCCT triangulation quality for exclusion zone geometry.
+Controls OCCT triangulation quality for exclusion zone and kissing geometry.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -231,7 +231,7 @@ Controls OCCT triangulation quality for exclusion zone geometry.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `output.json_path` | string | — | Output JSON file path, relative to the working directory. `--output` overrides it; unset → `<hold_and_weld_application share>/grasps/grasps.json`, the file the gripper server reads. |
+| `output.json_path` | string | — | Output JSON file path, relative to the working directory. `--output` overrides it; unset → `<hold_and_weld_application share>/grasps/grasps.json`, where `finger_visualizer.py` looks for it. |
 | `output.max_grasps` | size_t | 0 | Maximum grasps to output. 0 = all |
 | `output.min_quality` | double | 0.0 | Minimum quality score threshold for output |
 | `output.fail_on_skipped_constraint` | bool | false | Exit with an error, writing nothing, if any constraint or obstacle could not be enforced (see `skipped_constraints` below). Off: the run finishes and lists them. |
@@ -271,5 +271,5 @@ They will become user facing in future versions.
 
 | Parameter | Description |
 |---|---|
-| `ground_normal_z_threshold` | Auto-detection of ground-facing surfaces from workpiece topology |
-| `ground_safety_margin` | Z offset added to ground plane to avoid false positives at contact plane |
+| `ground_normal_z_threshold` | Normal-based detection of ground-facing faces. Unused: ground support is measured by area fraction instead |
+| `ground_safety_margin` | Height above the ground surface within which a face sample counts as resting on it (`GroundConfig::contact_band`, fixed at 0.005 m) |

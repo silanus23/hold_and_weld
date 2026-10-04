@@ -1,7 +1,6 @@
 welder_group_name: "robot2_welder_arm"
 
-# Safety position the welder arm moves to before the gripper executes its
-# pick-and-place sequence.  Tune joint values (radians) to match the cell.
+# Welder pose before the gripper job runs; also robot2's spawn pose in Gazebo [rad].
 safety_pose:
   velocity_scaling:  0.3
   planning_time_sec: 5.0
@@ -41,7 +40,7 @@ approach_validator:
   seam_tol_pos: 0.03           # remaining seam points, warm-started [m]
   seam_tol_rot: 0.02           # [rad]
 
-# Pilz start-configuration finder (roadmap §5). Before OMPL runs, simulate the
+# Pilz start-configuration finder. Before OMPL runs, simulate the
 # Pilz plunge + LIN/CIRC from every IK solution at the approach standoff (wrist
 # flips and J4/J6 2*pi copies included) and hand OMPL the best one as a joint
 # goal, so the same seam always welds from the same configuration.
@@ -64,6 +63,5 @@ finder:
   dedupe_epsilon: 1.0e-3       # candidates closer than this (max |dq_i|) are merged [rad]
   max_ompl_candidates: 5       # feasible configs tried with OMPL before failing the seam
 
-# JSON file path (optional)
-# If not specified, will auto-load latest JSON from hold_and_weld_planning/generated/
+# Unset: the newest JSON in hold_and_weld_application/trajectories/.
 # json_file: "/path/to/specific/seams.json"

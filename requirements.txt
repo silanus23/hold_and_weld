@@ -1,0 +1,2 @@
+trimesh>=5.0
+manifold3d>=3.5

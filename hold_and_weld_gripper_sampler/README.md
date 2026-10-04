@@ -1,8 +1,8 @@
 # hold_and_weld_gripper_sampler
 
 A constraint-aware grasp sampling library for parallel jaw grippers.
-Built on OpenCASCADE (OCCT) for geometrically exact CAD surface operations with FCL
-and Embree for collision checking. Unlike conventional samplers, sampling areas are
+Built on OpenCASCADE (OCCT) for geometrically exact CAD surface operations, with FCL
+for collision checking and Embree for ray casting. Unlike conventional samplers, sampling areas are
 defined and constrained before the sampling phase, allowing solutions with hard
 geometric and environmental requirements. Contact points are computed on actual CAD
 surfaces giving geometrically exact results. Currently supports CAD-based geometry
@@ -21,10 +21,11 @@ used throughout the pipeline.
 
 The nature of the sampling pipeline and CAD file geometry require surfaces to be
 divided in order to create more opposing surface candidates. Shape Refiner handles
-this with a three policy approach: U-periodic surface splitting (surfaces that wrap
+this in three splitting passes: U-periodic surface splitting (surfaces that wrap
 around a closed axis such as full cylinders or cones, split along the periodic
-direction before other processing), arc length based splitting, and area ratio
-based splitting.
+direction before other processing), splitting at curvature inflection points and
+where edge arc length exceeds a limit, and area ratio based splitting. Redundant
+edges are then unified, leaving the split faces separate.
 
 In addition it removes enclaves — small surface features that would confuse the
 sampling pipeline without contributing meaningful grasp candidates in real
@@ -41,29 +42,27 @@ clustered pairs.
 
 ### Angle Finder
 
-Approach direction validity is determined here. Implemented in four phases.
+Approach direction validity is determined here. Implemented in three phases.
 
 Phase one builds a radial surface map around each contact point by casting
-classification rays in decreasing rings starting from finger length radius down to
-finger radius. Each ray classifies the surrounding surface as flat, elevated, or a
+classification rays (Embree) in decreasing rings, starting from finger length radius
+down to finger radius. Each ray classifies the surrounding surface as flat, elevated, or a
 graspable cliff. This analysis drives approach direction candidates.
 
 Phase two clusters the candidates, scores them by grippable arc fraction, and
 applies randomization to diversify the result set.
 
-Phase three runs full collision checks against the primary shape and exclusion zones
-via FCL and Embree. This is the second point in the pipeline where constraints
+Phase three runs the pose collision checks via FCL, in order: jaw clearance (when
+enabled), primary shape, exclusion volumes, ground, secondary shapes. A pose is
+dropped at the first hit. This is the second point in the pipeline where constraints
 directly influence results, the first being the Contact Sampler.
 
-Phase four performs self-collision checks against secondary shapes as a separate step.
-
-Candidates surviving all four phases are returned as grasp candidates for downstream
+Candidates surviving all three phases are returned as grasp candidates for downstream
 processing.
 
 ## Filters and Constraints
 
-Concrete classes wired together by `GraspFinder`; there is no common plugin
-interface yet (see ROADMAP.md).
+Neither is pluginlib-based yet (see ROADMAP.md).
 
 ### Filters
 
@@ -71,8 +70,8 @@ Eliminates ungraspable surfaces or parts of surfaces before the sampling phase
 to avoid wasted computation on invalid grasp candidates. Surface filters operate
 on whole surfaces, region filters operate on areas within surfaces.
 
-Currently base classes and interfaces are defined but pipeline integration is
-planned.
+Base classes (`SurfaceFilter`, `RegionFilter`) are defined, but filters are not yet
+wired into the pipeline.
 
 ### Constraints
 
@@ -83,6 +82,10 @@ sampling regions and acting as collision objects during the Angle Finder phase.
 
 Constraints can represent real objects like ground planes and fixtures or mission
 specific forbidden zones like weld seams and screw holes.
+
+There is no common constraint base class: `ExclusionZoneConstraint`,
+`KissingSurfaceConstraint` and `GroundConstraint` are concrete classes wired together
+by `GraspFinder`.
 
 ## Jaw Clearance
 
@@ -107,8 +110,8 @@ Two things are deliberately left out:
   inside the material; the part is in the cylinder for every candidate by construction.
   Geometry on the part itself is the radial map's job.
 - **The ground.** It is already checked against real gripper geometry, and a round
-  volume over-approximates the jaws badly against an infinite halfspace — with the
-  ground included, cube grasps dropped from 4592 to 3271 with no obstacle in the scene.
+  volume over-approximates the jaws badly against a flat ground, rejecting grasps
+  whose fingers clear it.
 
 ## Results
 
@@ -144,8 +147,7 @@ fields" section for the exact layout. `hold_and_weld_application`'s
 - Tested on box, prism, and small cylinder workpieces. Complex organic geometry
   is not yet validated.
 - The ground is a finite box over the `ground_plane` footprint (an infinite
-  halfspace only when no footprint is set). Smart ground detection based on
-  workpiece topology is planned.
+  halfspace only when no footprint is set).
 - Filter pipeline is defined but not yet wired into the active pipeline.
 - Asymmetric gripper opening not supported. Both fingers are assumed to travel
   equal distances from closed position.

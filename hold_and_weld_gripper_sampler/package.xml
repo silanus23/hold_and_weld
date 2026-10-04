@@ -17,12 +17,10 @@
   <depend>eigen</depend>
   <depend>yaml-cpp</depend>
   <depend>tinyxml2</depend>
-  <!-- Embree 4: no standard rosdep key exists. Install manually:
-       Ubuntu: sudo apt install libembree-dev  (or build from source for Embree 4)
-       The CMakeLists.txt uses find_package(embree 4.0 REQUIRED) -->
-  <depend>libembree-dev</depend>
-  <depend>fcl</depend>
-  <depend>opencascade</depend>
+  <depend>embree</depend>
+  <depend>libfcl-dev</depend>
+  <!-- OpenCASCADE 7.9.3 is built from source (see the top-level README); there is
+       no rosdep key for it and apt only ships 7.6. -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -21,7 +21,6 @@
 | `parameters.travel_angle_deg` | double | — | Torch tilt angle along travel direction [deg]. Positive pushes (the torch points ahead along travel), negative drags. Required. Strictly between -90 and 90. |
 | `parameters.gap` | double | — | Distance from seam to torch tip [m]. Required. Must be > 0. |
 | `parameters.waypoint_spacing` | double | 0.01 | Distance between generated waypoints along seam [m] |
-| `parameters.num_smooth_points` | int | 100 | Points sampled along each seam curve. **OCCT mode only** - nothing under `mesh/` reads it, where seam density comes from the tessellation and `refine_iterations` instead. Must be >= 2. |
 
 ## Mesh
 
@@ -29,7 +28,7 @@ Parameters for the mesh-based seam extractor. Only used when `mode` is `mesh` or
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.refine_iterations` | int | 16 | Mesh subdivision iterations, applied per collision primitive |
+| `parameters.refine_iterations` | int | 16 | Pieces each mesh edge is split into, per collision primitive, so the face count grows by its square. 0 leaves the mesh as loaded. |
 
 `refine_iterations` is bounded from above by the contact test, per PART and set
 by the THINNEST one: a wall row is `thickness/refine` high and its bottom
@@ -165,6 +164,7 @@ Parameters for the OCCT-based seam extractor. Only used when `mode` is `occt` or
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `parameters.epsilon` | double | 1e-3 | Distance tolerance for face-pair proximity [m]. Shared with mesh mode, see Contact boundary above. |
+| `parameters.num_smooth_points` | int | 100 | Points sampled along each seam curve. Nothing under `mesh/` reads it; there seam density comes from the tessellation and `refine_iterations` instead. Must be >= 2. |
 | `parameters.coincidence_samples` | int | 5 | Points sampled along an intersection edge when checking whether another face pair already produced it, and along a curve that is neither a line nor a circle when matching it to a part's boundary edge. Raise it if long spline edges match edges they only touch. Must be >= 2. |
 
 STEP and IGES files are converted to metres on load, whatever unit they declare.
@@ -205,11 +205,7 @@ length of a joint-character run before it is absorbed into its neighbour.
 
 ## Planned Parameters
 
-Open work on parameters that do exist, rather than parameters that do not.
-`line_error_threshold`, `circle_error_threshold` and `angle_threshold_deg` were
-listed here as unimplemented; they are not read anywhere in the codebase and the
-fit tolerances that replaced them are under Path Creator, so they have been
-removed rather than left looking pending.
+Open work on parameters that already exist.
 
 | Parameter | Description |
 |---|---|

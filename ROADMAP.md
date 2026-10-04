@@ -18,12 +18,17 @@ requirements as the system matures.
   Full behavior tree based task orchestration is the system-level end goal,
   replacing the coordinator and enabling conditional, multi-step, arbitrary-robot
   scenes.
-- **Mesh geometry support** — both the gripper sampler and planning pipeline have
-  mesh support as independent goals. At the system level this is a unified capability
-  milestone enabling sensor-driven workflows where CAD is unavailable.
+- **Mesh geometry support** — enabling sensor-driven workflows where CAD is unavailable.
+  The planning pipeline already has a mesh seam extractor; the gripper sampler gets mesh
+  support by integrating existing mesh and point-cloud samplers as selectable backends
+  rather than building its own (see the gripper sampler's Mesh Support section).
 - **Real hardware validation** — current validation is limited to simulation and
   GP25 geometry. Systematic real hardware testing across supported configurations
   is planned.
+- **Calibration helper tools** — tools that measure the real cell and write the results
+  into the existing configs: the relative pose of the two robots (`workcell.yaml`), the
+  torch and gripper TCPs, and the workpiece pose. Needed for the move from simulation to
+  real hardware.
 - **Mesh-based effectors and extra axes** — the system currently assumes parallel
   jaw grippers and fixed-base robots. Integrating more realistic mesh-based effectors
   and extended extra axis support is planned as part of the robot-agnostic extensibility
@@ -31,12 +36,30 @@ requirements as the system matures.
 
 ---
 
+## Physical Simulation
+
+Grasps are currently validated geometrically: contact, clearance and collision. Whether a
+grasp physically holds is not checked. A physics-based validation stage is planned to
+answer questions such as:
+
+- Is the gripper's friction enough to hold the part against gravity and the accelerations
+  of the holding arm's motion?
+- Does the part stay put against the push of the welding torch and wire during welding?
+- Does the part slip or rotate in the jaws, and by how much, under these loads?
+
+Results would feed back into grasp scoring, so grasps that cannot physically hold are
+rejected before execution. OmniSim is the planned simulator for this stage. Thanks to the
+OmniSim team for reaching out.
+
+---
+
 ## hold_and_weld_gripper_sampler
 
 ### Plugin System
 
-- Pluginize constraint system (`ExclusionZoneConstraint`, `KissingSurfaceConstraint`)
-  via pluginlib. Base interfaces are already defined.
+- Pluginize constraint system (`ExclusionZoneConstraint`, `KissingSurfaceConstraint`,
+  `GroundConstraint`) via pluginlib. There is no common base interface yet; one has to
+  be extracted first.
 - Pluginize filter system (`SurfaceFilter`, `RegionFilter`) via pluginlib.
   Base interfaces are already defined.
 - Orientation grader — currently quality score is grippable arc fraction only.
@@ -44,15 +67,16 @@ requirements as the system matures.
 
 ### Pipeline Improvements
 
-- Smart ground rejection. Current halfspace model is geometry agnostic. Replace with
-  topology aware detection using workpiece surface normals and z-position analysis.
 - Concurrency. Pipeline is deliberately single threaded for proof of concept clarity.
   Contact pair processing and radial map construction are the primary parallelization
   targets.
 - Dynamic sampling. Several sampling parameters are currently static. Adaptive density
   based on surface geometry and gripper dimensions is planned.
-- OCCT pipeline can benefit from mesh support techniques to identify geometrically
-  fertile sampling areas more efficiently, reducing brute-force surface traversal.
+- Expose `FaceSamplingConfig::max_cells_per_tile` as a YAML key. Every caller uses the
+  default of 16 today.
+- Guided sampling: identify geometrically promising sampling areas first to reduce
+  brute-force surface traversal. Deferred together with the native mesh pipeline it was
+  designed alongside.
 
 ### Validation
 
@@ -68,26 +92,29 @@ requirements as the system matures.
 
 ### Mesh Support
 
-Mesh based geometry input as an alternative to CAD for sensor driven or CAD unavailable
-scenarios. Planned as a two-phase pipeline.
+An in-house mesh sampler is deferred to keep development moving. The current goal is
+integrability: making existing mesh and point-cloud grasp samplers (e.g. GPD) pluggable
+alongside the CAD sampler, selectable per job from the config.
 
-Phase one performs structural analysis of the mesh — identifying graspable regions and
-natural surface boundaries through graph based traversal. A spanning tree based approach
-is used to guarantee complete mesh coverage and handle topologically circular regions
-where no natural boundary exists. CGAL is the targeted library given existing dependency
-availability in the system.
+- A common sampler interface every backend implements, with the CAD sampler as the
+  first implementation and the default when CAD is available.
+- Adapters that convert each external sampler's parallel-jaw grasp output into the
+  internal grasp format.
+- External candidates pass through the same constraint checks (exclusion zones, ground,
+  kissing surfaces), FCL collision check and scoring as CAD candidates, and are exported
+  in the same JSON, so nothing downstream depends on which sampler produced them.
+- External samplers are optional dependencies: the package builds and runs without them.
 
-Phase two generates ranked contact pairs through guided sampling, starting from
-geometrically promising regions and propagating outward via breadth-first search. Surface
-boundaries are classified as either geometric features or traversal constructs, kept
-strictly separate so ranking reflects only real geometry. Output feeds into the existing
-contact pair interface with no downstream changes required.
-
-This is a significant architectural addition planned after core CAD pipeline stabilization.
+A native mesh pipeline may return later, if the integrated samplers prove insufficient
+for industrial parts. The deferred design is two-phase: graph-based structural analysis
+of the mesh (spanning-tree coverage, CGAL) to find graspable regions, then guided
+breadth-first contact-pair sampling outward from promising regions, feeding the existing
+contact pair interface.
 
 ### Dataset Generation
 
-An output pipeline that takes mesh inputs and produces labeled grasp datasets. The
+An output pipeline that takes the validated grasps of any sampler backend, CAD or
+external, and produces labeled grasp datasets. The
 practical motivation is that weld areas, screw holes, and similar features tend to repeat
 across workpieces in the same workplace. A generated dataset allows downstream models to
 learn avoidance of these regions without rerunning the full sampling pipeline on every
@@ -96,11 +123,10 @@ to weld seams.
 
 ### Code Quality
 
-- Add `BRepCheck_Analyzer` validation at geometry entry points for robustness on external
-  STEP files.
+- Add `BRepCheck_Analyzer` validation to URDF geometry loading. STEP loading already
+  validates.
 - Fix known error handling inconsistencies per error handling policy. Primarily single
-  layer catch blocks in `contact_point_sampler.cpp` and unguarded `UIso`/`VIso` handle
-  checks in `shape_refiner.cpp`.
+  layer catch blocks in `contact_point_sampler.cpp`.
 
 ---
 
@@ -124,12 +150,12 @@ to weld seams.
 - Seam-level resume for the welder: report completed seams in the result and accept an
   optional start/skip field in the goal, so an interrupted job continues with a new goal
   that re-approaches from standoff (a stop still ends the goal; no in-job pause).
+- Manual weld rejection: an operator reviews the extracted seams and excludes any by
+  seam ID before the welder runs them. Lets a person discard seams the extractors get
+  wrong (incomplete pipe joints, false positives) instead of requiring perfect detection.
 
 ### Coordinator
 
-- Multi-planner pipeline: OMPL for collision-free approach planning, Pilz Industrial
-  Motion Planner for sharp deterministic path execution — cleaner separation of concerns
-  than the current single-planner approach.
 - Deprecate coordinator in favor of behavior tree integration.
 - Scene management via behavior tree nodes.
 
@@ -138,32 +164,15 @@ to weld seams.
 - More test coverage on viable and non-viable seam paths.
 - Lifecycle harmony with MoveIt 2 — currently requires architectural workarounds due to
   MoveIt 2's internal nodes not accepting lifecycle node interfaces.
-- Approach configuration finder — derive a guaranteed-valid joint goal from the
-  validator's IK walk, feed directly to OMPL as goal state, eliminating the current
-  retry loop entirely.
 
 ---
 
 ## hold_and_weld_planning
 
-The OCCT pipeline produces exact geometry and reads only two parameters, but "stable"
-overstated it: several silent-output defects were found and fixed by hand-built probes,
-including normals reversed on any seam wrapping past 180 degrees and unnamed curves
-exported as zero-length lines. The package still has **no tests of its own**, which is
-why those needed probes to find, and that is the first thing to address here. Pipe joint
-detection remains incomplete and is not planned for the near term.
-
-The mesh pipeline's fundamental problem used to be that CGAL corefinement pinned
-intersection-segment endpoints to triangle edges rather than the true intersection
-curve. That pipeline has been retired. The contact-boundary extractor that replaced it
-never computes an intersection curve at all — it locates the boundary of the contact
-region and then slides each point off the vertex lattice onto the half level set of a
-coverage field, which resolves the sub-vertex problem directly and, unlike the lattice
-it replaced, improves with refinement (measured 4.31mm -> 0.065mm going from
-`refine_iterations` 16 to 40).
-
-Of the two candidate fixes previously listed, ridge-valley detection was implemented and
-retired, and Newton refinement was not needed once the level-set approach worked.
+The OCCT pipeline produces exact geometry and reads three parameters, but it is not
+judgement-free (see the package README). Pipe joint detection remains incomplete and is
+not planned for the near term; manual weld rejection (see `hold_and_weld_application`)
+covers the seams it gets wrong.
 
 The core primitive planned here for complex curves — those not adequately represented as
 sequences of line and arc segments — now exists as `PtPSegment`, and both extractors emit

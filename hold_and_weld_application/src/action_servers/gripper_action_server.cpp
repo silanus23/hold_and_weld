@@ -67,7 +67,7 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
     ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
     "/config/tasks/pick_place_targets.yaml";
 
-  declare_parameter("arm_group_name", "robot1_gp25_arm");
+  declare_parameter("arm_group_name", "robot1_arm");
   declare_parameter("positions_yaml", default_yaml);
   declare_parameter("gripper_joint_names", std::vector<std::string>{
         "robot1_left_finger_joint", "robot1_right_finger_joint"});
@@ -729,8 +729,8 @@ void GripperActionServer::load_object_config()
 {
   try {
     const YAML::Node config = YAML::LoadFile(
-      ament_index_cpp::get_package_share_directory("hold_and_weld_application") +
-      "/config/collision_objects/objects.yaml");
+      ament_index_cpp::get_package_share_directory("hold_and_weld_bringup") +
+      "/config/objects/objects.yaml");
     if (config["/**"] && config["/**"]["ros__parameters"] &&
       config["/**"]["ros__parameters"]["base_link"] &&
       config["/**"]["ros__parameters"]["base_link"]["id"])

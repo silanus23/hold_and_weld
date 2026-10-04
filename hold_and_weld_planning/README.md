@@ -84,7 +84,8 @@ judgement-free. Pipe joint detection is under development.
   neighbouring values each run and reports whether a stable band exists.
 - Seam chaining cuts at points where three or more boundary curves meet rather than
   guessing which branch continues the seam, so those curves come out as separate open
-  chains. The cut is logged, not silent.
+  chains. The cut is logged, not silent. Small extra chains can also appear where two
+  chains meet; the cause is not yet pinned down.
 - Pipe joint detection in the OCCT extractor is incomplete. Inner intersection curves
   are not distinguished from outer seam curves — users should verify output manually.
 - Tested on box, plate, and cylinder workpieces. Complex organic geometry is not yet

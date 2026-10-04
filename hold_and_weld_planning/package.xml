@@ -9,7 +9,13 @@
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
-  <depend>manifold3d</depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>urdfdom_py</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- trimesh and manifold3d: requirements.txt. pythonocc-core: built from source
+       (see the top-level README). None has a working rosdep key. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

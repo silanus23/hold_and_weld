@@ -120,10 +120,6 @@
       collision_tolerance: 0.001
 
     jaw_clearance:
-      # Cylinder on the jaw axis ending at the TCP, covering the open mouth:
-      # radius = grip_distance / 2 + clearance_margin, length = orientation.finger_length.
-      # Rejects candidates with a secondary or an exclusion volume in or beside the
-      # mouth. The gripped part and the ground are not tested.
       enabled: true
       clearance_margin: 0.005
 
@@ -135,8 +131,7 @@
       triangulation_deflection: 0.001
 
     output:
-      # Unset: <hold_and_weld_application share>/grasps/grasps.json, the file the
-      # gripper server reads. --output overrides either.
+      # Unset: <hold_and_weld_application share>/grasps/grasps.json. --output overrides either.
       # json_path: 'results/grasps.json'
 
       max_grasps: 50

@@ -3,8 +3,8 @@
 This guide explains exactly how robots are wired together in this project — from
 URDF macro to action server — and walks you through adding a brand-new robot arm
 as either a second gripper or a second welder (or anything else).
-Note: Even though every 6 joint with needed files could be added,
-system generally targets easiness on yaskawa motoman repo's conventions.
+Note: any 6-joint arm can be added given the required files, but the system is
+built around the conventions of Yaskawa's motoman repo.
 
 ---
 
@@ -89,7 +89,8 @@ passes it directly to MoveIt:
 ```cpp
 // In on_configure():
 arm_group_name_ = get_parameter("arm_group_name").as_string();  // e.g. "robot1_arm"
-move_group_ = std::make_shared<MoveGroupInterface>(shared_from_this(), arm_group_name_);
+// MoveIt doesn't accept a lifecycle node, so the group is built on an internal plain node
+auto move_group = std::make_shared<MoveGroupInterface>(internal_node, arm_group_name_);
 ```
 
 The launch file supplies this parameter:
@@ -146,8 +147,11 @@ automatically. If you add a third robot with its own action server you must:
 
 ## Step-by-Step: Adding a New Robot
 
-The example below adds **robot3** — a second welding arm — as a complete walkthrough.
-Substitute your own robot model, prefix, and role.
+Step 1 and the catalog registration below make a new arm model selectable for
+the existing `robot1`/`robot2` slots. A genuinely new robot instance (e.g.
+**robot3**) additionally needs the controller, SRDF, MoveIt, and launch wiring
+listed in the Quick-Reference Cheat Sheet; the dual-gripper section shows that
+wiring for a gripper arm. Substitute your own robot model, prefix, and role.
 
 ---
 
@@ -233,7 +237,6 @@ an error log) any that the catalog cannot render.
 
 ---
 
-
 ## Special Case: Adding a Second Gripper (Dual Gripper)
 
 This section covers what changes if you want a second robot that uses the same
@@ -255,23 +258,23 @@ note in the previous section. That only works because every arm macro emits
 identical joint/link names for a given prefix; verify your new macro does the
 same (`<prefix>tool0`, `<prefix>link_6`, `<prefix>flange`, plus
 `<prefix>gripper_base`, `<prefix>left_finger`, `<prefix>right_finger` from
-`gripper_prefix.xacro`) before swapping it in.
+the gripper wrapper) before swapping it in.
 
 ### Additional URDF changes
 
 You need a second gripper hardware block. In `dual_robot.xacro`:
 
 ```xml
-<!-- Robot 3 is robot1-style: gp25 arm + gripper end effector -->
-<xacro:gp25_arm_macro parent="world" prefix="robot3_" x="..." y="..." .../>
-<!-- gripper_macro emits its own mount joint (robot3_tool0_to_gripper) -->
-<xacro:gripper_macro  prefix="robot3_" parent="robot3_tool0"/>
+<!-- Robot 3 is robot1-style: catalog arm + catalog gripper -->
+<xacro:robot_arm_macro model="gp25" parent="world" prefix="robot3_" x="..." y="..." .../>
+<!-- every gripper wrapper emits its own mount joint (robot3_tool0_to_gripper) -->
+<xacro:gripper_catalog_macro model="placeholder" prefix="robot3_" parent="robot3_tool0"/>
 ```
 
 ### Additional controllers
 
-`gripper_prefix.xacro` generates its own `<ros2_control>` block named
-`${prefix}gripper_system`. You need a matching controller:
+Every gripper wrapper (see `gripper_catalog.xacro`) generates its own
+`<ros2_control>` block named `${prefix}gripper_system`. You need a matching controller:
 
 ```yaml
 robot3_gripper_controller:

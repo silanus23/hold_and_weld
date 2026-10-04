@@ -1,6 +1,3 @@
-# Controllers configuration
-# Place at: hold_and_weld_description/config/controllers.yaml
-
 controller_manager:
   ros__parameters:
     update_rate: 100
