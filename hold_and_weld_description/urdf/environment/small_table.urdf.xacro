@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="base_link">
+
+  <!--
+    Small weld table for robotiq_cube.urdf.xacro: stands on the floor (centre at
+    z = height/2), and leaves 0.10 m of top around the cube so both arms can stand
+    close on either side. Same link name as workpiece.urdf.xacro, so it drops into
+    the base_link slot of objects.yaml.
+  -->
+  <xacro:property name="length" value="0.30"/>
+  <xacro:property name="width" value="0.30"/>
+  <xacro:property name="height" value="0.50"/>
+
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="${length} ${width} ${height}"/>
+      </geometry>
+      <material name="steel">
+        <color rgba="0.7 0.7 0.75 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${length} ${width} ${height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="20.0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="${20.0 * (width**2 + height**2) / 12}" ixy="0.0" ixz="0.0"
+               iyy="${20.0 * (length**2 + height**2) / 12}" iyz="0.0"
+               izz="${20.0 * (length**2 + width**2) / 12}"/>
+    </inertial>
+  </link>
+
+  <!-- Gazebo properties for the table -->
+  <gazebo reference="base_link">
+    <visual>
+      <material>
+        <ambient>0.7 0.7 0.75 1</ambient>
+        <diffuse>0.7 0.7 0.75 1</diffuse>
+        <specular>0.8 0.8 0.8 1</specular>
+      </material>
+    </visual>
+    <collision>
+      <surface>
+        <friction>
+          <ode>
+            <mu>0.6</mu>
+            <mu2>0.6</mu2>
+          </ode>
+        </friction>
+      </surface>
+    </collision>
+    <gravity>0</gravity>
+    <static>true</static>
+  </gazebo>
+
+  <gazebo reference="workpiece">
+    <gravity>0</gravity>
+  </gazebo>
+</robot>

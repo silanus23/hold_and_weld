@@ -1,0 +1,26 @@
+{
+    "robots": [
+        {
+            "name": "HC10DT",
+            "type": "robotic arm",
+            "manufacturer": "Yaskawa Motoman",
+            "xacro-generated": false,
+            "urdf": [
+                "urdf/hc10dt_macro.xacro"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/Yaskawa-Global/motoman_ros2_support_packages/tree/a77f186048bd3c35fc3bb5142f9d9270dbebe69f/motoman_hc10_support"
+        },
+        {
+            "name": "GP8L",
+            "type": "robotic arm",
+            "manufacturer": "Yaskawa Motoman",
+            "xacro-generated": false,
+            "urdf": [
+                "urdf/gp8l_macro.xacro"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/Yaskawa-Global/motoman_ros2_support_packages/tree/a77f186048bd3c35fc3bb5142f9d9270dbebe69f/motoman_gp8l_support"
+        }
+    ]
+}
