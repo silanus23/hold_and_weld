@@ -42,6 +42,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "hold_and_weld_application/action/trigger_gripper.hpp"
 
@@ -82,9 +84,10 @@ struct GripperJob
  *   which may be blocked in a transition waiting for the worker.
  * - execution_mutex_ guards pending_goal_, execution_future_ and shutdown_requested_;
  *   move_group_mutex_ guards the move_group_ pointer against request_stop() on the
- *   pre-shutdown thread. The job, the apertures and base_link_id_ take no lock: they are
- *   written only in on_configure before the worker starts and in on_cleanup after it is
- *   joined.
+ *   pre-shutdown thread; grasp_state_mutex_ guards grasp_state_, which the
+ *   moveit_executor_ thread writes. The job, the apertures and base_link_id_ take no
+ *   lock: they are written only in on_configure before the worker starts and in
+ *   on_cleanup after it is joined.
  *   stop_requested_ is atomic and checked by the job before every step and retry.
  */
 class GripperActionServer : public rclcpp_lifecycle::LifecycleNode {
@@ -286,6 +289,18 @@ private:
     const geometry_msgs::msg::Pose & pose, const std::string & step_name,
     const std::function<bool()> & should_stop);
 
+  /**
+   * @brief Attach (@p attach true) or release the part on the Gazebo grasp joint and
+   * wait until the joint reports that state.
+   *
+   * The joint ignores a request matching its state and reports only changes, so the
+   * request is re-sent until the reported state matches.
+   *
+   * @return false (with the reason logged) if the state does not match within
+   *         service_timeout_sec, or the job was stopped.
+   */
+  bool set_gazebo_grasp(bool attach, const std::function<bool()> & should_stop);
+
   // Collision objects
   /**
    * @brief Attach an object to the gripper in the planning scene.
@@ -323,6 +338,13 @@ private:
   rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedPtr
     list_controllers_client_;
   std::string gripper_controller_name_;
+
+  bool gazebo_attach_ = false;
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr grasp_attach_pub_;
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr grasp_detach_pub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr grasp_state_sub_;
+  std::mutex grasp_state_mutex_;
+  std::string grasp_state_;
 
   std::thread worker_thread_;
   std::mutex execution_mutex_;

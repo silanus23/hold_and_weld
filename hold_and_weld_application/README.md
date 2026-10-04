@@ -14,7 +14,7 @@ Both servers are implemented as ROS 2 lifecycle action servers. Lifecycle nodes 
 
 ### Gripper Action Server
 
-Handles the complete pick and place sequence. Object attachment and allowed collision matrix updates are managed automatically during execution. Job configuration is loaded from `YAML` at configure time. Currently uses a fixed 7-stage linear pipeline with no error recovery between stages. A more autonomous approach is under investigation.
+Handles the complete pick and place sequence. Object attachment and allowed collision matrix updates are managed automatically during execution. With `gazebo_attach` (on in the bringup launches), the part is also held in Gazebo by a fixed joint (`gripper_catalog.xacro`, topics `/robot1_grasp/{attach,detach,state}`): released before the arm moves, attached after Close, and the job waits for Gazebo to confirm each. Job configuration is loaded from `YAML` at configure time. Currently uses a fixed 7-stage linear pipeline with no error recovery between stages. A more autonomous approach is under investigation.
 
 ```mermaid
 flowchart LR

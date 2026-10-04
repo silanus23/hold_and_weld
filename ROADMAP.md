@@ -22,9 +22,9 @@ requirements as the system matures.
   The planning pipeline already has a mesh seam extractor; the gripper sampler gets mesh
   support by integrating existing mesh and point-cloud samplers as selectable backends
   rather than building its own (see the gripper sampler's Mesh Support section).
-- **Real hardware validation** — current validation is limited to simulation and
-  GP25 geometry. Systematic real hardware testing across supported configurations
-  is planned.
+- **Real hardware validation** — current validation is limited to simulation, on the
+  GP25 pair and the HC10DT + GP8L cell. Systematic real hardware testing across
+  supported configurations is planned.
 - **Calibration helper tools** — tools that measure the real cell and write the results
   into the existing configs: the relative pose of the two robots (`workcell.yaml`), the
   torch and gripper TCPs, and the workpiece pose. Needed for the move from simulation to

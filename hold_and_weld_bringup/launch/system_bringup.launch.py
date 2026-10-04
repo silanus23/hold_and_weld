@@ -53,6 +53,14 @@ def generate_launch_description():
         if joint_name in safety_joints
     )
 
+    targets_yaml = load_yaml('hold_and_weld_bringup', 'config/tasks/pick_place_targets.yaml')
+    start_joints = targets_yaml.get('start_pose', {}).get('joint_positions', {})
+    robot1_initial_positions = ' '.join(
+        f'robot1_initial_pos_j{i}:={start_joints[f"robot1_joint_{i}"]}'
+        for i in range(1, 7)
+        if f'robot1_joint_{i}' in start_joints
+    )
+
     declared_arguments = [
         DeclareLaunchArgument(
             'use_gazebo_gui',
@@ -79,6 +87,14 @@ def generate_launch_description():
             default_value='WARN',
             description='move_group log level (e.g. DEBUG for OMPL/collision detail)',
         ),
+        DeclareLaunchArgument(
+            'gazebo_attach',
+            default_value='true',
+            description=(
+                'Hold the part on the Gazebo grasp joint (gripper_catalog.xacro) '
+                'between close and the end of the job'
+            ),
+        ),
     ]
 
     use_gazebo_gui = LaunchConfiguration('use_gazebo_gui')
@@ -86,6 +102,7 @@ def generate_launch_description():
     auto_start = LaunchConfiguration('auto_start')
     use_sim_time = LaunchConfiguration('use_sim_time')
     move_group_log_level = LaunchConfiguration('move_group_log_level')
+    gazebo_attach = LaunchConfiguration('gazebo_attach')
 
     bringup_launch_dir = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_bringup'), 'launch']
@@ -98,6 +115,8 @@ def generate_launch_description():
             'robot_name': 'dual_robot_system',
             'urdf_file': 'dual_robot.xacro',
             'controller_config': 'controllers.yaml',
+            'robot1_initial_positions': robot1_initial_positions,
+            'gazebo_attach': gazebo_attach,
             'robot2_initial_positions': robot2_initial_positions,
         }.items(),
     )
@@ -159,6 +178,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_gripper_server.launch.py']),
         launch_arguments={
             'auto_trigger': 'false',
+            'gazebo_attach': gazebo_attach,
             'use_sim_time': use_sim_time,
         }.items(),
     )

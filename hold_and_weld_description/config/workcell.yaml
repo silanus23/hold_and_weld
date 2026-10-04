@@ -10,17 +10,35 @@
 #
 # gripper_model is robot1's end effector, an entry of urdf/end_effectors/gripper_catalog.xacro.
 # The real grippers there open to a few cm: pair a swap with a workpiece they can grasp.
+
+# ── HC10DT holds the robotiq_cube, GP8L welds it ─────────────────────────────────
 robots:
   robot1:
-    model: gp25
+    model: hc10dt
     x: 0.0
     y: 0.0
     z: 0.0
     yaw: 0.0
   robot2:
-    model: gp25
-    x: 2.2
-    y: -0.5
+    model: gp8l
+    x: 1.7
+    y: 0.0
     z: 0.0
     yaw: 3.14159
 gripper_model: robotiq_2f_140
+
+# ── GP25 pair ──────────────────────────────────────────────────────────────────
+#robots:
+#  robot1:
+#    model: gp25
+#    x: 0.0
+#    y: 0.0
+#    z: 0.0
+#    yaw: 0.0
+#  robot2:
+#    model: gp25
+#    x: 2.2
+#    y: -0.5
+#    z: 0.0
+#    yaw: 3.14159
+#gripper_model: robotiq_2f_140

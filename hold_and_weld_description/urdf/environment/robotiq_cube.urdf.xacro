@@ -51,8 +51,9 @@
         </friction>
       </surface>
     </collision>
-  <gravity>0</gravity>
-  <static>true</static>
+    <!-- Gravity on, not static: the cube rests on
+         the floor (pick) or the table top (end_pose) so a finger touching first
+         cannot float it away, and the grasp DetachableJoint carries it once attached. -->
   </gazebo>
 
 </robot>

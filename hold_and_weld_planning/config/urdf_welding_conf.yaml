@@ -26,33 +26,61 @@
 #      - 0
 #      - 0
 
-# ── Elliptic part seated on the workpiece (mesh) ──────────────────────────────
-# Mesh mode cannot read elliptic_part.urdf.xacro (<mesh> collision), so the STL
-# is loaded directly.
+# ── HC10DT + GP8L: robotiq_cube held on the small table ──────────────────────────
+# Must match the placed poses in hold_and_weld_bringup objects.yaml. OCCT: the mesh
+# extractor finds no part edge on this 0.10 m cube at the parameters below.
 workpiece:
-  mode: mesh
+  mode: occt
   main_part:
-    main_path: "package://hold_and_weld_description/meshes/workpieces/workpiece.stl"
+    main_path: "package://hold_and_weld_description/urdf/environment/small_table.urdf.xacro"
     world_pose:
       xyz:
-      - 1.2
-      - -0.5
-      - 0.65
+      - 0.9
+      - 0.0
+      - 0.25
       rpy:
       - 0
       - 0
       - 0
   secondary_part:
-    secondary_path: "package://hold_and_weld_description/meshes/workpieces/elliptic_part.stl"
+    secondary_path: "package://hold_and_weld_description/urdf/environment/robotiq_cube.urdf.xacro"
     world_pose:
       xyz:
-      - 1.2
-      - -0.5
-      - 0.925
+      - 0.9
+      - 0.0
+      - 0.55
       rpy:
       - 0
       - 0
       - 0
+
+# ── Elliptic part seated on the workpiece (mesh) ──────────────────────────────
+# Mesh mode cannot read elliptic_part.urdf.xacro (<mesh> collision), so the STL
+# is loaded directly.
+#workpiece:
+#  mode: mesh
+#  main_part:
+#    main_path: "package://hold_and_weld_description/meshes/workpieces/workpiece.stl"
+#    world_pose:
+#      xyz:
+#      - 1.2
+#      - -0.5
+#      - 0.65
+#      rpy:
+#      - 0
+#      - 0
+#      - 0
+#  secondary_part:
+#    secondary_path: "package://hold_and_weld_description/meshes/workpieces/elliptic_part.stl"
+#    world_pose:
+#      xyz:
+#      - 1.2
+#      - -0.5
+#      - 0.925
+#      rpy:
+#      - 0
+#      - 0
+#      - 0
 
 #workpiece:
 #  mode: mesh
@@ -168,7 +196,7 @@ parameters:
   waypoint_spacing: 0.01
 
   # ── Contact boundary tuning ────────────────────────────────────────────────
-  # Measured on this scene (refine 40, epsilon 0.002, 1098.87 mm analytic):
+  # Measured on the elliptic mesh scene (refine 40, epsilon 0.002, 1098.87 mm analytic):
   # 0.10 -> +4.71 mm, 0.50 -> +36.31 mm. The seam count (8) does not change with
   # it; that fragmentation comes from PathCreator._split_on_contact_type.
   near_contact_edge_fraction: 0.1
@@ -176,7 +204,7 @@ parameters:
 
   # ── Mesh intersection ──────────────────────────────────────────────────────
   epsilon: 0.002
-  # Last value measured clean on this scene; the upper bound is in PARAMS.md.
+  # Last value measured clean on the elliptic mesh scene; the upper bound is in PARAMS.md.
   refine_iterations: 40
 
   # ── Path classification overrides, at their defaults ───────────────────────

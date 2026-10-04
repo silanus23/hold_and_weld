@@ -86,6 +86,7 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions & options)
   declare_parameter("finger_motion_sec", 2.0);
   declare_parameter("finger_settle_sec", 0.5);
   declare_parameter("motion_settle_sec", 0.25);
+  declare_parameter("gazebo_attach", false);
 }
 
 GripperActionServer::~GripperActionServer()
@@ -118,6 +119,7 @@ CallbackReturn GripperActionServer::on_configure(const rclcpp_lifecycle::State &
   const double service_timeout_sec = get_parameter("service_timeout_sec").as_double();
   const double controller_timeout_sec = get_parameter("controller_timeout_sec").as_double();
   const double shutdown_wait_sec = get_parameter("shutdown_wait_sec").as_double();
+  gazebo_attach_ = get_parameter("gazebo_attach").as_bool();
   const double finger_motion_sec = get_parameter("finger_motion_sec").as_double();
   const double finger_settle_sec = get_parameter("finger_settle_sec").as_double();
   const double motion_settle_sec = get_parameter("motion_settle_sec").as_double();
@@ -235,6 +237,21 @@ CallbackReturn GripperActionServer::on_configure(const rclcpp_lifecycle::State &
       "/apply_planning_scene");
     get_planning_scene_client_ =
       internal_node->create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
+    if (gazebo_attach_) {
+      {
+        std::lock_guard<std::mutex> lock(grasp_state_mutex_);
+        grasp_state_.clear();
+      }
+      grasp_attach_pub_ = internal_node->create_publisher<std_msgs::msg::Empty>(
+        "/robot1_grasp/attach", 10);
+      grasp_detach_pub_ = internal_node->create_publisher<std_msgs::msg::Empty>(
+        "/robot1_grasp/detach", 10);
+      grasp_state_sub_ = internal_node->create_subscription<std_msgs::msg::String>(
+        "/robot1_grasp/state", 10, [this](const std_msgs::msg::String & msg) {
+          std::lock_guard<std::mutex> lock(grasp_state_mutex_);
+          grasp_state_ = msg.data;
+        });
+    }
 
     moveit_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     moveit_executor_->add_node(internal_node);
@@ -402,6 +419,9 @@ CallbackReturn GripperActionServer::on_cleanup(const rclcpp_lifecycle::State & /
   list_controllers_client_.reset();
   planning_scene_client_.reset();
   get_planning_scene_client_.reset();
+  grasp_attach_pub_.reset();
+  grasp_detach_pub_.reset();
+  grasp_state_sub_.reset();
 
   job_loaded_ = false;
   return CallbackReturn::SUCCESS;
@@ -678,6 +698,9 @@ bool GripperActionServer::run_job(
   if (!wait_for_gripper_controller(should_stop)) {
     return false;
   }
+  if (gazebo_attach_ && !set_gazebo_grasp(false, should_stop)) {
+    return fail("Failed to release the part from the Gazebo grasp joint");
+  }
 
   if (!begin_step("opening_gripper")) {return fail("");}
   if (!set_finger_aperture(open_position, should_stop)) {
@@ -697,6 +720,9 @@ bool GripperActionServer::run_job(
   if (!begin_step("closing_gripper")) {return fail("");}
   if (!set_finger_aperture(close_position, should_stop)) {
     return fail("Failed to close gripper");
+  }
+  if (gazebo_attach_ && !set_gazebo_grasp(true, should_stop)) {
+    return fail("Failed to attach the part on the Gazebo grasp joint");
   }
   if (!attach_object(job.target_id)) {
     return fail("Failed to attach object '" + job.target_id + "' — aborting job");
@@ -1030,6 +1056,34 @@ bool GripperActionServer::move_to_pose(
   RCLCPP_ERROR(logger_, "[%s] Failed after %d attempts", step_name.c_str(),
     max_planning_retries_);
   return false;
+}
+
+bool GripperActionServer::set_gazebo_grasp(
+  bool attach, const std::function<bool()> & should_stop)
+{
+  const std::string wanted = attach ? "attached" : "detached";
+  const auto & publisher = attach ? grasp_attach_pub_ : grasp_detach_pub_;
+  const auto deadline = std::chrono::steady_clock::now() + service_timeout_;
+  while (true) {
+    {
+      std::lock_guard<std::mutex> lock(grasp_state_mutex_);
+      if (grasp_state_ == wanted) {
+        RCLCPP_INFO(logger_, "Gazebo grasp joint %s", wanted.c_str());
+        return true;
+      }
+    }
+    if (should_stop()) {
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(logger_, "Gazebo grasp joint did not report '%s' within %.1f s; is the "
+        "part spawned under objects.yaml's child_link spawn_name?", wanted.c_str(),
+        std::chrono::duration<double>(service_timeout_).count());
+      return false;
+    }
+    publisher->publish(std_msgs::msg::Empty());
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
 }
 
 // Collision objects

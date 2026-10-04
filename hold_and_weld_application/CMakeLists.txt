@@ -29,6 +29,7 @@ find_package(kdl_parser REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 include_directories(
@@ -94,6 +95,7 @@ ament_target_dependencies(hold_and_weld_action_servers
   lifecycle_msgs
   geometry_msgs
   sensor_msgs
+  std_msgs
   control_msgs
   controller_manager_msgs
   moveit_msgs

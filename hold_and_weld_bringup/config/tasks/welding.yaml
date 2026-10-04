@@ -5,12 +5,21 @@ safety_pose:
   velocity_scaling:  0.3
   planning_time_sec: 5.0
   joint_positions:
-    robot2_joint_1: -0.02866902375860982
-    robot2_joint_2:  0.4554804839676735
-    robot2_joint_3:  2.026569863838492
-    robot2_joint_4: -0.028703125373702794
-    robot2_joint_5: -1.5711409353884473
+    # GP8L at (1.7, 0): torch parked at about (1.51, 0, 1.07), behind the table. Also
+    # the configuration finder's IK seed, so a pose far from the seams finds no IK.
+    robot2_joint_1:  0.0
+    robot2_joint_2: -0.8
+    robot2_joint_3: -0.3
+    robot2_joint_4:  0.0
+    robot2_joint_5: -1.57
     robot2_joint_6:  0.0
+    # GP25 pair
+    #robot2_joint_1: -0.02866902375860982
+    #robot2_joint_2:  0.4554804839676735
+    #robot2_joint_3:  2.026569863838492
+    #robot2_joint_4: -0.028703125373702794
+    #robot2_joint_5: -1.5711409353884473
+    #robot2_joint_6:  0.0
 
 # Motion parameters
 approach_offset_z: 0.1

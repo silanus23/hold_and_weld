@@ -36,17 +36,19 @@
 
 #    frame_id: 'world'
 
-# ── T-joint cube straight ──────────────────────────────────────────────────────
+# ── HC10DT + GP8L: robotiq_cube held on the small table ──────────────────────────
+# end_pose must match the secondary_part pose in hold_and_weld_planning
+# urdf_welding_conf.yaml.
 /**:
    ros__parameters:
      base_link:
-       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+       urdf_path: 'urdf/environment/small_table.urdf.xacro'
        id: 'base_link'
-       spawn_name: 'workpiece_tjoint_straight'
+       spawn_name: 'small_table'
        pose:
-         x: 1.2
-         y: -0.5
-         z: 0.65
+         x: 0.9
+         y: 0.0
+         z: 0.25
        orientation:
          x: 0.0
          y: 0.0
@@ -54,18 +56,18 @@
          w: 1.0
 
      child_link:
-       urdf_path: 'urdf/environment/cube.urdf.xacro'
+       urdf_path: 'urdf/environment/robotiq_cube.urdf.xacro'
        id: 'child_link'
-       spawn_name: 'cube_straigth'
+       spawn_name: 'robotiq_cube_small_table'
        pose:
-         x: 1.2
-         y: 0.3
+         x: 0.5
+         y: 0.6
          z: 0.05
        end_pose:
          position:
-           x: 1.2
-           y: -0.5
-           z: 0.925
+           x: 0.9
+           y: 0.0
+           z: 0.55
          orientation:
            x: 0.0
            y: 0.0
@@ -73,6 +75,46 @@
            w: 1.0
 
      frame_id: 'world'
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── T-joint cube straight ──────────────────────────────────────────────────────
+#/**:
+#   ros__parameters:
+#     base_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'base_link'
+#       spawn_name: 'workpiece_tjoint_straight'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.65
+#       orientation:
+#         x: 0.0
+#         y: 0.0
+#         z: 0.0
+#         w: 1.0
+
+#     child_link:
+#       urdf_path: 'urdf/environment/cube.urdf.xacro'
+#       id: 'child_link'
+#       spawn_name: 'cube_straigth'
+#       pose:
+#         x: 1.2
+#         y: 0.3
+#         z: 0.05
+#       end_pose:
+#         position:
+#           x: 1.2
+#           y: -0.5
+#           z: 0.925
+#         orientation:
+#           x: 0.0
+#           y: 0.0
+#           z: 0.0
+#           w: 1.0
+
+#     frame_id: 'world'
 
 # ──────────────────────────────────────────────────────────────────────────────
 

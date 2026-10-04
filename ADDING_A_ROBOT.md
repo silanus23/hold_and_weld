@@ -246,7 +246,9 @@ This section covers what changes if you want a second robot that uses the same
 
 `GripperActionServer`'s `touch_links_`/`attach_link_` are hardcoded to the
 `robot1_` prefix (`robot1_tool0`, `robot1_link_6`, `robot1_flange`,
-`robot1_gripper_base`, `robot1_left_finger`, `robot1_right_finger`). There is
+`robot1_gripper_base`, `robot1_left_finger`, `robot1_right_finger`), and so are
+its Gazebo grasp-joint topics (`/robot1_grasp/...`, from `gripper_catalog.xacro`
+and bridged in `sim_gazebo.launch.py`). There is
 only one gripper slot in this system, so this is not meant to be reconfigured —
 a genuinely new, second, independently-controlled gripper robot needs its own
 action server instance (a copy of `GripperActionServer` with its own hardcoded
@@ -345,7 +347,8 @@ Add a new action server    ->  New launch file (app_<name>_server.launch.py)
                            ->  dual_robot_coordinator.cpp (new client + sequencing)
                            ->  system_bringup.launch.py (include new launch file)
 
-Change spawn pose          ->  Task YAML (safety_pose.joint_positions)
+Change spawn pose          ->  Task YAML (welding.yaml safety_pose, or
+                               pick_place_targets.yaml start_pose, .joint_positions)
                            ->  system_bringup.launch.py (xacro args build block)
                            ->  dual_robot.xacro (xacro:arg declarations)
 

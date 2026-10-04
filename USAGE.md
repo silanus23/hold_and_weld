@@ -21,7 +21,7 @@ Gripper arm only: picks and places the part.
 
 - `auto_trigger:=false`: start without running the job.
 - `hold_and_weld_bringup/config/tasks/pick_place_targets.yaml`: finger positions,
-  pick and place poses.
+  start (spawn) pose, pick and place poses.
 
 ```bash
 ros2 launch hold_and_weld_bringup welder_bringup.launch.py

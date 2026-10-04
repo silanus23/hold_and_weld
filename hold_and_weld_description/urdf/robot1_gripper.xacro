@@ -3,6 +3,19 @@
   <xacro:arg name="controller_config_file" default=""/>
   <xacro:property name="controller_config_file" value="$(arg controller_config_file)"/>
 
+  <!-- Robot1 initial joint positions (radians). Populated by sim_gazebo.launch.py
+       from pick_place_targets.yaml start_pose so the gripper arm spawns collision-free. -->
+  <xacro:arg name="robot1_initial_pos_j1" default="0"/>
+  <xacro:arg name="robot1_initial_pos_j2" default="0"/>
+  <xacro:arg name="robot1_initial_pos_j3" default="0"/>
+  <xacro:arg name="robot1_initial_pos_j4" default="0"/>
+  <xacro:arg name="robot1_initial_pos_j5" default="0"/>
+  <xacro:arg name="robot1_initial_pos_j6" default="0"/>
+
+  <!-- Gazebo model name of the part robot1 grasps (objects.yaml child_link spawn_name).
+       Populated by sim_gazebo.launch.py; empty leaves the Gazebo grasp joint out. -->
+  <xacro:arg name="grasp_object_model" default=""/>
+
   <!-- Slot models and poses; see config/workcell.yaml -->
   <xacro:arg name="workcell_config" default="$(find hold_and_weld_description)/config/workcell.yaml"/>
   <xacro:property name="workcell" value="${xacro.load_yaml('$(arg workcell_config)')}"/>
@@ -19,8 +32,15 @@
   <xacro:linear_rail_macro parent="world" prefix="robot1_"
     x="${robot1['x']}" y="${robot1['y']}" z="${robot1['z']}" yaw="${robot1['yaw']}"/>
   <xacro:robot_arm_macro model="${robot1['model']}" parent="robot1_rail_carriage" prefix="robot1_"
+    initial_pos_j1="$(arg robot1_initial_pos_j1)"
+    initial_pos_j2="$(arg robot1_initial_pos_j2)"
+    initial_pos_j3="$(arg robot1_initial_pos_j3)"
+    initial_pos_j4="$(arg robot1_initial_pos_j4)"
+    initial_pos_j5="$(arg robot1_initial_pos_j5)"
+    initial_pos_j6="$(arg robot1_initial_pos_j6)"
     controller_config_file="${controller_config_file}"/>
-  <xacro:gripper_catalog_macro model="${workcell.get('gripper_model', '')}" prefix="robot1_" parent="robot1_tool0"/>
+  <xacro:gripper_catalog_macro model="${workcell.get('gripper_model', '')}" prefix="robot1_" parent="robot1_tool0"
+    grasp_object_model="$(arg grasp_object_model)"/>
 
   <gazebo>
     <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">

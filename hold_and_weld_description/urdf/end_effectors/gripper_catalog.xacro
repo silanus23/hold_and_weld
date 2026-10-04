@@ -42,7 +42,7 @@
 
   <xacro:property name="gripper_catalog" value="${['placeholder', 'rethink_electric', 'schunk_pg70', 'onrobot_2fg7', 'robotiq_2f_140']}"/>
 
-  <xacro:macro name="gripper_catalog_macro" params="model prefix parent">
+  <xacro:macro name="gripper_catalog_macro" params="model prefix parent grasp_object_model:=''">
     <xacro:if value="${model == ''}">
       ${xacro.fatal('workcell.yaml has no gripper_model for', prefix, '- set it to one of', gripper_catalog)}
     </xacro:if>
@@ -64,6 +64,24 @@
     </xacro:if>
     <xacro:if value="${model == 'robotiq_2f_140'}">
       <xacro:robotiq_2f_140_gripper_macro prefix="${prefix}" parent="${parent}"/>
+    </xacro:if>
+
+    <!--
+      Attaches as soon as the part spawns; the gripper action server detaches it first.
+      Parent is link_6: URDF to SDF lumps the fixed gripper chain into it.
+    -->
+    <xacro:if value="${grasp_object_model != ''}">
+      <gazebo>
+        <plugin filename="gz-sim-detachable-joint-system" name="gz::sim::systems::DetachableJoint">
+          <parent_link>${prefix}link_6</parent_link>
+          <child_model>${grasp_object_model}</child_model>
+          <child_link>child_link</child_link>
+          <attach_topic>/${prefix}grasp/attach</attach_topic>
+          <detach_topic>/${prefix}grasp/detach</detach_topic>
+          <output_topic>/${prefix}grasp/state</output_topic>
+          <suppress_child_warning>true</suppress_child_warning>
+        </plugin>
+      </gazebo>
     </xacro:if>
   </xacro:macro>
 </robot>

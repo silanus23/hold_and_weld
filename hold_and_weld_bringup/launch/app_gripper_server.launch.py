@@ -31,6 +31,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
+from launch_ros.parameter_descriptions import ParameterValue
 from lifecycle_msgs.msg import Transition
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -73,6 +74,14 @@ def generate_launch_description():
             default_value='/robot1_gripper_controller/follow_joint_trajectory',
             description='FollowJointTrajectory action topic for the gripper controller',
         ),
+        DeclareLaunchArgument(
+            'gazebo_attach',
+            default_value='true',
+            description=(
+                'Hold the part on the Gazebo grasp joint (gripper_catalog.xacro) '
+                'between close and the end of the job'
+            ),
+        ),
     ]
 
     arm_group_name = LaunchConfiguration('arm_group_name')
@@ -81,6 +90,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     positions_yaml = LaunchConfiguration('positions_yaml')
     gripper_controller_topic = LaunchConfiguration('gripper_controller_topic')
+    gazebo_attach = LaunchConfiguration('gazebo_attach')
 
     srdf_file = os.path.join(desc_pkg, 'config', 'dual_robot.srdf')
     with open(srdf_file, 'r') as file:
@@ -117,6 +127,7 @@ def generate_launch_description():
                 'gripper_controller_topic': gripper_controller_topic,
                 'auto_trigger': auto_trigger,
                 'auto_trigger_delay_sec': auto_trigger_delay_sec,
+                'gazebo_attach': ParameterValue(gazebo_attach, value_type=bool),
                 'use_sim_time': use_sim_time,
             }
         ],

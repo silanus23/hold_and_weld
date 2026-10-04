@@ -19,6 +19,7 @@ Launches Gazebo server, ROS-Gazebo bridge, and robot state publisher.
 """
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -35,6 +36,9 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from launch_utils import load_yaml  # noqa: E402, I100
 
 
 def generate_launch_description():
@@ -81,12 +85,29 @@ def generate_launch_description():
             ),
         ),
         DeclareLaunchArgument(
+            'robot1_initial_positions',
+            default_value='',
+            description=(
+                'Space-separated xacro args for robot1 initial joint positions, e.g. '
+                '"robot1_initial_pos_j1:=0.02 robot1_initial_pos_j2:=-0.26 ...". '
+                'Populated from pick_place_targets.yaml start_pose.'
+            ),
+        ),
+        DeclareLaunchArgument(
             'robot2_initial_positions',
             default_value='',
             description=(
                 'Space-separated xacro args for robot2 initial joint positions, e.g. '
                 '"robot2_initial_pos_j1:=0.02 robot2_initial_pos_j2:=-0.26 ...". '
                 'Populated by system_bringup.launch.py from welding.yaml safety_pose.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'gazebo_attach',
+            default_value='true',
+            description=(
+                'Hold the part on the Gazebo grasp joint (gripper_catalog.xacro) '
+                'between close and the end of the job'
             ),
         ),
     ]
@@ -97,7 +118,9 @@ def generate_launch_description():
     urdf_file = LaunchConfiguration('urdf_file')
     controller_config = LaunchConfiguration('controller_config')
     spawn_robot = LaunchConfiguration('spawn_robot')
+    robot1_initial_positions = LaunchConfiguration('robot1_initial_positions')
     robot2_initial_positions = LaunchConfiguration('robot2_initial_positions')
+    gazebo_attach = LaunchConfiguration('gazebo_attach')
 
     world_path = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_description'), 'worlds', world_file]
@@ -105,6 +128,12 @@ def generate_launch_description():
 
     controller_config_path = PathJoinSubstitution(
         [FindPackageShare('hold_and_weld_description'), 'config', controller_config]
+    )
+
+    objects = load_yaml('hold_and_weld_bringup', 'config/objects/objects.yaml')
+    grasp_object_model = (
+        objects.get('/**', {}).get('ros__parameters', {})
+        .get('child_link', {}).get('spawn_name', 'child_link')
     )
 
     robot_description_content = ParameterValue(
@@ -120,7 +149,16 @@ def generate_launch_description():
             'controller_config_file:=',
             controller_config_path,
             ' ',
+            robot1_initial_positions,
+            ' ',
             robot2_initial_positions,
+            ' ',
+            # The grasp joint locks the part on spawn, so it must not exist when no server
+            # will release it.
+            PythonExpression([
+                f"'grasp_object_model:={grasp_object_model}' if '", gazebo_attach,
+                "' == 'true' else ''",
+            ]),
         ]),
         value_type=str,
     )
@@ -152,6 +190,10 @@ def generate_launch_description():
             '/world/default/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             ['/world/default/model/', robot_name, '/joint_state',
              '@sensor_msgs/msg/JointState[gz.msgs.Model'],
+            # Grasp joint of gripper_catalog.xacro, driven by the gripper action server
+            '/robot1_grasp/attach@std_msgs/msg/Empty]gz.msgs.Empty',
+            '/robot1_grasp/detach@std_msgs/msg/Empty]gz.msgs.Empty',
+            '/robot1_grasp/state@std_msgs/msg/String[gz.msgs.StringMsg',
         ],
         remappings=[
             ('/world/default/clock', '/clock'),

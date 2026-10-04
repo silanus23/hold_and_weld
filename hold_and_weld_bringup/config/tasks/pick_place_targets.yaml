@@ -1,9 +1,11 @@
 gripper:
   # robotiq_2f_140 travel is [0, 0.064267] per finger; pad gap is 2*position,
   # so fully open clears the 0.10m cube by 14mm per side and contact is at 0.05;
-  # close 1mm per side past contact to squeeze it.
+  # close 15mm per side past contact: the stalled fingers keep a large position
+  # error, so Gazebo squeezes at the joint effort limit instead of a contact-depth
+  # nudge, and contact comes halfway through the close, not at its last instant.
   open_position: 0.064267
-  close_position: 0.049
+  close_position: 0.035
   attach_link: robot1_gripper_base
   touch_links:
     - robot1_tool0
@@ -12,13 +14,31 @@ gripper:
     - robot1_gripper_base
     - robot1_left_finger
     - robot1_right_finger
+
+# Gripper arm pose at spawn, robot1's initial joint positions in Gazebo [rad]. The
+# job opens the gripper here, so the open fingers must be clear of the arm. Rail
+# not listed: it starts at 0.
+start_pose:
+  joint_positions:
+    # HC10DT: gripper pointing down at about (0.45, 0, 1.0). Its all-zero pose folds
+    # the forearm down and the opening fingers hit the upper arm.
+    robot1_joint_1: -0.368
+    robot1_joint_2: -0.056
+    robot1_joint_3:  1.106
+    robot1_joint_4:  0.0
+    robot1_joint_5: -1.162
+    robot1_joint_6:  0.368
+
+# ── HC10DT + GP8L scene ──────────────────────────────────────────────────────────
+# Poses are robot1_link_6, 0.34816 m above the pad centre (170 mm HC10DT flange). The
+# pads grip 40 mm above the cube centre so the fingers stay clear of the torch.
 targets:
   - target_id: "child_link"
     approach_pose:
       position:
-        x: 1.2
-        y: 0.3
-        z: 0.55
+        x: 0.5
+        y: 0.6
+        z: 0.63816
       orientation:
         x: 0.0
         y: 0.7071068
@@ -26,9 +46,9 @@ targets:
         w: 0.7071068
     pick_pose:
       position:
-        x: 1.2
-        y: 0.3
-        z: 0.3282
+        x: 0.5
+        y: 0.6
+        z: 0.43816
       orientation:
         x: 0.0
         y: 0.7071068
@@ -36,9 +56,9 @@ targets:
         w: 0.7071068
     retract_pose:
       position:
-        x: 1.2
-        y: -0.5
-        z: 1.325
+        x: 0.9
+        y: 0.0
+        z: 1.13816
       orientation:
         x: 0.0
         y: 0.7071068
@@ -46,11 +66,55 @@ targets:
         w: 0.7071068
     place_pose:
       position:
-        x: 1.2
-        y: -0.5
-        z: 1.1382
+        x: 0.9
+        y: 0.0
+        z: 0.93816
       orientation:
         x: 0.0
         y: 0.7071068
         z: 0.0
         w: 0.7071068
+
+# ── GP25 pair, workpiece at (1.2, -0.5) ──────────────────────────────────────────
+#targets:
+#  - target_id: "child_link"
+#    approach_pose:
+#      position:
+#        x: 1.2
+#        y: 0.3
+#        z: 0.55
+#      orientation:
+#        x: 0.0
+#        y: 0.7071068
+#        z: 0.0
+#        w: 0.7071068
+#    pick_pose:
+#      position:
+#        x: 1.2
+#        y: 0.3
+#        z: 0.3282
+#      orientation:
+#        x: 0.0
+#        y: 0.7071068
+#        z: 0.0
+#        w: 0.7071068
+#    retract_pose:
+#      position:
+#        x: 1.2
+#        y: -0.5
+#        z: 1.325
+#      orientation:
+#        x: 0.0
+#        y: 0.7071068
+#        z: 0.0
+#        w: 0.7071068
+#    place_pose:
+#      position:
+#        x: 1.2
+#        y: -0.5
+#        z: 1.1382
+#      orientation:
+#        x: 0.0
+#        y: 0.7071068
+#        z: 0.0
+#        w: 0.7071068

@@ -10,8 +10,10 @@
   -->
   <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp25_arm_prefix.xacro"/>
   <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/ar2010_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/hc10dt_arm_prefix.xacro"/>
+  <xacro:include filename="$(find hold_and_weld_description)/urdf/robots/gp8l_arm_prefix.xacro"/>
 
-  <xacro:property name="robot_catalog" value="${['gp25', 'ar2010']}"/>
+  <xacro:property name="robot_catalog" value="${['gp25', 'ar2010', 'hc10dt', 'gp8l']}"/>
 
   <xacro:macro name="robot_arm_macro"
                params="model parent prefix x:=0 y:=0 z:=0 yaw:=0
@@ -31,6 +33,20 @@
     </xacro:if>
     <xacro:if value="${model == 'ar2010'}">
       <xacro:ar2010_arm_macro parent="${parent}" prefix="${prefix}" x="${x}" y="${y}" z="${z}" yaw="${yaw}"
+        initial_pos_j1="${initial_pos_j1}" initial_pos_j2="${initial_pos_j2}"
+        initial_pos_j3="${initial_pos_j3}" initial_pos_j4="${initial_pos_j4}"
+        initial_pos_j5="${initial_pos_j5}" initial_pos_j6="${initial_pos_j6}"
+        controller_config_file="${controller_config_file}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'hc10dt'}">
+      <xacro:hc10dt_arm_macro parent="${parent}" prefix="${prefix}" x="${x}" y="${y}" z="${z}" yaw="${yaw}"
+        initial_pos_j1="${initial_pos_j1}" initial_pos_j2="${initial_pos_j2}"
+        initial_pos_j3="${initial_pos_j3}" initial_pos_j4="${initial_pos_j4}"
+        initial_pos_j5="${initial_pos_j5}" initial_pos_j6="${initial_pos_j6}"
+        controller_config_file="${controller_config_file}"/>
+    </xacro:if>
+    <xacro:if value="${model == 'gp8l'}">
+      <xacro:gp8l_arm_macro parent="${parent}" prefix="${prefix}" x="${x}" y="${y}" z="${z}" yaw="${yaw}"
         initial_pos_j1="${initial_pos_j1}" initial_pos_j2="${initial_pos_j2}"
         initial_pos_j3="${initial_pos_j3}" initial_pos_j4="${initial_pos_j4}"
         initial_pos_j5="${initial_pos_j5}" initial_pos_j6="${initial_pos_j6}"
