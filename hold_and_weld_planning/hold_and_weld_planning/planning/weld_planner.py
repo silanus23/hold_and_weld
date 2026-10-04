@@ -28,9 +28,6 @@ from ..utils.params import ParamsBase
 
 logger = logging.getLogger(__name__)
 
-# Below this length a vector has no direction worth building a frame from.
-DEGENERATE_LENGTH = 1e-10
-
 
 @dataclass
 class WeldPlannerParams(ParamsBase):
@@ -91,27 +88,22 @@ class WeldPlanner:
         self.waypoint_spacing_m = cfg.waypoint_spacing
 
         logger.debug(
-            f'WeldPlanner initialized: work_angle={cfg.work_angle_deg}°, '
-            f'travel_angle={cfg.travel_angle_deg}°, '
+            f'WeldPlanner initialized: work_angle={cfg.work_angle_deg}deg, '
+            f'travel_angle={cfg.travel_angle_deg}deg, '
             f'gap={cfg.gap * 1000:.2f}mm, '
             f'waypoint_spacing={cfg.waypoint_spacing * 1000:.2f}mm'
         )
 
     def generate_seam(self, seam: Seam) -> None:
-        """Generate dense waypoint path for seam. Modifies seam object in place.
+        """Fill `seam.poses` with dense waypoints and set `seam.is_generated`.
 
-        All geometry types (line/arc/ptp) generate dense waypoints with
-        configurable spacing to ensure proper torch orientation throughout,
-        even where surface normals vary along nominally straight seams.
+        Every segment type is sampled at `waypoint_spacing`, lines included, since the surface
+        normals can vary along a nominally straight seam.
 
         Raises:
             ValueError: If no point has a usable normal, or every point coincides so there is no
                 tangent
             RuntimeError: If the seam has no SeamConfig, i.e. no extractor built it
-
-        Side Effects:
-            - Sets seam.poses to list of pose dictionaries
-            - Sets seam.is_generated to True
         """
         if seam.config is None:
             raise RuntimeError(
@@ -155,7 +147,7 @@ class WeldPlanner:
         """
         normals = np.asarray(normals, dtype=float)
         usable = np.isfinite(normals).all(axis=1) & (
-            np.linalg.norm(np.nan_to_num(normals), axis=1) > DEGENERATE_LENGTH)
+            np.linalg.norm(np.nan_to_num(normals), axis=1) > 1e-10)
         if usable.all():
             return normals
         if not usable.any():
@@ -220,19 +212,15 @@ class WeldPlanner:
             main_direction = toward_wall
             lean_direction = -main_normal
             gap_offset_direction = main_normal
-            gap_magnitude = self.gap_m
         else:
             main_direction = -main_normal
             lean_direction = toward_wall
             gap_offset_direction = -toward_wall + main_normal
-            gap_magnitude = self.gap_m
 
-        # Normalize gap offset direction to ensure correct offset distance
         gap_offset_direction_norm = np.linalg.norm(gap_offset_direction)
-        if gap_offset_direction_norm > DEGENERATE_LENGTH:
+        if gap_offset_direction_norm > 1e-10:
             gap_offset_direction = (gap_offset_direction / gap_offset_direction_norm)
         else:
-            # Fallback: use main_normal if direction is degenerate
             logger.debug(f'Degenerate gap offset direction at index {index}, using main_normal')
             gap_offset_direction = (main_normal / np.linalg.norm(main_normal))
 
@@ -248,7 +236,7 @@ class WeldPlanner:
             normal_work, binormal_work, tangent_work
         )
 
-        gap_offset = gap_magnitude * gap_offset_direction
+        gap_offset = self.gap_m * gap_offset_direction
         position = points[index] + gap_offset
 
         pose = self._build_pose_data(
@@ -268,7 +256,7 @@ class WeldPlanner:
         """
         here = points[index]
         distance = np.linalg.norm(points - here, axis=1)
-        apart = distance > DEGENERATE_LENGTH
+        apart = distance > 1e-10
 
         ahead = np.nonzero(apart[index + 1:])[0]
         behind = np.nonzero(apart[:index])[0]
@@ -277,7 +265,7 @@ class WeldPlanner:
 
         tangent = forward - backward
         norm = np.linalg.norm(tangent)
-        if norm < DEGENERATE_LENGTH:
+        if norm < 1e-10:
             raise ValueError(
                 f'Cannot compute tangent at index {index}: every seam point coincides with it')
 
@@ -286,37 +274,26 @@ class WeldPlanner:
     def _compute_toward_wall_vector(
         self, tangent: NDArray, main_normal: NDArray, secondary_normal: NDArray
     ) -> NDArray:
-        """Compute the unit vector in the base plane, across the seam, pointing into the wall."""
-        perpendicular = np.cross(main_normal, tangent)
-        norm = np.linalg.norm(perpendicular)
+        """Compute the unit vector in the base plane, across the seam, pointing into the wall.
 
-        if norm < DEGENERATE_LENGTH:
-            logger.debug('Tangent nearly parallel to main_normal, using fallback axes')
-            perpendicular = np.cross(np.array([0, 0, 1]), tangent)
+        The world Z and X axes stand in for main_normal only where the tangent runs along it;
+        a unit tangent cannot be parallel to both.
+
+        Raises:
+            ValueError: If the tangent is zero.
+        """
+        for axis in (main_normal, np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])):
+            perpendicular = np.cross(axis, tangent)
             norm = np.linalg.norm(perpendicular)
-            if norm < DEGENERATE_LENGTH:
-                perpendicular = np.cross(np.array([1, 0, 0]), tangent)
-                norm = np.linalg.norm(perpendicular)
-                if norm < DEGENERATE_LENGTH:
-                    # Unreachable for a unit tangent, which cannot be parallel to both axes above.
-                    logger.warning(
-                        'Degenerate tangent in _compute_toward_wall_vector,'
-                        ' using [0, 1, 0] cross tangent'
-                    )
-                    fallback = np.cross(np.array([0.0, 1.0, 0.0]), tangent)
-                    fallback_norm = np.linalg.norm(fallback)
-                    perpendicular = (
-                        fallback / fallback_norm
-                        if fallback_norm > DEGENERATE_LENGTH
-                        else np.array([0.0, 1.0, 0.0])
-                    )
+            if norm > 1e-10:
+                break
+        else:
+            raise ValueError('Cannot compute toward-wall vector: tangent is zero')
 
-        perpendicular = perpendicular / np.linalg.norm(perpendicular)
-
+        perpendicular = perpendicular / norm
         if np.dot(perpendicular, secondary_normal) > 0:
             return -perpendicular
-        else:
-            return perpendicular
+        return perpendicular
 
     def _build_base_frame(
         self,
@@ -327,7 +304,7 @@ class WeldPlanner:
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
         binormal_norm = np.linalg.norm(binormal)
-        if binormal_norm < DEGENERATE_LENGTH:
+        if binormal_norm < 1e-10:
             raise ValueError(
                 'Cannot build base frame: normal and tangent are parallel '
                 '(toward_wall vector is collinear with seam direction)'
@@ -353,11 +330,7 @@ class WeldPlanner:
             sign = 1.0
         work_rot = Rotation.from_rotvec(sign * self.work_angle_rad * tangent)
 
-        normal_rotated = work_rot.apply(normal)
-        binormal_rotated = work_rot.apply(binormal)
-        tangent_rotated = tangent
-
-        return normal_rotated, binormal_rotated, tangent_rotated
+        return work_rot.apply(normal), work_rot.apply(binormal), tangent
 
     def _apply_travel_angle(
         self,

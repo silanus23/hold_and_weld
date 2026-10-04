@@ -119,7 +119,7 @@ class OCCTGenerator:
                 '<collision> elements, not <visual>'
             )
 
-        logger.info(f'Successfully created shapes for {processed_links}/{total_links} link(s)')
+        logger.info(f'Created shapes for {processed_links}/{total_links} link(s)')
         return self._fuse(link_shapes, 'links')
 
     @staticmethod
@@ -151,11 +151,8 @@ class OCCTGenerator:
     def create_link_shape(self, link: Any) -> TopoDS_Shape:
         """Create OCCT shape for all collision elements in a link.
 
-        Args:
-            link: URDF link object
-
         Returns:
-            TopoDS_Shape representing union of all collision geometries
+            The union of the link's collision geometries, placed in the world.
 
         Raises:
             ValueError: If geometry type is unsupported or has invalid dimensions

@@ -105,7 +105,7 @@ class ShellGenerator:
                 '<collision> elements, not <visual>'
             )
 
-        logger.info(f'Successfully created shells for {processed_count} link(s)')
+        logger.info(f'Created shells for {processed_count} link(s)')
         return self.total_manifold
 
     def create_link_shell(self, link: Any) -> manifold3d.Manifold:

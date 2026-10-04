@@ -21,9 +21,11 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from OCC.Core.TopoDS import TopoDS_Shape
 import trimesh
 
 from .weld_planner import WeldPlanner, WeldPlannerParams
+from ..core.seam import Seam
 from ..mesh.mesh_loader import MeshLoader
 from ..mesh.params import MeshLoadParams, PathCreatorParams, SeamExtractorMeshParams
 from ..mesh.seam_extractor_mesh import SeamExtractorMesh
@@ -132,8 +134,8 @@ class JobPlanner:
                 )
 
         logger.info(f'JobPlanner initialized in {self.mode.upper()} mode')
-        logger.info(f'Parameters: work_angle={self.parameters["work_angle_deg"]}°, '
-                    f'travel_angle={self.parameters["travel_angle_deg"]}°, '
+        logger.info(f'Parameters: work_angle={self.parameters["work_angle_deg"]}deg, '
+                    f'travel_angle={self.parameters["travel_angle_deg"]}deg, '
                     f'gap={self.parameters["gap"]*1000:.2f}mm, '
                     f'tolerance={self.parameters["epsilon"]*1000:.3f}mm')
 
@@ -182,11 +184,11 @@ class JobPlanner:
                     f'family, or set the mode explicitly.'
                 )
 
-    def plan_job(self) -> list:
+    def plan_job(self) -> list[Seam]:
         """Execute complete planning pipeline.
 
         Returns:
-            List of Seam objects with generated poses
+            The seams, each with its poses filled in. Empty when no seam is found.
 
         Raises:
             RuntimeError: If a pipeline stage fails, including any single seam
@@ -199,7 +201,7 @@ class JobPlanner:
         else:
             return self._plan_job_mesh()
 
-    def _plan_job_mesh(self) -> list:
+    def _plan_job_mesh(self) -> list[Seam]:
         """Execute mesh-based planning pipeline using manifold3d and trimesh."""
         logger.info('Generating mesh shells (manifold3d)...')
         mesh_main, mesh_secondary = self._generate_shells()
@@ -222,7 +224,7 @@ class JobPlanner:
         logger.info(f'Detected {len(seams)} seam(s)')
         return self._generate_poses(seams)
 
-    def _plan_job_occt(self) -> list:
+    def _plan_job_occt(self) -> list[Seam]:
         """Execute OCCT-based planning pipeline using pythonocc-core."""
         logger.info('Generating OCCT shapes (pythonocc-core)...')
         shape_main, shape_secondary = self._generate_occt_shapes()
@@ -238,7 +240,7 @@ class JobPlanner:
         logger.info(f'Detected {len(seams)} seam(s)')
         return self._generate_poses(seams)
 
-    def _generate_poses(self, seams: list) -> list:
+    def _generate_poses(self, seams: list[Seam]) -> list[Seam]:
         """Run WeldPlanner over every extracted seam.
 
         Raises:
@@ -263,10 +265,10 @@ class JobPlanner:
                 + '; '.join(failures)
             )
 
-        logger.info(f'Successfully planned {len(seams)} seam(s)')
+        logger.info(f'Planned {len(seams)} seam(s)')
         return seams
 
-    def _generate_shells(self) -> tuple:
+    def _generate_shells(self) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
         """Generate watertight trimesh shells for both parts."""
         mesh_main = self._load_input_mesh(self.main_path, self.main_world_transform)
         mesh_secondary = self._load_input_mesh(
@@ -281,7 +283,7 @@ class JobPlanner:
 
         return mesh_main, mesh_secondary
 
-    def _generate_occt_shapes(self) -> tuple:
+    def _generate_occt_shapes(self) -> tuple[TopoDS_Shape, TopoDS_Shape]:
         """Generate OCCT TopoDS_Shape objects for both parts."""
         shape_main = self._load_input_occt(self.main_path, self.main_world_transform)
         shape_secondary = self._load_input_occt(
@@ -313,7 +315,7 @@ class JobPlanner:
             vertices=mesh_data.vert_properties, faces=mesh_data.tri_verts
         )
 
-    def _load_input_occt(self, path: str, world_transform: NDArray):
+    def _load_input_occt(self, path: str, world_transform: NDArray) -> TopoDS_Shape:
         """Load URDF, STEP, or IGES as OCCT shape and apply world transform."""
         path_suffix = Path(path).suffix.lower()
 

@@ -69,7 +69,6 @@ class OCCTLoader:
             raise ValueError(f'Failed to load CAD file: {e}') from e
 
         self.shape = self._apply_transform(shape, world_transform)
-        logger.info('CAD file loaded and transformed successfully')
 
     def _load_cad_file(self, file_path: Path) -> TopoDS_Shape:
         """Load CAD file based on extension (.step/.stp or .iges/.igs)."""
@@ -101,7 +100,7 @@ class OCCTLoader:
         if shape.IsNull():
             raise ValueError(f'STEP file contains no valid shapes: {file_path}')
 
-        logger.debug(f'STEP file loaded successfully: {file_path.name}')
+        logger.debug(f'STEP file loaded: {file_path.name}')
         return shape
 
     def _load_iges(self, file_path: Path) -> TopoDS_Shape:
@@ -125,7 +124,7 @@ class OCCTLoader:
         if shape.IsNull():
             raise ValueError(f'IGES file contains no valid shapes: {file_path}')
 
-        logger.debug(f'IGES file loaded successfully: {file_path.name} (unit {unit_mm} mm)')
+        logger.debug(f'IGES file loaded: {file_path.name} (unit {unit_mm} mm)')
         return self._scale(shape, unit_mm / MM_PER_M)
 
     @staticmethod

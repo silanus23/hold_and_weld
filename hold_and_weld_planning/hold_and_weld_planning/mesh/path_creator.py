@@ -327,8 +327,8 @@ class PathCreator:
         y = centered @ e2
         h = centered @ e3
 
-        # Kasa: (x-a)² + (y-b)² = r² rearranges to the linear x² + y² = 2a·x + 2b·y + c, with
-        # c = r² - a² - b², so a least-squares solve gives 2a, 2b, c directly.
+        # Kasa fit, linear in (2a, 2b, c):
+        #   (x - a)^2 + (y - b)^2 = r^2  <=>  x^2 + y^2 = 2a*x + 2b*y + c,  c = r^2 - a^2 - b^2
         A = np.column_stack([x, y, np.ones(len(points))])
         params, _, _, _ = np.linalg.lstsq(A, x ** 2 + y ** 2, rcond=None)
 

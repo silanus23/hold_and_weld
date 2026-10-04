@@ -118,7 +118,6 @@ class SeamExtractorOCCT:
         self.tolerance = cfg.epsilon
         self.coincidence_samples = cfg.coincidence_samples
 
-        # Centroids for geometry-based main/secondary determination
         self.centroid_1 = self._compute_shape_centroid(shape_1)
         self.centroid_2 = self._compute_shape_centroid(shape_2)
 
@@ -140,15 +139,8 @@ class SeamExtractorOCCT:
     def extract_seams(self) -> list[Seam]:
         """Extract all weld seams from the two shapes.
 
-        Pipeline:
-        1. Find all face pairs within tolerance
-        2. Extract intersection edges using Common
-        3. Classify each edge and extract normals
-        4. Detect geometry and wrap in Seam objects
-
         Returns:
-            List of Seam objects with geometry and metadata.
-            Empty list if no seams found.
+            List of Seam objects. Empty when no face pair is within tolerance.
 
         Raises:
             RuntimeError: If any face pair or intersection edge cannot be processed. Every edge
@@ -191,7 +183,7 @@ class SeamExtractorOCCT:
                 + '; '.join(failures)
             )
 
-        logger.info(f'Successfully extracted {len(seams)} seam(s)')
+        logger.info(f'Extracted {len(seams)} seam(s)')
         return seams
 
     def _process_single_edge(self, edge_data: dict) -> list[Seam]:
@@ -746,7 +738,6 @@ class SeamExtractorOCCT:
         avg_normal_A = avg_normal_A / norm_A
         avg_normal_B = avg_normal_B / norm_B
 
-        # Vector from each part centroid to the seam centroid
         seam_centroid = np.mean(seam_points, axis=0)
         vec_A = seam_centroid - self.centroid_1
         vec_B = seam_centroid - self.centroid_2
@@ -761,8 +752,8 @@ class SeamExtractorOCCT:
         vec_A = vec_A / norm_vA
         vec_B = vec_B / norm_vB
 
-        # The part whose average normal aligns MORE with its centroid-to-seam vector has the seam
-        # on its outward face -> that is the base plate (main)
+        # The part whose average normal aligns more with its centroid-to-seam vector has the seam
+        # on its outward face, so it is the base plate.
         dot_A = np.dot(avg_normal_A, vec_A)
         dot_B = np.dot(avg_normal_B, vec_B)
 
@@ -770,8 +761,7 @@ class SeamExtractorOCCT:
 
         if dot_A >= dot_B:
             return normals_A, normals_B
-        else:
-            return normals_B, normals_A
+        return normals_B, normals_A
 
     def _evaluate_normal_at_point(self, point: NDArray, face: TopoDS_Shape) -> NDArray:
         """Evaluate unit surface normal at point using UV projection (fast path for planes)."""
@@ -786,7 +776,6 @@ class SeamExtractorOCCT:
             if not position.Direct():
                 normal_dir.Reverse()
 
-            # Respect face orientation (REVERSED means normal points inward)
             if face.Orientation() == TopAbs_REVERSED:
                 normal_dir.Reverse()
 

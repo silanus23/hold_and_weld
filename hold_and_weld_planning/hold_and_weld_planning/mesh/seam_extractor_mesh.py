@@ -230,13 +230,22 @@ class SeamExtractorMesh:
         epsilon: float,
         reference: list[tuple[int, int]],
     ) -> None:
-        """Report how far the contact boundary moves when epsilon is nudged.
+        """Log whether `epsilon` sits in a stable band; diagnostic only, nothing is changed.
 
-        Measured rather than modelled: the boundary is recomputed at neighbouring epsilon values
-        and its size compared per direction, since too small reads the parts as apart and too large
-        climbs the wall. Compared as a relative change, not vertex-set equality, which a single
-        moved vertex would trip on every valid run. `reference` is the boundary at `epsilon`,
-        already computed by the caller.
+        On a real joint the face distances to the other mesh split in two: faces pressed against
+        it read about the fit-up gap, the wall faces rising out of the joint read much more. Any
+        epsilon in the gap between those two groups (the band) marks the same faces, so the
+        contact boundary barely moves when epsilon is nudged. Outside the band it moves:
+
+        - too small: shrinking it loses pressed faces, the parts start reading as apart;
+        - too large: growing it marks wall faces, the boundary climbs the wall.
+
+        So the boundary is recomputed at each `eps_stability_factors` multiple and its vertex
+        count compared with `reference` (the boundary at `epsilon`, already computed by the
+        caller). A relative count change is used rather than vertex-set equality, which a single
+        moved vertex would trip on every valid run. Movement past `eps_stability_tolerance`
+        in one direction only means epsilon is near that end of its band (DEBUG); movement both
+        ways means no band exists (WARNING).
         """
         base = {v for edge in reference for v in edge}
         if not base:
