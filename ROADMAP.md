@@ -36,6 +36,29 @@ requirements as the system matures.
 
 ---
 
+## AI-Based Improvements
+
+- **LLM-composed behavior trees** — an LLM writes or edits the behavior tree from an
+  operator request (e.g. "weld everything except the underside seam"), and the tree is
+  validated before anything moves. The tree nodes are the LLM's vocabulary, so this
+  needs parameterized action goals (seam IDs, grasp index), query services listing
+  seams and grasps, explicit output IDs instead of the newest file in a folder, and
+  reason codes in results.
+- **Primary model decision nodes** — a primary model picks among the candidates the
+  pipeline already ranks: the gripper sampler's grasps and the ConfigurationFinder's
+  approach configurations. It is an optional backend behind a common interface; the ranked
+  first candidate stays the default, and every choice still passes the deterministic
+  checks before it reaches the robot.
+- **Grasp dataset generation** — an output pipeline that takes the validated grasps of
+  any sampler backend, CAD or external, and produces labeled grasp datasets. The
+  practical motivation is that weld areas, screw holes, and similar features tend to
+  repeat across workpieces in the same workplace. A generated dataset allows downstream
+  models to learn avoidance of these regions without rerunning the full sampling
+  pipeline on every new workpiece. This would also enable gripping strategies informed
+  by spatial proximity to weld seams.
+
+---
+
 ## Physical Simulation
 
 Grasps are currently validated geometrically: contact, clearance and collision. Whether a
@@ -48,8 +71,11 @@ answer questions such as:
 - Does the part slip or rotate in the jaws, and by how much, under these loads?
 
 Results would feed back into grasp scoring, so grasps that cannot physically hold are
-rejected before execution. OmniSim is the planned simulator for this stage. Thanks to the
-OmniSim team for reaching out.
+rejected before execution. The planned simulator is OmniSim, using its MuJoCo physics
+backend (through Newton). OmniSim provides STEP import, deterministic headless runs and
+scene snapshots for checking each grasp candidate. The check needs per-surface friction
+(gripper pad against part) and contact-force readback, which MuJoCo supports and OmniSim
+does not yet expose. Thanks to the OmniSim team for reaching out.
 
 ---
 
@@ -110,16 +136,6 @@ for industrial parts. The deferred design is two-phase: graph-based structural a
 of the mesh (spanning-tree coverage, CGAL) to find graspable regions, then guided
 breadth-first contact-pair sampling outward from promising regions, feeding the existing
 contact pair interface.
-
-### Dataset Generation
-
-An output pipeline that takes the validated grasps of any sampler backend, CAD or
-external, and produces labeled grasp datasets. The
-practical motivation is that weld areas, screw holes, and similar features tend to repeat
-across workpieces in the same workplace. A generated dataset allows downstream models to
-learn avoidance of these regions without rerunning the full sampling pipeline on every
-new workpiece. This would also enable gripping strategies informed by spatial proximity
-to weld seams.
 
 ### Code Quality
 
