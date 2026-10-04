@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 import trimesh
 
 from .weld_planner import WeldPlanner, WeldPlannerParams
@@ -49,6 +50,14 @@ KNOWN_PARAMETERS = frozenset(
     for spec in fields(params)
 )
 
+# Keys that once took millimetres. Their values would now be read as metres, 1000x too large, so
+# an old config is refused by name rather than warned about as merely unknown.
+RENAMED_PARAMETERS = {
+    'gap_mm': 'gap',
+    'waypoint_spacing_mm': 'waypoint_spacing',
+    'path_tolerance_mm': 'path_tolerance',
+}
+
 
 class JobPlanner:
     """Orchestrate complete weld job planning from URDF/CAD to trajectories.
@@ -66,28 +75,19 @@ class JobPlanner:
         parameters: dict[str, Any] | None = None,
         mode: str = 'auto',
     ) -> None:
-        """Initialize job planner.
-
-        Args:
-            main_path: Path to main part (URDF/STL/STEP, supports package://)
-            secondary_path: Path to secondary part
-            main_world_pose: Dict with 'xyz' and 'rpy' for main part
-            secondary_world_pose: Dict with 'xyz' and 'rpy' for secondary
-            parameters: Dict with work_angle_deg, travel_angle_deg, gap_mm,
-                       epsilon (optional), num_smooth_points (optional),
-                       refine_iterations (optional)
-            mode: 'auto', 'mesh', or 'occt'
-
-        Raises:
-            ValueError: If the mode or a world pose is invalid, or a parameter
-                the resolved pipeline reads is missing or out of range
-        """
+        """Initialize job planner."""
         self.main_path = main_path
         self.secondary_path = secondary_path
         self.main_world_transform = self._pose_to_matrix(main_world_pose)
         self.secondary_world_transform = self._pose_to_matrix(secondary_world_pose)
 
         self.parameters = dict(parameters or {})
+
+        renamed = sorted(set(self.parameters) & set(RENAMED_PARAMETERS))
+        if renamed:
+            raise ValueError(
+                'Parameter(s) renamed and now in metres: '
+                + ', '.join(f'{old} -> {RENAMED_PARAMETERS[old]}' for old in renamed))
 
         unknown = sorted(set(self.parameters) - KNOWN_PARAMETERS)
         if unknown:
@@ -134,7 +134,7 @@ class JobPlanner:
         logger.info(f'JobPlanner initialized in {self.mode.upper()} mode')
         logger.info(f'Parameters: work_angle={self.parameters["work_angle_deg"]}°, '
                     f'travel_angle={self.parameters["travel_angle_deg"]}°, '
-                    f'gap={self.parameters["gap_mm"]}mm, '
+                    f'gap={self.parameters["gap"]*1000:.2f}mm, '
                     f'tolerance={self.parameters["epsilon"]*1000:.3f}mm')
 
     def _detect_mode(self, main_path: str, secondary_path: str) -> str:
@@ -289,7 +289,7 @@ class JobPlanner:
         )
         return shape_main, shape_secondary
 
-    def _load_input_mesh(self, path: str, world_transform: np.ndarray) -> trimesh.Trimesh:
+    def _load_input_mesh(self, path: str, world_transform: NDArray) -> trimesh.Trimesh:
         """Load URDF or STL as trimesh and apply world transform."""
         refine_iterations = self.refine_iterations
 
@@ -313,7 +313,7 @@ class JobPlanner:
             vertices=mesh_data.vert_properties, faces=mesh_data.tri_verts
         )
 
-    def _load_input_occt(self, path: str, world_transform: np.ndarray):
+    def _load_input_occt(self, path: str, world_transform: NDArray):
         """Load URDF, STEP, or IGES as OCCT shape and apply world transform."""
         path_suffix = Path(path).suffix.lower()
 
@@ -329,7 +329,7 @@ class JobPlanner:
             return occt_gen.create_shape_for_all_links()
 
     @staticmethod
-    def _pose_to_matrix(pose: dict[str, list] | None) -> np.ndarray:
+    def _pose_to_matrix(pose: dict[str, list] | None) -> NDArray:
         """Convert an xyz/rpy dict to a 4x4 homogeneous transform; None is the identity.
 
         Raises:

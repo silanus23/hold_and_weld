@@ -162,13 +162,12 @@ class SeamExtractorMeshParams(ParamsBase):
 class PathCreatorParams(ParamsBase):
     """Tuning for PathCreator; every field is optional.
 
-    Fields are the config keys as written in YAML, in the units they are
-    written in. The derived quantities the cascade actually compares against -
-    metres, radians, the arc tolerance - are the properties below, so a key
-    and its unit never drift apart.
+    Fields are the config keys as written in YAML; lengths are in metres. The
+    derived quantities the cascade compares against - radians, the arc
+    tolerance - are the properties below.
     """
 
-    path_tolerance_mm: float = 1.0
+    path_tolerance: float = 0.001
     arc_strictness: float = 0.5
     min_arc_angle_deg: float = 15.0
     arc_gain: float = 1.5
@@ -178,17 +177,12 @@ class PathCreatorParams(ParamsBase):
     max_arc_length: float = 0.5
     max_ptp_length: float = 0.1
 
-    waypoint_spacing_mm: float = 10.0
-
-    @property
-    def tolerance(self) -> float:
-        """`path_tolerance_mm` in metres."""
-        return self.path_tolerance_mm * 1e-3
+    waypoint_spacing: float = 0.01
 
     @property
     def arc_tolerance(self) -> float:
         """Return the stricter tolerance an arc fit must hold, in metres."""
-        return self.arc_strictness * self.tolerance
+        return self.arc_strictness * self.path_tolerance
 
     @property
     def min_arc_angle(self) -> float:
@@ -198,7 +192,7 @@ class PathCreatorParams(ParamsBase):
     @property
     def min_contact_run(self) -> float:
         """Return the shortest contact run kept, in metres."""
-        return self.waypoint_spacing_mm * 1e-3
+        return self.waypoint_spacing
 
     def __post_init__(self) -> None:
         """Reject config that silently collapses the cascade or divides by zero.
@@ -206,12 +200,11 @@ class PathCreatorParams(ParamsBase):
         Raises:
             ValueError: If a parameter is out of range.
         """
-        for key in ('path_tolerance_mm', 'max_line_length', 'max_arc_length',
-                    'max_ptp_length', 'arc_gain', 'waypoint_spacing_mm'):
+        for key in ('path_tolerance', 'max_line_length', 'max_arc_length',
+                    'max_ptp_length', 'arc_gain', 'waypoint_spacing'):
             if not getattr(self, key) > 0.0:
                 raise ValueError(f'{key} must be > 0, got {getattr(self, key)}')
 
-        # Zero is a legitimate way to disable each of these, negative is not.
         for key in ('arc_strictness', 'min_arc_angle_deg'):
             if not getattr(self, key) >= 0.0:
                 raise ValueError(

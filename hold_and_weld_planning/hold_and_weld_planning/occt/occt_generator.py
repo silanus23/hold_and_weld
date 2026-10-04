@@ -55,17 +55,7 @@ class OCCTGenerator:
         robot_object: Any,
         world_transform: NDArray | None = None,
     ) -> None:
-        """Initialize OCCT generator.
-
-        Args:
-            robot_object: The self.robot object from URDFProcessor
-            world_transform: Global starting pose matrix (4x4). Defaults to
-                identity.
-
-        Raises:
-            ValueError: If world_transform is not a finite 4x4, or the URDF's joint
-                tree does not place every link.
-        """
+        """Initialize OCCT generator."""
         world_transform = as_world_transform(world_transform)
 
         self.robot = robot_object

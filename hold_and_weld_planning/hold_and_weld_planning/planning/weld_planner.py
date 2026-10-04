@@ -22,6 +22,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
+from ..core.seam import Seam
 from ..mesh.params import PathCreatorParams
 from ..utils.params import ParamsBase
 
@@ -37,11 +38,11 @@ class WeldPlannerParams(ParamsBase):
 
     work_angle_deg: float
     travel_angle_deg: float
-    gap_mm: float
+    gap: float
     # PathCreator reads the same key, so the two cannot be allowed different defaults.
-    waypoint_spacing_mm: float = PathCreatorParams.waypoint_spacing_mm
+    waypoint_spacing: float = PathCreatorParams.waypoint_spacing
 
-    REQUIRED = ('work_angle_deg', 'travel_angle_deg', 'gap_mm')
+    REQUIRED = ('work_angle_deg', 'travel_angle_deg', 'gap')
 
     @classmethod
     def from_dict(cls, params: dict[str, Any] | None):
@@ -67,7 +68,7 @@ class WeldPlannerParams(ParamsBase):
         Raises:
             ValueError: If a parameter is out of range.
         """
-        for key in ('gap_mm', 'waypoint_spacing_mm'):
+        for key in ('gap', 'waypoint_spacing'):
             if not getattr(self, key) > 0.0:
                 raise ValueError(f'{key} must be > 0, got {getattr(self, key)}')
 
@@ -82,70 +83,48 @@ class WeldPlanner:
     """Generate weld torch poses along seam paths using dual surface normals."""
 
     def __init__(self, parameters: dict[str, Any]) -> None:
-        """Initialize planner with weld parameters.
-
-        Args:
-            parameters: Dictionary with keys:
-                - work_angle_deg: Work angle in degrees (torch tilt perpendicular to travel)
-                - travel_angle_deg: Travel angle in degrees (torch tilt along travel)
-                - gap_mm: Gap distance from seam in millimeters
-                - waypoint_spacing_mm: Distance between waypoints (default 10mm)
-                Other keys are ignored, so the job's shared parameter dict can
-                be handed over whole.
-
-        Raises:
-            ValueError: If a required key is missing, a value is not a finite
-                number, gap_mm or waypoint_spacing_mm is non-positive, or an
-                angle is not strictly between -90 and 90 degrees.
-        """
+        """Initialize planner with weld parameters."""
         cfg = WeldPlannerParams.from_dict(parameters)
         self.work_angle_rad = np.radians(cfg.work_angle_deg)
         self.travel_angle_rad = np.radians(cfg.travel_angle_deg)
-        self.gap_m = cfg.gap_mm / 1000.0
-        self.waypoint_spacing_m = cfg.waypoint_spacing_mm / 1000.0
+        self.gap_m = cfg.gap
+        self.waypoint_spacing_m = cfg.waypoint_spacing
 
         logger.debug(
             f'WeldPlanner initialized: work_angle={cfg.work_angle_deg}°, '
             f'travel_angle={cfg.travel_angle_deg}°, '
-            f'gap={cfg.gap_mm}mm, '
-            f'waypoint_spacing={cfg.waypoint_spacing_mm}mm'
+            f'gap={cfg.gap * 1000:.2f}mm, '
+            f'waypoint_spacing={cfg.waypoint_spacing * 1000:.2f}mm'
         )
 
-    def generate_seam(self, seam: Any) -> None:
+    def generate_seam(self, seam: Seam) -> None:
         """Generate dense waypoint path for seam. Modifies seam object in place.
 
-        All geometry types (line/arc/polyline) generate dense waypoints with
+        All geometry types (line/arc/ptp) generate dense waypoints with
         configurable spacing to ensure proper torch orientation throughout,
         even where surface normals vary along nominally straight seams.
 
-        Args:
-            seam: Seam object with geometry data in config
-
         Raises:
-            ValueError: If arrays have invalid lengths, no point has a usable
-                normal, or every point coincides so there is no tangent
-            RuntimeError: If seam.config lacks a key the extractor must write
+            ValueError: If no point has a usable normal, or every point coincides so there is no
+                tangent
+            RuntimeError: If the seam has no SeamConfig, i.e. no extractor built it
 
         Side Effects:
             - Sets seam.poses to list of pose dictionaries
             - Sets seam.is_generated to True
         """
-        required = ('smoothed_points', 'normals_main', 'normals_secondary', 'is_edge_joint')
-        missing = [key for key in required if key not in seam.config]
-        if missing:
-            raise RuntimeError(f'Seam config is missing key(s): {missing}')
+        if seam.config is None:
+            raise RuntimeError(
+                'Seam has no SeamConfig: only an extractor-built seam can be planned')
 
-        points = seam.config['smoothed_points']
-        normals_main = seam.config['normals_main']
-        normals_secondary = seam.config['normals_secondary']
-        is_edge_joint = seam.config['is_edge_joint']
+        points = seam.config.smoothed_points
+        is_edge_joint = seam.config.is_edge_joint
 
         logger.debug(f'Generating poses for seam with {len(points)} points')
 
-        self._validate_arrays(points, normals_main, normals_secondary)
-        normals_main = self._fill_missing_normals(normals_main, 'normals_main')
-        normals_secondary = self._fill_missing_normals(normals_secondary, 'normals_secondary')
-
+        normals_main = self._fill_missing_normals(seam.config.normals_main, 'normals_main')
+        normals_secondary = self._fill_missing_normals(
+            seam.config.normals_secondary, 'normals_secondary')
         sampled_indices = self._sample_by_distance(points, self.waypoint_spacing_m)
         logger.debug(f'Sampled {len(sampled_indices)} waypoints from {len(points)} points')
 
@@ -162,25 +141,6 @@ class WeldPlanner:
             f'Generated {len(poses)} poses for {seam.segment_type} seam'
             f' ({seam.length()*1000:.1f}mm)'
         )
-
-    def _validate_arrays(
-        self, points: NDArray, normals_main: NDArray, normals_secondary: NDArray
-    ) -> None:
-        """Validate input arrays have consistent lengths and sufficient points."""
-        if len(points) < 2:
-            raise ValueError('Need at least 2 points to generate poses')
-
-        if len(normals_main) != len(points):
-            raise ValueError(
-                f'normals_main length {len(normals_main)} does not match '
-                f'points length {len(points)}'
-            )
-
-        if len(normals_secondary) != len(points):
-            raise ValueError(
-                f'normals_secondary length {len(normals_secondary)} does not match '
-                f'points length {len(points)}'
-            )
 
     @staticmethod
     def _fill_missing_normals(normals: NDArray, name: str) -> NDArray:
@@ -252,24 +212,24 @@ class WeldPlanner:
         main_normal = normals_main[index]
         secondary_normal = normals_secondary[index]
 
-        away_from_wall = self._compute_away_vector(
+        toward_wall = self._compute_toward_wall_vector(
             tangent, main_normal, secondary_normal
         )
 
         if is_edge_joint:
-            main_direction = away_from_wall
+            main_direction = toward_wall
             lean_direction = -main_normal
             gap_offset_direction = main_normal
             gap_magnitude = self.gap_m
         else:
             main_direction = -main_normal
-            lean_direction = away_from_wall
-            gap_offset_direction = -away_from_wall + main_normal
+            lean_direction = toward_wall
+            gap_offset_direction = -toward_wall + main_normal
             gap_magnitude = self.gap_m
 
         # Normalize gap offset direction to ensure correct offset distance
         gap_offset_direction_norm = np.linalg.norm(gap_offset_direction)
-        if gap_offset_direction_norm > 1e-10:
+        if gap_offset_direction_norm > DEGENERATE_LENGTH:
             gap_offset_direction = (gap_offset_direction / gap_offset_direction_norm)
         else:
             # Fallback: use main_normal if direction is degenerate
@@ -323,33 +283,31 @@ class WeldPlanner:
 
         return tangent / norm
 
-    def _compute_away_vector(
+    def _compute_toward_wall_vector(
         self, tangent: NDArray, main_normal: NDArray, secondary_normal: NDArray
     ) -> NDArray:
-        """Compute vector perpendicular to seam pointing away from secondary piece."""
+        """Compute the unit vector in the base plane, across the seam, pointing into the wall."""
         perpendicular = np.cross(main_normal, tangent)
         norm = np.linalg.norm(perpendicular)
 
-        if norm < 1e-10:
+        if norm < DEGENERATE_LENGTH:
             logger.debug('Tangent nearly parallel to main_normal, using fallback axes')
             perpendicular = np.cross(np.array([0, 0, 1]), tangent)
             norm = np.linalg.norm(perpendicular)
-            if norm < 1e-10:
+            if norm < DEGENERATE_LENGTH:
                 perpendicular = np.cross(np.array([1, 0, 0]), tangent)
                 norm = np.linalg.norm(perpendicular)
-                if norm < 1e-10:
-                    # All cross-product fallbacks failed — tangent is degenerate. Compute a
-                    # guaranteed-perpendicular vector via cross with [0,1,0], then cross that with
-                    # tangent to ensure perpendicularity.
+                if norm < DEGENERATE_LENGTH:
+                    # Unreachable for a unit tangent, which cannot be parallel to both axes above.
                     logger.warning(
-                        'Degenerate tangent in _compute_away_vector,'
+                        'Degenerate tangent in _compute_toward_wall_vector,'
                         ' using [0, 1, 0] cross tangent'
                     )
                     fallback = np.cross(np.array([0.0, 1.0, 0.0]), tangent)
                     fallback_norm = np.linalg.norm(fallback)
                     perpendicular = (
                         fallback / fallback_norm
-                        if fallback_norm > 1e-10
+                        if fallback_norm > DEGENERATE_LENGTH
                         else np.array([0.0, 1.0, 0.0])
                     )
 
@@ -369,10 +327,10 @@ class WeldPlanner:
         normal = main_direction / np.linalg.norm(main_direction)
         binormal = np.cross(normal, tangent)
         binormal_norm = np.linalg.norm(binormal)
-        if binormal_norm < 1e-10:
+        if binormal_norm < DEGENERATE_LENGTH:
             raise ValueError(
                 'Cannot build base frame: normal and tangent are parallel '
-                '(away_from_wall vector is collinear with seam direction)'
+                '(toward_wall vector is collinear with seam direction)'
             )
         binormal = binormal / binormal_norm
 
@@ -407,10 +365,7 @@ class WeldPlanner:
         binormal: NDArray,
         tangent: NDArray,
     ) -> tuple[NDArray, NDArray, NDArray]:
-        """Rotate torch around binormal axis by travel angle (pushes/pulls along weld direction).
-
-        Pushes/pulls the torch along the weld direction.
-        """
+        """Rotate torch around binormal axis by travel angle; positive tips it toward travel."""
         travel_rot = Rotation.from_rotvec(self.travel_angle_rad * binormal)
         tangent_final = travel_rot.apply(tangent)
         binormal_final = travel_rot.apply(binormal)

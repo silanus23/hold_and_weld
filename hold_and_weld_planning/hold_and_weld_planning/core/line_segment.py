@@ -53,7 +53,7 @@ class LineSegment:
             ValueError: If segment has zero length.
         """
         length = self.length()
-        if length < 1e-9:
+        if length < 1e-10:
             raise ValueError('Segment is degenerate (zero length)')
         return (self.end - self.start) / length
 

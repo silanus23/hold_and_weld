@@ -40,15 +40,7 @@ class URDFProcessor:
     """
 
     def __init__(self, urdf_path: str | Path) -> None:
-        """Initialize URDF processor with URDF or xacro file.
-
-        Args:
-            urdf_path: Path to URDF or xacro file (accepts package:// URIs).
-
-        Raises:
-            FileNotFoundError: If file doesn't exist.
-            ValueError: If URDF/xacro parsing fails.
-        """
+        """Initialize URDF processor with URDF or xacro file."""
         resolved_path = resolve_package_path(urdf_path)
         logger.info(f'Loading URDF from: {resolved_path}')
 

@@ -19,8 +19,9 @@ represented as a line or arc. Analogous to Pilz PTP motion mode —
 the robot moves through each point in sequence with no geometric
 interpolation between them.
 
-Used when sliding window classification finds a curve that fits neither
-a line nor an arc within acceptable error thresholds.
+Used when PathCreator's classification finds a curve that fits neither a
+line nor an arc within its tolerances, and when the OCCT extractor meets a
+curve OCCT cannot name as a line or circle.
 """
 
 import numpy as np
@@ -43,14 +44,7 @@ class PtPSegment:
         self,
         points: list[list[float]] | NDArray,
     ) -> None:
-        """Initialize PtP segment with ordered point array.
-
-        Args:
-            points: Ordered 3D points along curve. Must be (N, 3) with N >= 2.
-
-        Raises:
-            ValueError: If points array is invalid or has fewer than 2 points.
-        """
+        """Initialize PtP segment with ordered point array."""
         self.points = np.array(points, dtype=float)
 
         if self.points.ndim != 2 or self.points.shape[1] != 3:
@@ -118,7 +112,7 @@ class PtPSegment:
         return tangent / norm
 
     def midpoint(self) -> NDArray:
-        """Return point closest to arc-length midpoint of segment."""
+        """Return the arc-length midpoint, interpolated between the points either side."""
         target = self.length() / 2.0
         cumulative = 0.0
 

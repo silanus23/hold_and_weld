@@ -18,9 +18,9 @@
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `parameters.work_angle_deg` | double | — | Torch tilt angle perpendicular to travel direction [deg]. Required. Strictly between -90 and 90. |
-| `parameters.travel_angle_deg` | double | — | Torch tilt angle along travel direction [deg]. Required. Strictly between -90 and 90. |
-| `parameters.gap_mm` | double | — | Distance from seam to torch tip [mm]. Required. Must be > 0. |
-| `parameters.waypoint_spacing_mm` | double | 10.0 | Distance between generated waypoints along seam [mm] |
+| `parameters.travel_angle_deg` | double | — | Torch tilt angle along travel direction [deg]. Positive pushes (the torch points ahead along travel), negative drags. Required. Strictly between -90 and 90. |
+| `parameters.gap` | double | — | Distance from seam to torch tip [m]. Required. Must be > 0. |
+| `parameters.waypoint_spacing` | double | 0.01 | Distance between generated waypoints along seam [m] |
 | `parameters.num_smooth_points` | int | 100 | Points sampled along each seam curve. **OCCT mode only** - nothing under `mesh/` reads it, where seam density comes from the tessellation and `refine_iterations` instead. Must be >= 2. |
 
 ## Mesh
@@ -165,7 +165,7 @@ Parameters for the OCCT-based seam extractor. Only used when `mode` is `occt` or
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `parameters.epsilon` | double | 1e-3 | Distance tolerance for face-pair proximity [m]. Shared with mesh mode, see Contact boundary above. |
-| `parameters.coincidence_samples` | int | 5 | Points sampled along an intersection edge when checking whether another face pair already produced it. Must be >= 2. |
+| `parameters.coincidence_samples` | int | 5 | Points sampled along an intersection edge when checking whether another face pair already produced it, and along a curve that is neither a line nor a circle when matching it to a part's boundary edge. Raise it if long spline edges match edges they only touch. Must be >= 2. |
 
 STEP and IGES files are converted to metres on load, whatever unit they declare.
 
@@ -175,17 +175,17 @@ Classifies the ordered seam points into LINE, ARC and PTP segments. Every
 parameter below is read by `mesh/path_creator.py`; all are optional.
 
 The cascade, in order: a run is a LINE if the chord from its first point to its
-last holds `path_tolerance_mm` (the chord, not a best-fit line, because the
+last holds `path_tolerance` (the chord, not a best-fit line, because the
 welder runs one LIN along exactly that chord); an ARC if a circle holds the stricter
-`arc_strictness x path_tolerance_mm` AND subtends at least `min_arc_angle_deg`
+`arc_strictness x path_tolerance` AND subtends at least `min_arc_angle_deg`
 AND consumes `arc_gain` times the run a line would; otherwise PTP. The
 asymmetry is deliberate - a false PTP only densifies waypoints, a false arc
 leaves the seam.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `parameters.path_tolerance_mm` | double | 1.0 | Master fit tolerance: max deviation from a line's chord [mm] |
-| `parameters.arc_strictness` | double | 0.5 | Arc tolerance as a fraction of `path_tolerance_mm`. 0 disables arcs. |
+| `parameters.path_tolerance` | double | 0.001 | Master fit tolerance: max deviation from a line's chord [m] |
+| `parameters.arc_strictness` | double | 0.5 | Arc tolerance as a fraction of `path_tolerance`. 0 disables arcs. |
 | `parameters.min_arc_angle_deg` | double | 15.0 | Below this subtended angle a run is not worth calling an arc [deg] |
 | `parameters.arc_gain` | double | 1.5 | An arc must consume this multiple of the run a line would, or the line wins |
 | `parameters.min_fit_points` | int | 4 | Fewest points a segment may be fitted from. Must be >= 3. |
@@ -195,9 +195,11 @@ leaves the seam.
 
 Every key under `parameters:` is checked against the full set the pipeline
 reads, and any other key is logged as a WARNING naming it — a misspelled key
-would otherwise be ignored by every stage.
+would otherwise be ignored by every stage. The former millimetre keys
+`gap_mm`, `waypoint_spacing_mm` and `path_tolerance_mm` are refused with an
+error naming their replacement, since their values would now read 1000x too large.
 
-`waypoint_spacing_mm` (see Planner) is also read here: a run too short to carry
+`waypoint_spacing` (see Planner) is also read here: a run too short to carry
 two weld poses is not a segment, so the process spacing doubles as the minimum
 length of a joint-character run before it is absorbed into its neighbour.
 

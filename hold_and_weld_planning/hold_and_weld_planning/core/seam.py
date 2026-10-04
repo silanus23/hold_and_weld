@@ -19,11 +19,63 @@ PtPSegment for welding applications, managing both geometric data and
 generated trajectory poses.
 """
 
+from dataclasses import dataclass
 from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
 
 from .arc_segment import ArcSegment
 from .line_segment import LineSegment
 from .ptp_segment import PtPSegment
+
+
+@dataclass
+class SeamConfig:
+    """Per-point seam data an extractor hands to WeldPlanner.
+
+    Attributes:
+        smoothed_points: Ordered seam points (N, 3), N >= 2.
+        normals_main: Base surface normal per point (N, 3). A zero row means none was found;
+            WeldPlanner fills it from a neighbour.
+        normals_secondary: Wall normal per point (N, 3), zero rows as above.
+        on_edge_1: Whether the seam follows a real edge of part 1.
+        on_edge_2: Whether the seam follows a real edge of part 2.
+    """
+
+    smoothed_points: NDArray
+    normals_main: NDArray
+    normals_secondary: NDArray
+    on_edge_1: bool
+    on_edge_2: bool
+
+    def __post_init__(self) -> None:
+        """Coerce the arrays to float and check they describe the same N points.
+
+        Raises:
+            ValueError: If an array is not (N, 3), N < 2, or the three lengths differ.
+        """
+        for name in ('smoothed_points', 'normals_main', 'normals_secondary'):
+            array = np.asarray(getattr(self, name), dtype=float)
+            if array.ndim != 2 or array.shape[1] != 3:
+                raise ValueError(f'{name} must be (N, 3), got shape {array.shape}')
+            setattr(self, name, array)
+
+        count = len(self.smoothed_points)
+        if count < 2:
+            raise ValueError(f'A seam needs at least 2 points, got {count}')
+        for name in ('normals_main', 'normals_secondary'):
+            if len(getattr(self, name)) != count:
+                raise ValueError(
+                    f'{name} has {len(getattr(self, name))} rows for {count} points')
+
+        self.on_edge_1 = bool(self.on_edge_1)
+        self.on_edge_2 = bool(self.on_edge_2)
+
+    @property
+    def is_edge_joint(self) -> bool:
+        """Return True when both parts end on the seam (edge-to-edge)."""
+        return self.on_edge_1 and self.on_edge_2
 
 
 class Seam:
@@ -35,7 +87,7 @@ class Seam:
         segment: LineSegment, ArcSegment, or PtPSegment containing geometry
         poses: List of generated pose dictionaries, None if not generated yet
         is_generated: True if poses have been successfully generated
-        config: Dictionary with metadata (is_edge_joint, normals, etc)
+        config: Points and normals for planning; None on a hand-written seam
     """
 
     def __init__(
@@ -44,7 +96,7 @@ class Seam:
         line_segment: LineSegment | None = None,
         arc_segment: ArcSegment | None = None,
         ptp_segment: PtPSegment | None = None,
-        config: dict[str, Any] | None = None,
+        config: SeamConfig | None = None,
     ) -> None:
         """Initialize seam from a seam dict, LineSegment, ArcSegment, or PtPSegment."""
         sources_provided = sum(
@@ -78,7 +130,7 @@ class Seam:
 
         self.poses = None
         self.is_generated = False
-        self.config = config or {}
+        self.config = config
 
     @property
     def line_segment(self) -> LineSegment | None:
@@ -151,18 +203,11 @@ class Seam:
             result['num_points'] = len(self.segment.points)
             result['points'] = self.segment.points.tolist()
 
-        if self.config:
-            result['config'] = {}
-            for k, v in self.config.items():
-                if k in ['normals_mesh_1', 'normals_mesh_2', 'normals_main',
-                         'normals_secondary', 'smoothed_points']:
-                    continue
-
-                if hasattr(v, 'item') and hasattr(v, 'shape') and v.shape == ():
-                    result['config'][k] = v.item()
-                elif hasattr(v, 'tolist'):
-                    result['config'][k] = v.tolist()
-                else:
-                    result['config'][k] = v
+        if self.config is not None:
+            result['config'] = {
+                'is_edge_joint': self.config.is_edge_joint,
+                'on_edge_1': self.config.on_edge_1,
+                'on_edge_2': self.config.on_edge_2,
+            }
 
         return result

@@ -197,13 +197,16 @@ def export_to_json(
 
 
 def auto_generate_output_path(input_path: str | Path) -> Path:
-    """Generate output path in hold_and_weld_application/trajectories/ directory."""
+    """Generate output path in hold_and_weld_application/trajectories/ directory.
+
+    Creates the directory if it does not exist.
+    """
     input_path = Path(input_path)
     job_name = input_path.stem
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    # Navigate to workspace root and then to the source directory. This works whether running from
-    # build/ or install/ directories.
+    # The output belongs in the source tree, so walk up to the directory holding src/hold_and_weld;
+    # that works from the source tree and from install/ alike.
     current_path = Path(__file__).resolve()
 
     workspace_root = None
@@ -215,7 +218,8 @@ def auto_generate_output_path(input_path: str | Path) -> Path:
             break
 
     if workspace_root is None:
-        # Fallback: try relative path from current location
+        # TODO(silanus23): reached only by an install tree outside the workspace. Five levels up
+        # is then install/<pkg>/lib, not a workspace root, so the output lands in lib/src/....
         workspace_root = current_path.parent.parent.parent.parent.parent
         logger.warning(f'Could not detect workspace root, using fallback: {workspace_root}')
 

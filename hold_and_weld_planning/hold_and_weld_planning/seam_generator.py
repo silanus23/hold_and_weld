@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Berkan Tali
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -20,9 +18,6 @@ import argparse
 import logging
 from pathlib import Path
 import sys
-
-if __name__ == '__main__':
-    sys.path.insert(0, str(Path(__file__).parent))
 
 from hold_and_weld_planning.occt.seam_extractor_occt import SeamExtractorOCCTParams
 from hold_and_weld_planning.planning.job_planner import JobPlanner
@@ -128,7 +123,6 @@ def main():
         main_world_pose = workpiece_config['main_part'].get('world_pose')
         secondary_world_pose = workpiece_config['secondary_part'].get('world_pose')
 
-        # Extract mode from workpiece config
         mode = workpiece_config.get('mode', 'auto')
 
         planner = JobPlanner(
@@ -145,7 +139,7 @@ def main():
             print(f'  Job: {Path(args.input).stem}')
             print(f'  Work angle: {parameters["work_angle_deg"]}')
             print(f'  Travel angle: {parameters["travel_angle_deg"]}')
-            print(f'  Gap: {parameters["gap_mm"]}mm')
+            print(f'  Gap: {parameters["gap"]}m')
             print()
             print(f'  Main part URDF: {main_path}')
             print(f'  Secondary part URDF: {secondary_path}')
@@ -165,7 +159,7 @@ def main():
 
         if args.verbose:
             num_edge = sum(
-                1 for s in generated_seams if s.config.get('is_edge_joint', False)
+                1 for s in generated_seams if s.config.is_edge_joint
             )
             num_flat = len(generated_seams) - num_edge
 
@@ -178,7 +172,7 @@ def main():
             for idx, seam in enumerate(generated_seams):
                 seam_length_mm = seam.length() * 1000
                 num_poses = len(seam.poses) if seam.poses else 0
-                joint_type = 'EDGE' if seam.config.get('is_edge_joint') else 'FLAT'
+                joint_type = 'EDGE' if seam.config.is_edge_joint else 'FLAT'
                 seg_type = seam.segment_type.upper()
                 print(
                     f'  Seam {idx}: {seg_type}, {seam_length_mm:.1f}mm, '
@@ -199,7 +193,7 @@ def main():
             'input_file': str(Path(args.input).resolve()),
             'work_angle_deg': parameters['work_angle_deg'],
             'travel_angle_deg': parameters['travel_angle_deg'],
-            'gap_mm': parameters['gap_mm'],
+            'gap': parameters['gap'],
             # The planner resolves 'auto' against the input extensions, so read the pipeline it
             # actually ran rather than what was asked for.
             'pipeline': planner.mode,

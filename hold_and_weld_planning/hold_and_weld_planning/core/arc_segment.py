@@ -58,7 +58,6 @@ class ArcSegment:
 
         self.radius = float(radius)
 
-        # Normalize away vector if provided, discard if degenerate
         if away_from_wall_vector is not None:
             away_from_wall_vector = np.array(away_from_wall_vector, dtype=float)
             if away_from_wall_vector.shape != (3,):
@@ -85,7 +84,7 @@ class ArcSegment:
     def from_geometry_dict(
         cls, geometry: dict[str, Any], away_from_wall_vector: NDArray | None = None
     ) -> 'ArcSegment':
-        """Create ArcSegment from PathCreator geometry output.
+        """Create ArcSegment from an arc geometry dict.
 
         Args:
             geometry: Dict with 'type'='arc', 'points', 'center', 'radius'

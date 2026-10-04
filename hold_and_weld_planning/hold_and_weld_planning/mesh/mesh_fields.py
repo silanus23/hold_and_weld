@@ -14,11 +14,8 @@
 
 """MeshFields, cached geometric queries over the two meshes being joined.
 
-Answers questions about the meshes alone, with no notion of seams, chains or ownership. Split
-out of SeamExtractorMesh so it can request geometry rather than caching it itself.
+Answers questions about the meshes alone, with no notion of seams, chains or ownership.
 """
-
-import logging
 
 import numpy as np
 from numpy.typing import NDArray
@@ -26,8 +23,6 @@ from scipy.spatial import KDTree
 import trimesh
 
 from .params import SeamExtractorMeshParams
-
-logger = logging.getLogger(__name__)
 
 
 class MeshFields:
@@ -44,7 +39,7 @@ class MeshFields:
         self._sharp_tree_cache: dict[int, KDTree | None] = {}
         self._centroid_tree_cache: dict[int, KDTree] = {}
         self._vertex_tree_cache: dict[int, KDTree] = {}
-        self._edge_scale_cache: dict[int, NDArray] = {}
+        self._mean_edge_cache: dict[int, NDArray] = {}
         self._median_edge_cache: dict[int, float] = {}
         self._turning_cache: dict[int, tuple[KDTree, NDArray]] = {}
 
@@ -116,24 +111,21 @@ class MeshFields:
         """Index of the nearest face of mesh side for each point."""
         return self._nearest(side, points)[1]
 
-    def vertex_edge_scale(self, side: int) -> NDArray:
-        """Local surface scale at each vertex of one mesh.
+    def vertex_mean_edge(self, side: int) -> NDArray:
+        """Mean length of the edges meeting each vertex of one mesh.
 
-        The characteristic length used to size the coverage-kernel radius around a point (see
-        extract_seams): a value too small relative to the surrounding triangle size makes the
-        integral read 0 or overshoot on luck, so this has to track actual local geometry rather
-        than being a fixed constant.
+        Sizes the coverage-kernel radius (see SeamExtractorMesh._refine_positions), which has to
+        track the triangle size around it: too small and the integral reads 0 or overshoots on
+        luck.
 
-        Computed as the mean length of edges incident to each vertex, not the median: at an
-        irregular vertex most incident edges are short and one or two are long, bridging into
-        coarser geometry nearby. The median reports the dense short cluster and discards the long
-        edges, understating the true local scale; the mean stays sensitive to them.
+        Mean, not median: the few long edges bridging into coarser geometry are exactly what the
+        kernel has to span.
 
         Returns:
-            One scale value per vertex of that mesh, in mesh length units.
+            One value per vertex of that mesh, in mesh length units.
         """
-        if side in self._edge_scale_cache:
-            return self._edge_scale_cache[side]
+        if side in self._mean_edge_cache:
+            return self._mean_edge_cache[side]
 
         mesh = self.mesh[side]
         edges = mesh.edges_unique
@@ -146,7 +138,7 @@ class MeshFields:
             np.add.at(count, edges[:, column], 1.0)
 
         scale = total / np.maximum(count, 1.0)
-        self._edge_scale_cache[side] = scale
+        self._mean_edge_cache[side] = scale
         return scale
 
     def median_edge(self, side: int) -> float:
@@ -194,7 +186,8 @@ class MeshFields:
         the fan is degenerate.
 
         Args:
-            faces: Boolean mask over this mesh's faces.
+            faces: Boolean mask over this mesh's faces. The contact mask gives the face pressed
+                against the other part; its complement gives the wall rising out of the joint.
 
         Returns:
             Unit normal, or zeros when nothing usable is left.
@@ -225,10 +218,8 @@ class MeshFields:
         growing with how sharply the surface bends there, independent of convex/concave sign, the
         quantity `turning_density` sums.
 
-        `face_adjacency_edges`/`_angles` come from trimesh already paired and already restricted to
-        edges with two faces. A boundary edge (one face only, no second normal to compare against)
-        never appears here. This file never walks triangles to find that itself; every other user
-        of these two arrays in this file inherits the same exclusion.
+        Boundary edges (one face) never appear: trimesh's adjacency arrays only pair two-face
+        edges.
         """
         if side in self._dihedral_cache:
             return self._dihedral_cache[side]
@@ -270,9 +261,8 @@ class MeshFields:
     def sharp_edge_distance(self, side: int, points: NDArray) -> NDArray:
         """Exact distance from each point to the nearest sharp edge of a mesh.
 
-        Point-to-SEGMENT, over the edges whose midpoints are nearest. Replaced a sampled-point
-        KD-tree whose quantization error could flip ownership at a corner once points are refined
-        off the lattice.
+        Point-to-SEGMENT, over the edges whose midpoints are nearest. Exact, because a sampled
+        approximation can flip ownership at a corner once points leave the vertex lattice.
 
         Returns:
             All `inf` when this mesh has no sharp edge at all.
@@ -388,6 +378,7 @@ class MeshFields:
         # (1 - t^2)^3: a smooth, compactly-supported kernel (1 at t=0, 0 at t=1, zero slope at both
         # ends) rather than a hard radius cutoff.
         weight = (1.0 - t ** 2) ** 3 * other.area_faces[index] * facing
+        # pi rho^2 / 4 is the kernel's integral over the disc, so full coverage reads 1.
         return float((weight / (np.pi * rho ** 2 / 4.0)).sum())
 
     def slide_to_boundary(
@@ -434,78 +425,3 @@ class MeshFields:
             else:
                 beyond = middle
         return position + 0.5 * (within + beyond) * direction
-
-
-def reject_holes(
-    inside: NDArray, positions: NDArray, rho: NDArray,
-    is_closed: bool = False,
-) -> NDArray:
-    """Restore interior drop blocks that are holes rather than corners.
-
-    A block at a chain END is an ordinary trim. A block in the MIDDLE splits the chain, and its
-    ends get slid inward onto the level set, right at a real crossing, but catastrophic anywhere
-    else, since it carves a stretch out of the middle of a weld.
-
-    At a real crossing the seam leaves and re-enters the contact at the SAME place, so the
-    surviving points either side sit almost on top of each other. A coverage failure mid-seam
-    leaves a hole instead, whose ends are as far apart as the stretch that was lost, so farther
-    apart than the analysis scale means keep those points rather than trust a field that's
-    evidently gone wrong there.
-
-    A CLOSED chain has no end for a block to sit at, so a block touching both ends of the array is
-    one block straddling the wrap point.
-
-    Args:
-        inside: Per-point contact mask, as thresholding `coverage` at a half produced it. Modified
-            in place.
-        rho: Kernel radius used at each point; its maximum over a block is that block's analysis
-            scale.
-        is_closed: True when the chain wraps, so index 0 follows index N-1 and no block sits at an
-            end.
-
-    Returns:
-        The same mask, with hole blocks restored to True.
-    """
-    count = len(inside)
-    blocks: list[tuple[int, int]] = []
-    start: int | None = None
-    for i, ok in enumerate(inside):
-        if not ok and start is None:
-            start = i
-        elif ok and start is not None:
-            blocks.append((start, i - 1))
-            start = None
-    if start is not None:
-        blocks.append((start, count - 1))
-
-    # On a closed chain, a block against each end is one block straddling the wrap, joined here so
-    # it's measured once, not as two phantom ends.
-    if is_closed and len(blocks) > 1 and blocks[0][0] == 0 and blocks[-1][1] == count - 1:
-        head, tail = blocks.pop(0), blocks.pop()
-        blocks.append((tail[0], head[1] + count))
-
-    restored = 0
-    for first, last in blocks:
-        if not is_closed and (first == 0 or last == count - 1):
-            continue                      # a chain end, so an ordinary trim
-        # Modulo, so a block written across the wrap reads its neighbours and its own points from
-        # the far end of the array.
-        block = [i % count for i in range(first, last + 1)]
-        before, after = (first - 1) % count, (last + 1) % count
-        span = float(np.linalg.norm(positions[after] - positions[before]))
-        scale = float(np.max(rho[block]))
-        if span <= scale:
-            continue                      # ends meet: a crossing
-        inside[block] = True
-        restored += len(block)
-        logger.warning(
-            f'Coverage drops {len(block)} point(s) mid-chain whose '
-            f'surviving ends are {span * 1000:.2f}mm apart, past the '
-            f'{scale * 1000:.2f}mm analysis scale; that is a hole, not a '
-            'corner, so the points are kept. Suspect rho or the mating '
-            'normal there.'
-        )
-
-    if restored:
-        logger.info(f'Restored {restored} point(s) over {len(blocks)} drop block(s)')
-    return inside

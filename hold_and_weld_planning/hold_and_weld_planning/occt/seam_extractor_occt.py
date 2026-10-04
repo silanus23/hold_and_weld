@@ -18,25 +18,22 @@ This module uses face-to-face proximity detection and BRepAlgoAPI_Common to find
 kissing surfaces, then extracts exact seam curves and surface normals.
 """
 
-# TODO: (@silanus23) Complete pipe logic
-# Warning: Pipe joint detection is under construction. Current implementation
-# treats any face with inner holes (>1 wire) as a pipe joint and attempts to
-# extract normals from outer shaft surfaces using G1 continuity checks.
-# This logic is not fully tested and may produce incorrect normals for:
-# - Non-cylindrical shafts
-# - Complex geometries with multiple discontinuous faces
-# - Stepped or flanged pipes
-# Known issues:
-# - Shaft selection uses largest discontinuous face (area-based heuristic)
-# - Hardcoded fallback normals [0,0,1] should fail instead
-# - G1 continuity check samples only one point on edge
+# TODO(silanus23): complete pipe joint detection. The commented-out methods after
+# _get_wall_surface_at_edge treat any face with inner holes (more than one wire) as a pipe joint
+# and take normals from the outer shaft surfaces, found by a G1 continuity check. Untested on
+# non-cylindrical shafts, several discontinuous faces, and stepped or flanged pipes. Before
+# re-enabling them:
+# - shaft selection takes the largest discontinuous face, an area heuristic
+# - the hard-coded fallback normal [0, 0, 1] should fail instead
+# - the G1 continuity check samples one point on the edge
+# - they use `warnings` and `TopAbs_WIRE`, neither of which is imported
 
-# TODO: (@silanus23) Add secondary check if PTP seams could be changed to
-# arc or line
+# TODO(silanus23): add a secondary check on whether a PTP seam could be an arc or a line.
 from dataclasses import dataclass
 import logging
 
 import numpy as np
+from numpy.typing import NDArray
 
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRep import BRep_Tool
@@ -62,7 +59,7 @@ from OCC.Core.TopTools import (
 from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.ptp_segment import PtPSegment
-from ..core.seam import Seam
+from ..core.seam import Seam, SeamConfig
 from ..utils.params import ParamsBase
 
 logger = logging.getLogger(__name__)
@@ -108,17 +105,7 @@ class SeamExtractorOCCT:
 
     def __init__(self, shape_1: TopoDS_Shape, shape_2: TopoDS_Shape,
                  params: dict | None = None) -> None:
-        """Initialize OCCT seam extractor.
-
-        Args:
-            shape_1: First OCCT shape (already transformed to world frame)
-            shape_2: Second OCCT shape (already transformed to world frame)
-            params: Optional config dict, per SeamExtractorOCCTParams. Unknown
-                keys are ignored.
-
-        Raises:
-            ValueError: If a shape is null or a parameter is out of range.
-        """
+        """Initialize OCCT seam extractor."""
         if shape_1.IsNull():
             raise ValueError('shape_1 is null')
         if shape_2.IsNull():
@@ -225,29 +212,21 @@ class SeamExtractorOCCT:
 
         points = np.array(points)
 
-        # PIPE LOGIC DISABLED - under development (see commented methods below)
-        # Pipe joints would check for inner holes and extract normals from outer shaft surfaces
-
-        # REGULAR JOINT: Determine surfaces for normal extraction
         boundary_A = self._get_matching_boundary_edge(edge, face_A)
         boundary_B = self._get_matching_boundary_edge(edge, face_B)
 
-        # Extract normals from appropriate surfaces (walls if boundaries exist, kissing faces
-        # otherwise)
+        # A part with a real boundary edge on the seam gives its wall's normal. Without one the
+        # edge is synthetic, from a curved intersection, and only the kissing face is there.
         if boundary_A is not None:
-            # Shape_1 has real boundary - use wall surface
             wall_A = self._get_wall_surface_at_edge(boundary_A, self.shape_1, face_A)
             normals_A = self._extract_normals_from_surface(points, wall_A)
         else:
-            # No boundary - use kissing face (synthetic edge from curved intersection)
             normals_A = self._extract_normals_from_surface(points, face_A)
 
         if boundary_B is not None:
-            # Shape_2 has real boundary - use wall surface
             wall_B = self._get_wall_surface_at_edge(boundary_B, self.shape_2, face_B)
             normals_B = self._extract_normals_from_surface(points, wall_B)
         else:
-            # No boundary - use kissing face (synthetic edge from curved intersection)
             normals_B = self._extract_normals_from_surface(points, face_B)
 
         normals_main, normals_secondary = self._determine_main_secondary_normals(
@@ -465,7 +444,6 @@ class SeamExtractorOCCT:
             if curve_type_1 != curve_type_2:
                 return False
 
-            # Line alignment: check parallel directions and endpoints lie on same infinite line
             if curve_type_1 == GeomAbs_Line:
                 line_1 = adaptor_1.Line()
                 line_2 = adaptor_2.Line()
@@ -506,7 +484,6 @@ class SeamExtractorOCCT:
                 overlap = min(span_1[1], span_2[1]) - max(span_1[0], span_2[0])
                 return overlap >= -self.tolerance
 
-            # Circle alignment: check centers, radii, and plane normals match
             elif curve_type_1 == GeomAbs_Circle:
                 circle_1 = adaptor_1.Circle()
                 circle_2 = adaptor_2.Circle()
@@ -528,13 +505,9 @@ class SeamExtractorOCCT:
                 dot = abs(normal_1.Dot(normal_2))
                 return dot > 0.9999
 
-            # General curves: sample points along edge_1 and check distance to edge_2. 5 samples
-            # balances cost vs coverage for typical short intersection edges; increase if false
-            # positives occur on long spline edges.
             else:
-                num_samples = 5
-                for i in range(num_samples):
-                    t = i / (num_samples - 1)
+                for i in range(self.coincidence_samples):
+                    t = i / (self.coincidence_samples - 1)
                     u = (
                         adaptor_1.FirstParameter() +
                         t * (adaptor_1.LastParameter() - adaptor_1.FirstParameter())
@@ -562,7 +535,7 @@ class SeamExtractorOCCT:
                                   shape: TopoDS_Shape,
                                   kissing_face: TopoDS_Shape
                                   ) -> TopoDS_Shape:
-        """Get perpendicular wall surface at boundary edge (excludes kissing face)."""
+        """Get the face at the boundary edge that is not the kissing face; no angle is checked."""
         edge_face_map = self._edge_face_maps[id(shape)]
 
         if not edge_face_map.Contains(boundary_edge):
@@ -576,7 +549,6 @@ class SeamExtractorOCCT:
             faces_at_edge.append(topods.Face(it.Value()))
             it.Next()
 
-        # Filter out kissing face to get wall
         wall_candidates = [f for f in faces_at_edge if not f.IsSame(kissing_face)]
 
         if not wall_candidates:
@@ -584,7 +556,7 @@ class SeamExtractorOCCT:
 
         return wall_candidates[0]
 
-    # PIPE LOGIC COMMENTED OUT - INCOMPLETE/UNDER DEVELOPMENT
+    # Pipe joint detection, disabled; see the TODO at the top of this file.
     # def _has_inner_holes(self, face: TopoDS_Shape) -> bool:
     #     """Check if face has inner holes (multiple wire boundaries)."""
     #     wire_explorer = TopExp_Explorer(face, TopAbs_WIRE)
@@ -668,7 +640,7 @@ class SeamExtractorOCCT:
     #     return props.Mass()
 
     # def _get_pipe_normals(
-    #         self, points: np.ndarray, surfaces: dict) -> tuple[np.ndarray, np.ndarray]:
+    #         self, points: NDArray, surfaces: dict) -> tuple[NDArray, NDArray]:
     #     """Get normals for pipe joint from outer shafts."""
     #     shaft_1 = surfaces['shaft_1']
     #     shaft_2 = surfaces['shaft_2']
@@ -698,9 +670,9 @@ class SeamExtractorOCCT:
     #     return self._determine_main_secondary_normals(normals_1, normals_2)
 
     def _extract_normals_from_surface(self,
-                                      points: np.ndarray,
+                                      points: NDArray,
                                       surface: TopoDS_Shape
-                                      ) -> np.ndarray:
+                                      ) -> NDArray:
         """Extract normals at each point on a surface.
 
         Raises:
@@ -710,7 +682,7 @@ class SeamExtractorOCCT:
         self._warn_on_opposing_normals(normals)
         return normals
 
-    def _warn_on_opposing_normals(self, normals: np.ndarray) -> None:
+    def _warn_on_opposing_normals(self, normals: NDArray) -> None:
         """Warn when adjacent normals oppose; they are never flipped.
 
         Face orientation is already applied, and no rule reading only the normals can tell a
@@ -725,7 +697,7 @@ class SeamExtractorOCCT:
                 'curvature. Passed through unchanged.'
             )
 
-    def _compute_shape_centroid(self, shape: TopoDS_Shape) -> np.ndarray:
+    def _compute_shape_centroid(self, shape: TopoDS_Shape) -> NDArray:
         """Compute the volumetric centroid of an OCCT shape."""
         props = GProp_GProps()
         brepgprop.VolumeProperties(shape, props)
@@ -733,17 +705,28 @@ class SeamExtractorOCCT:
         return np.array([cog.X(), cog.Y(), cog.Z()])
 
     def _determine_main_secondary_normals(self,
-                                          normals_A: np.ndarray,
-                                          normals_B: np.ndarray,
-                                          seam_points: np.ndarray,
+                                          normals_A: NDArray,
+                                          normals_B: NDArray,
+                                          seam_points: NDArray,
                                           has_boundary_A: bool,
                                           has_boundary_B: bool,
-                                          ) -> tuple[np.ndarray, np.ndarray]:
+                                          ) -> tuple[NDArray, NDArray]:
         """Determine which normals are main (base) vs secondary (wall).
 
         The part with a boundary edge on the seam ends there and supplies the wall; the other
         carries the seam across its face. The centroid projection only decides when both or
         neither part has one.
+
+        Args:
+            normals_A: Normals per seam point taken from shape_1; the centroid test reads
+                `centroid_1` for it, so the order matters.
+            normals_B: Normals per seam point taken from shape_2.
+            seam_points: The seam's sampled points (N, 3).
+            has_boundary_A: Whether shape_1 has a real boundary edge on the seam.
+            has_boundary_B: Whether shape_2 has a real boundary edge on the seam.
+
+        Returns:
+            (normals_main, normals_secondary).
         """
         if has_boundary_A != has_boundary_B:
             if has_boundary_A:
@@ -790,11 +773,10 @@ class SeamExtractorOCCT:
         else:
             return normals_B, normals_A
 
-    def _evaluate_normal_at_point(self, point: np.ndarray, face: TopoDS_Shape) -> np.ndarray:
+    def _evaluate_normal_at_point(self, point: NDArray, face: TopoDS_Shape) -> NDArray:
         """Evaluate unit surface normal at point using UV projection (fast path for planes)."""
         adaptor = BRepAdaptor_Surface(face)
 
-        # Fast path for planes - normal is constant everywhere
         if adaptor.GetType() == GeomAbs_Plane:
             position = adaptor.Plane().Position()
             normal_dir = position.Direction()
@@ -811,11 +793,9 @@ class SeamExtractorOCCT:
             normal = np.array([normal_dir.X(), normal_dir.Y(), normal_dir.Z()])
             return normal / np.linalg.norm(normal)
 
-        # General surfaces: project 3D point to UV parameter space, then evaluate normal
         pnt = gp_Pnt(point[0], point[1], point[2])
         surface = BRep_Tool.Surface(face)
 
-        # Find UV coordinates of nearest point on surface
         sas = ShapeAnalysis_Surface(surface)
         uv = sas.ValueOfUV(pnt, self.tolerance)
 
@@ -831,7 +811,7 @@ class SeamExtractorOCCT:
 
         raise RuntimeError(f'Normal not defined at point {point}')
 
-    def _detect_geometry(self, edge: TopoDS_Shape, points: np.ndarray) -> dict:
+    def _detect_geometry(self, edge: TopoDS_Shape, points: NDArray) -> dict:
         """Detect geometry type (line, arc, or ptp) and extract geometric parameters."""
         edge_adapted = BRepAdaptor_Curve(edge)
         curve_type = edge_adapted.GetType()
@@ -866,8 +846,8 @@ class SeamExtractorOCCT:
     def _wrap_in_seams(self,
                        geometry: dict,
                        on_edges: tuple[bool, bool],
-                       normals_main: np.ndarray,
-                       normals_secondary: np.ndarray
+                       normals_main: NDArray,
+                       normals_secondary: NDArray
                        ) -> list[Seam]:
         """Wrap geometry and normals into Seam objects with metadata.
 
@@ -900,33 +880,26 @@ class SeamExtractorOCCT:
     def _wrap_one_seam(self,
                        geometry: dict,
                        on_edges: tuple[bool, bool],
-                       normals_main: np.ndarray,
-                       normals_secondary: np.ndarray
+                       normals_main: NDArray,
+                       normals_secondary: NDArray
                        ) -> Seam:
-        """Wrap geometry and normals into one Seam object with metadata.
-
-        The config keys match the mesh pipeline's (`PathCreator._wrap_in_seam`), since both end
-        up in the same welder JSON.
-        """
+        """Wrap geometry and normals into one Seam object with metadata."""
         points = geometry['points']
         kind = geometry['type']
-        on_edge_1, on_edge_2 = on_edges
+        config = SeamConfig(
+            smoothed_points=points,
+            normals_main=normals_main,
+            normals_secondary=normals_secondary,
+            on_edge_1=on_edges[0],
+            on_edge_2=on_edges[1],
+        )
 
         if kind == 'line':
-            seam = Seam(line_segment=LineSegment(start=geometry['start'], end=geometry['end']))
-        elif kind == 'arc':
-            seam = Seam(arc_segment=ArcSegment(
-                points=points, center=geometry['center'], radius=geometry['radius']))
-        else:
-            seam = Seam(ptp_segment=PtPSegment(points=points))
-
-        seam.config.update({
-            'is_edge_joint': on_edge_1 and on_edge_2,
-            'on_edge_1': on_edge_1,
-            'on_edge_2': on_edge_2,
-            'geometry_type': kind,
-            'normals_main': normals_main,
-            'normals_secondary': normals_secondary,
-            'smoothed_points': points,
-        })
-        return seam
+            return Seam(
+                line_segment=LineSegment(start=geometry['start'], end=geometry['end']),
+                config=config)
+        if kind == 'arc':
+            return Seam(arc_segment=ArcSegment(
+                points=points, center=geometry['center'], radius=geometry['radius']),
+                config=config)
+        return Seam(ptp_segment=PtPSegment(points=points), config=config)

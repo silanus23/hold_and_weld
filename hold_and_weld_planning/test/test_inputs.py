@@ -19,7 +19,7 @@ import logging
 
 from hold_and_weld_planning import seam_generator
 from hold_and_weld_planning.core.line_segment import LineSegment
-from hold_and_weld_planning.core.seam import Seam
+from hold_and_weld_planning.core.seam import Seam, SeamConfig
 from hold_and_weld_planning.mesh.mesh_loader import MeshLoader
 from hold_and_weld_planning.mesh.shell_generator import ShellGenerator
 from hold_and_weld_planning.occt import seam_extractor_occt
@@ -37,7 +37,7 @@ import pytest
 import trimesh
 from urdf_parser_py.urdf import URDF
 
-REQUIRED = {'work_angle_deg': 45.0, 'travel_angle_deg': 0.0, 'gap_mm': 1.0}
+REQUIRED = {'work_angle_deg': 45.0, 'travel_angle_deg': 0.0, 'gap': 0.001}
 
 
 @contextlib.contextmanager
@@ -137,9 +137,9 @@ class TestConfig:
 
     def test_seams_are_not_required_when_auto_detect_is_off(self, tmp_path):
         # The CLI never reads a hand-written seam list, so demanding one only blocks the job.
-        path = write_yaml(tmp_path, WORKPIECE + 'parameters:\n  gap_mm: 1.0\n')
+        path = write_yaml(tmp_path, WORKPIECE + 'parameters:\n  gap: 0.001\n')
         _, parameters, workpiece = load_urdf_config(path)
-        assert parameters == {'gap_mm': 1.0}
+        assert parameters == {'gap': 0.001}
         assert workpiece['main_part']['main_path'] == 'a.stl'
 
     @pytest.mark.parametrize('text', [
@@ -155,7 +155,7 @@ class TestConfig:
             load_urdf_config(write_yaml(tmp_path, text))
 
     def test_verbose_reports_a_missing_parameter_as_configuration(self, tmp_path, monkeypatch):
-        path = write_yaml(tmp_path, WORKPIECE + 'parameters:\n  gap_mm: 1.0\n')
+        path = write_yaml(tmp_path, WORKPIECE + 'parameters:\n  gap: 0.001\n')
         monkeypatch.setattr('sys.argv', ['seam_generator', '-i', str(path), '-v'])
         monkeypatch.setattr(seam_generator, 'setup_logging', lambda verbose: None)
         with warnings_logged(logging.getLogger(seam_generator.__name__)) as records:
@@ -180,12 +180,13 @@ class TestJobLevelFailures:
     def test_a_seam_that_fails_to_plan_fails_the_job(self):
         planner = JobPlanner('a.stl', 'b.stl', parameters=dict(REQUIRED))
         good = Seam(line_segment=LineSegment(start=np.zeros(3), end=np.array([0.0, 0.1, 0.0])))
-        good.config.update({
-            'smoothed_points': np.array([[0.0, 0.0, 0.0], [0.0, 0.1, 0.0]]),
-            'normals_main': np.array([[0.0, 0.0, 1.0]] * 2),
-            'normals_secondary': np.array([[1.0, 0.0, 0.0]] * 2),
-            'is_edge_joint': False,
-        })
+        good.config = SeamConfig(
+            smoothed_points=np.array([[0.0, 0.0, 0.0], [0.0, 0.1, 0.0]]),
+            normals_main=np.array([[0.0, 0.0, 1.0]] * 2),
+            normals_secondary=np.array([[1.0, 0.0, 0.0]] * 2),
+            on_edge_1=False,
+            on_edge_2=True,
+        )
         broken = Seam(line_segment=LineSegment(start=np.zeros(3), end=np.ones(3)))
 
         with pytest.raises(RuntimeError, match='seam 1'):
@@ -217,13 +218,13 @@ class TestJobLevelFailures:
 
     def test_an_unknown_parameter_key_is_warned_about_by_name(self):
         with warnings_logged(job_planner.logger) as records:
-            JobPlanner('a.stl', 'b.stl', parameters=dict(REQUIRED, path_tolerence_mm=2.0))
-        assert 'path_tolerence_mm' in text(records)
+            JobPlanner('a.stl', 'b.stl', parameters=dict(REQUIRED, path_tolerence=2.0))
+        assert 'path_tolerence' in text(records)
 
     def test_known_keys_raise_no_warning(self):
         known = dict(
-            REQUIRED, path_tolerance_mm=1.0, epsilon=0.002, refine_iterations=16,
-            waypoint_spacing_mm=10.0, num_smooth_points=100, coincidence_samples=5,
+            REQUIRED, path_tolerance=0.001, epsilon=0.002, refine_iterations=16,
+            waypoint_spacing=0.01, num_smooth_points=100, coincidence_samples=5,
             near_contact_edge_fraction=0.1,
         )
         with warnings_logged(job_planner.logger) as records:

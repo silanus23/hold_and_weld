@@ -45,18 +45,7 @@ class ShellGenerator:
         world_transform: NDArray | None = None,
         refine_iterations: int = MeshLoadParams.refine_iterations,
     ) -> None:
-        """Initialize shell generator.
-
-        Args:
-            robot_object: The self.robot object from URDFProcessor
-            world_transform: The global starting pose matrix (4x4). Defaults
-                to identity.
-            refine_iterations: Pieces each edge is split into; see MeshLoadParams
-
-        Raises:
-            ValueError: If world_transform is not a finite 4x4, or the URDF's joint
-                tree does not place every link.
-        """
+        """Initialize shell generator."""
         world_transform = as_world_transform(world_transform)
 
         refine_iterations = MeshLoadParams.from_dict(
@@ -127,8 +116,8 @@ class ShellGenerator:
         Returns:
             Manifold representing union of all collision geometries
         Raises:
-            ValueError: If geometry type is unsupported
-            RuntimeError: If mesh loading or transform fails
+            ValueError: If a geometry is unsupported (Mesh included) or has bad dimensions
+            RuntimeError: If building, refining, transforming or merging a primitive fails
         """
         link_combined = manifold3d.Manifold()
 

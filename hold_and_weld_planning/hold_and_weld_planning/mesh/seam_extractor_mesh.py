@@ -27,8 +27,8 @@ import numpy as np
 from numpy.typing import NDArray
 import trimesh
 
-from .chaining import drop_coincident, loops, oriented, stitch
-from .mesh_fields import MeshFields, reject_holes
+from .chaining import drop_coincident, loops, oriented, reject_holes, stitch
+from .mesh_fields import MeshFields
 from .params import SeamExtractorMeshParams
 from .path_creator import PathCreator
 from .seam_point import SeamPoint
@@ -48,22 +48,7 @@ class SeamExtractorMesh:
         mesh_2: trimesh.Trimesh,
         params: dict | None = None,
     ) -> None:
-        """Initialize the contact boundary extractor.
-
-        Both meshes are read through caches built on first use, so they must not be modified after
-        construction; build a new extractor instead.
-
-        Args:
-            mesh_1: World-frame, watertight, in metres.
-            mesh_2: World-frame, watertight, in metres.
-            params: Optional config dict, per SeamExtractorMeshParams and PathCreatorParams in
-                params.py. Each ignores the other's keys.
-
-        Raises:
-            TypeError: If either mesh is not a trimesh.Trimesh.
-            ValueError: If either mesh is not watertight, has a non-finite vertex, or a parameter
-                is out of range.
-        """
+        """Initialize the contact boundary extractor."""
         for name, mesh in (('mesh_1', mesh_1), ('mesh_2', mesh_2)):
             # trimesh.load hands back a Scene for a multi-body file.
             if not isinstance(mesh, trimesh.Trimesh):
@@ -250,10 +235,8 @@ class SeamExtractorMesh:
         Measured rather than modelled: the boundary is recomputed at neighbouring epsilon values
         and its size compared per direction, since too small reads the parts as apart and too large
         climbs the wall. Compared as a relative change, not vertex-set equality, which a single
-        moved vertex would trip on every valid run.
-
-        Args:
-            reference: The boundary at `epsilon`, already computed by the caller.
+        moved vertex would trip on every valid run. `reference` is the boundary at `epsilon`,
+        already computed by the caller.
         """
         base = {v for edge in reference for v in edge}
         if not base:
@@ -324,8 +307,8 @@ class SeamExtractorMesh:
             # small relative to ITS triangle size and the centroid-sampled integral reads 0 or
             # overshoots on luck.
             rho[rows] = self.cfg.kernel_radius_factor * np.maximum(
-                self.fields.vertex_edge_scale(side)[nearest],
-                self.fields.vertex_edge_scale(other_side)[across],
+                self.fields.vertex_mean_edge(side)[nearest],
+                self.fields.vertex_mean_edge(other_side)[across],
             )
             contact = marked[side][0]
             mating[rows] = [self.fields.fan_normal(side, int(v), contact) for v in nearest]
@@ -356,6 +339,9 @@ class SeamExtractorMesh:
         keep = np.nonzero(inside)[0]
         refined = positions[keep].copy()
 
+        # Only the two ends of each run of kept points, where the contact stops, slide onto the
+        # coverage boundary. On a closed chain whose kept points run through index 0, the first
+        # and last runs are one run across the wrap, so those two ends are not real ends.
         runs: list[tuple[int, int]] = []
         start = 0
         for j in range(1, len(keep) + 1):
@@ -375,7 +361,7 @@ class SeamExtractorMesh:
                     continue
                 direction = refined[outer] - refined[inner]
                 length = float(np.linalg.norm(direction))
-                if length < 1e-12:
+                if length < 1e-10:
                     continue
                 landed = self.fields.slide_to_boundary(
                     refined[outer], direction / length,

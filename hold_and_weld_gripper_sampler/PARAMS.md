@@ -140,6 +140,13 @@ tends back towards a single estimate for the whole face, which under-samples
 surfaces whose parameterisation is non-uniform — clustered knot vectors, and the
 vanishing `|dS/du|` at a cone apex or sphere pole.
 
+Face sampling rejects grids larger than 1,000,000 points per face before reserving
+the sample array. This fixed resource limit applies to contact, ground, kissing,
+and exclusion sampling; it is not a YAML parameter. The error reports the grid
+size, estimated sample storage, spacing, and UV bounds. Check input geometry units
+(especially STEP millimetres versus ROS metres) before increasing spacing. Invalid
+spacing and oversized axes are also rejected before integer conversion or allocation.
+
 ## Orientation
 
 | Parameter | Type | Default | Description |

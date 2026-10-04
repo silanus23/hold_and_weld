@@ -1,0 +1,106 @@
+# Cube: 0.25 m on each side.
+# Example with tube, disk, and polygon exclusion zones.
+/**:
+  ros__parameters:
+    frame_id: 'world'
+
+    primary:
+      urdf_path: 'config/cube_workpiece.urdf'
+      transform:
+        translation:
+          x: 1.2
+          y: 0.3
+          z: 0.125
+        rotation:
+          x: 0.0
+          y: 0.0
+          z: 0.0
+          w: 1.0
+
+    gripper:
+      urdf_path: 'config/test_gripper.urdf'
+
+    secondaries:
+      - id: 'ground_plane'
+        type: 'ground_plane'
+        size_x: 3.0
+        size_y: 3.0
+        z_position: 0.0
+
+    exclusion_zones:
+      # Coordinates are in the world frame; distances are in metres.
+      # Spread across different sides and opposite ends of the workpiece.
+      sample_density: 0.005
+
+      # Tube on the left side (-X), near the front end.
+      lines:
+        - id: 'weld_seam_tube'
+          start: {x: 1.075, y: 0.215, z: 0.125}
+          end: {x: 1.075, y: 0.335, z: 0.125}
+          exclusion_radius: 0.01
+          clearance: 0.005
+
+      # Disk on the front end (-Y), extruding outward.
+      circles:
+        - id: 'screw_hole_disk'
+          center: {x: 1.250, y: 0.175, z: 0.125}
+          normal: {x: 0.000, y: -1.000, z: 0.000}
+          radius: 0.02
+          projection_depth: 0.03
+          clearance: 0.005
+
+      # Polygon on the opposite end (+Y); winding gives outward +Y.
+      polygons:
+        - id: 'label_area_polygon'
+          corners:
+            - {x: 1.110, y: 0.425, z: 0.090}
+            - {x: 1.110, y: 0.425, z: 0.160}
+            - {x: 1.180, y: 0.425, z: 0.160}
+            - {x: 1.180, y: 0.425, z: 0.090}
+          projection_depth: 0.02
+          clearance: 0.005
+
+    sampling:
+      min_angle_deg: 160.0
+      max_angle_deg: 180.0
+
+      min_gripper_opening: 0.06
+      max_gripper_opening: 0.36
+
+      sample_density: 0.015
+
+      normal_sample_density: 1.0
+      max_lateral_deviation: 0.03
+      alignment_threshold: 0.95
+
+    orientation:
+      finger_length: 0.20
+      finger_radius: 0.02
+
+      max_edge_candidates: 5
+      dual_seed_dedup_tolerance_deg: 3.0
+      max_edges_per_contact: 0
+
+      angle_offsets: [-15.0, 0.0, 15.0]
+
+      stop_on_first_valid: false
+      collision_tolerance: 0.001
+
+    jaw_clearance:
+      # Cylinder on the jaw axis ending at the TCP, covering the open mouth:
+      # radius = grip_distance / 2 + clearance_margin, length = orientation.finger_length.
+      # Rejects candidates with a secondary or an exclusion volume in or beside the
+      # mouth. The gripped part and the ground are not tested.
+      enabled: true
+      clearance_margin: 0.005
+
+    kissing:
+      contact_threshold: 0.8
+
+    fcl:
+      enabled: true
+      triangulation_deflection: 0.001
+
+    output:
+      max_grasps: 15
+      min_quality: 0.0

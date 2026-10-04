@@ -54,18 +54,7 @@ class OCCTLoader:
         cad_path: str | Path,
         world_transform: NDArray | None = None,
     ) -> None:
-        """Initialize OCCT loader and build shape.
-
-        Args:
-            cad_path: Path to CAD file (supports package:// URIs)
-            world_transform: Global pose matrix (4x4) to apply after loading.
-                Defaults to identity.
-
-        Raises:
-            ValueError: If file format unsupported or loading fails
-            FileNotFoundError: If file doesn't exist
-            RuntimeError: If world_transform cannot be applied to the shape
-        """
+        """Initialize OCCT loader and build shape."""
         world_transform = as_world_transform(world_transform)
 
         self.world_transform = world_transform

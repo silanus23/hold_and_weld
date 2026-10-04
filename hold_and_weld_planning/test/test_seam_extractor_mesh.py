@@ -20,8 +20,7 @@ box overhanging a plate puts the true seam corner BETWEEN mesh vertices, which
 is the case the coverage field exists to solve.
 """
 
-from hold_and_weld_planning.mesh.chaining import stitch
-from hold_and_weld_planning.mesh.mesh_fields import reject_holes
+from hold_and_weld_planning.mesh.chaining import reject_holes, stitch
 from hold_and_weld_planning.mesh.params import SeamExtractorMeshParams
 from hold_and_weld_planning.mesh.seam_extractor_mesh import SeamExtractorMesh
 
@@ -281,7 +280,7 @@ class TestRefinement:
         assert seams
         total = sum(
             float(np.sum(np.linalg.norm(
-                np.diff(s.config['smoothed_points'], axis=0), axis=1)))
+                np.diff(s.config.smoothed_points, axis=0), axis=1)))
             for s in seams
         )
         assert total == pytest.approx(1.0, abs=0.25 * SPACING)

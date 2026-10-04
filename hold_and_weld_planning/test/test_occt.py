@@ -14,6 +14,7 @@
 
 """Unit tests for the OCCT pipeline: loading, URDF assembly and seam extraction."""
 
+from hold_and_weld_planning.core.seam import SeamConfig
 from hold_and_weld_planning.mesh.path_creator import PathCreator
 from hold_and_weld_planning.mesh.seam_point import SeamPoint
 from hold_and_weld_planning.occt.occt_generator import OCCTGenerator
@@ -137,7 +138,7 @@ class TestMultiLinkAssembly:
         assert len(split_seams) == len(whole_seams)
 
         for seam in split_seams:
-            xs = seam.config['smoothed_points'][:, 0]
+            xs = seam.config.smoothed_points[:, 0]
             assert not np.allclose(xs, 0.0, atol=1e-6), 'seam along the internal link joint'
 
 
@@ -152,15 +153,15 @@ class TestClosedCurves:
         )
         seams = extract(PLATE, cylinder)
 
-        arcs = [s for s in seams if s.config['geometry_type'] == 'arc']
+        arcs = [s for s in seams if s.segment_type == 'arc']
         assert arcs, 'the circular seam should come out as arcs'
         total = sum(s.length() for s in arcs)
         assert total == pytest.approx(2.0 * np.pi * 0.05, rel=1e-3)
         for seam in arcs:
-            points = seam.config['smoothed_points']
+            points = seam.config.smoothed_points
             assert np.linalg.norm(points[-1] - points[0]) > 1e-3
-            assert len(seam.config['normals_main']) == len(points)
-            assert len(seam.config['normals_secondary']) == len(points)
+            assert len(seam.config.normals_main) == len(points)
+            assert len(seam.config.normals_secondary) == len(points)
 
 
 class TestPlaneNormals:
@@ -186,16 +187,16 @@ class TestPlaneNormals:
 
 
 class TestOutputParity:
-    """Both pipelines write the same seam config keys into the welder JSON."""
+    """Both pipelines hand WeldPlanner the same SeamConfig."""
 
-    def test_occt_seams_carry_the_mesh_pipelines_keys(self):
+    def test_both_pipelines_build_a_seam_config(self):
         mesh_points = [
             SeamPoint(position=np.array([x, 0.0, 0.0]), normal_base=np.array([0.0, 0.0, 1.0]),
                       normal_wall=np.array([1.0, 0.0, 0.0]), on_edge_1=False, on_edge_2=True,
                       owner_side=2)
             for x in np.linspace(0.0, 0.1, 20)
         ]
-        mesh_keys = set(PathCreator().process_path(mesh_points)[0].config)
+        assert isinstance(PathCreator().process_path(mesh_points)[0].config, SeamConfig)
 
         block = urdf(box_link('block', (0.1, 0.1, 0.1), (0.0, 0.0, 0.06)))
         pin = urdf(
@@ -205,6 +206,6 @@ class TestOutputParity:
         )
         occt_seams = extract(PLATE, block) + extract(PLATE, pin)
 
-        assert {s.config['geometry_type'] for s in occt_seams} == {'line', 'arc'}
+        assert {s.segment_type for s in occt_seams} == {'line', 'arc'}
         for seam in occt_seams:
-            assert set(seam.config) == mesh_keys
+            assert isinstance(seam.config, SeamConfig)

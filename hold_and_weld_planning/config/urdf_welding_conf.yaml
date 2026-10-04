@@ -169,10 +169,10 @@ workpiece:
 #      - 1.5708
 parameters:
   # ── Planner ────────────────────────────────────────────────────────────────
-  gap_mm: 40.0
+  gap: 0.04
   work_angle_deg: 45.0
   travel_angle_deg: 5.0
-  waypoint_spacing_mm: 10.0
+  waypoint_spacing: 0.01
 
   # ── Contact boundary tuning ────────────────────────────────────────────────
   # Both are multipliers on mesh-derived lengths, not absolute distances, so
@@ -236,13 +236,13 @@ parameters:
   # ── Path classification (PathCreator) ──────────────────────────────────────
   # These are the keys that actually decide line vs arc vs PTP. All are shown
   # at their built-in defaults (PathCreatorParams in mesh/params.py); uncomment
-  # to override. Cascade: chord within path_tolerance_mm => LINE (preferred), fit
+  # to override. Cascade: chord within path_tolerance => LINE (preferred), fit
   # within arc_strictness x that AND subtend >= min_arc_angle_deg AND consume
   # 1.5x the run a line would => ARC, else PTP. The asymmetry is deliberate —
   # a false PTP is safe, a false arc breaks the torch.
   #
-  # path_tolerance_mm: 1.0     # master fit tolerance
-  # arc_strictness: 0.5        # arc tolerance = this x path_tolerance_mm
+  # path_tolerance: 0.001      # metres; master fit tolerance
+  # arc_strictness: 0.5        # arc tolerance = this x path_tolerance
   # min_arc_angle_deg: 15.0    # below this an arc is not worth calling an arc
   # max_line_length: 0.5       # metres; hard split, not geometric
   # max_arc_length: 0.5        # metres; hard split. This is why a 706.79mm

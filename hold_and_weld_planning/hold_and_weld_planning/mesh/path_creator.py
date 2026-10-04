@@ -19,6 +19,7 @@ the stricter arc tolerance over a minimum angle, and PTP otherwise. Line wins ti
 near-circle into an arc leaves the seam, while demoting a true arc to PTP only densifies waypoints.
 """
 
+from dataclasses import replace
 import logging
 from typing import Any
 
@@ -30,7 +31,7 @@ from .seam_point import SeamPoint
 from ..core.arc_segment import ArcSegment
 from ..core.line_segment import LineSegment
 from ..core.ptp_segment import PtPSegment
-from ..core.seam import Seam
+from ..core.seam import Seam, SeamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +40,7 @@ class PathCreator:
     """Classify ordered SeamPoints into segments wrapped in Seam objects."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        """Initialize the segment classifier.
-
-        Args:
-            config: Optional config dict, per PathCreatorParams in
-                params.py. Unknown keys are ignored, so the same dict can be
-                handed to SeamExtractorMesh.
-
-        Raises:
-            ValueError: If a parameter is out of range.
-        """
+        """Initialize the segment classifier."""
         self.cfg = PathCreatorParams.from_dict(config)
 
     def process_path(self, seam_points: list[SeamPoint], is_closed: bool = False) -> list[Seam]:
@@ -94,7 +86,7 @@ class PathCreator:
 
         self._join_consecutive(seams, is_closed)
 
-        kinds = [seam.config['geometry_type'] for seam in seams]
+        kinds = [seam.segment_type for seam in seams]
         line, arc, ptp = (kinds.count(kind) for kind in ('line', 'arc', 'ptp'))
         logger.info(f'PathCreator produced {len(seams)} seams: {line} line, {arc} arc, {ptp} PtP')
         return seams
@@ -115,23 +107,26 @@ class PathCreator:
             pairs.append((seams[-1], seams[0]))
 
         for seam, following in pairs:
-            points = seam.config['smoothed_points']
-            nxt = following.config['smoothed_points']
-            if np.array_equal(points[-1], nxt[0]):
+            config, nxt = seam.config, following.config
+            if np.array_equal(config.smoothed_points[-1], nxt.smoothed_points[0]):
                 continue
 
-            seam.config['smoothed_points'] = np.vstack([points, nxt[0]])
             # The normals belong to the position, so take the NEXT seam's - they were evaluated
             # there. WeldPlanner requires one per point.
-            for key in ('normals_main', 'normals_secondary'):
-                seam.config[key] = np.vstack([seam.config[key], following.config[key][0]])
+            seam.config = replace(
+                config,
+                smoothed_points=np.vstack([config.smoothed_points, nxt.smoothed_points[0]]),
+                normals_main=np.vstack([config.normals_main, nxt.normals_main[0]]),
+                normals_secondary=np.vstack(
+                    [config.normals_secondary, nxt.normals_secondary[0]]),
+            )
 
             if seam.line_segment is not None:
-                seam.line_segment.end = nxt[0]
+                seam.line_segment.end = nxt.smoothed_points[0]
             elif seam.arc_segment is not None:
-                seam.arc_segment.points = seam.config['smoothed_points']
+                seam.arc_segment.points = seam.config.smoothed_points
             elif seam.ptp_segment is not None:
-                seam.ptp_segment.points = seam.config['smoothed_points']
+                seam.ptp_segment.points = seam.config.smoothed_points
 
     def _split_on_contact_type(self, seam_points: list[SeamPoint]) -> list[list[SeamPoint]]:
         """Group the chain into sublists of uniform joint character.
@@ -181,6 +176,7 @@ class PathCreator:
             if not absorbed:
                 break
 
+            # Absorbing a run can leave two runs of the same character side by side; fuse them.
             i = 1
             while i < len(runs):
                 if runs[i][0] == runs[i - 1][0]:
@@ -254,6 +250,8 @@ class PathCreator:
                 continue
 
             if ptp_start is not None:
+                # Through k: the PTP run ends on the next segment's first point, the shared
+                # junction.
                 segments.append((positions[ptp_start: k + 1], 'ptp', ptp_start))
                 ptp_start = None
 
@@ -271,7 +269,7 @@ class PathCreator:
         n = len(positions)
         m = k + 2
         while m < n:
-            if self._line_max_deviation(positions[k: m + 1]) > self.cfg.tolerance:
+            if self._line_max_deviation(positions[k: m + 1]) > self.cfg.path_tolerance:
                 break
             m += 1
         return m
@@ -303,7 +301,7 @@ class PathCreator:
         """
         chord = points[-1] - points[0]
         length = np.linalg.norm(chord)
-        if length < 1e-12:
+        if length < 1e-10:
             return float('inf')
         direction = chord / length
         offsets = points - points[0]
@@ -321,6 +319,7 @@ class PathCreator:
 
         centroid = points.mean(axis=0)
         centered = points - centroid
+        # Rows of vt by falling spread: e1, e2 span the best-fit plane, e3 is its normal.
         _, _, vt = np.linalg.svd(centered, full_matrices=False)
         e1, e2, e3 = vt[0], vt[1], vt[2]
 
@@ -328,6 +327,8 @@ class PathCreator:
         y = centered @ e2
         h = centered @ e3
 
+        # Kasa: (x-a)² + (y-b)² = r² rearranges to the linear x² + y² = 2a·x + 2b·y + c, with
+        # c = r² - a² - b², so a least-squares solve gives 2a, 2b, c directly.
         A = np.column_stack([x, y, np.ones(len(points))])
         params, _, _, _ = np.linalg.lstsq(A, x ** 2 + y ** 2, rcond=None)
 
@@ -367,7 +368,7 @@ class PathCreator:
         step_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
         total = float(np.sum(step_lengths))
         n_splits = int(np.ceil(total / max_len))
-        if seg_type == 'arc' and np.linalg.norm(points[-1] - points[0]) <= self.cfg.tolerance:
+        if seg_type == 'arc' and np.linalg.norm(points[-1] - points[0]) <= self.cfg.path_tolerance:
             n_splits = max(n_splits, 2)
         if n_splits <= 1:
             return [(points, 0)]
@@ -396,9 +397,8 @@ class PathCreator:
     ) -> Seam:
         """Wrap positions into a Seam with per-point normals and metadata.
 
-        Args:
-            seam_points_subset: The SeamPoints the run was cut from.
-            start: Index of `points[0]` within `seam_points_subset`.
+        `seam_points_subset` is the SeamPoints the run was cut from, and `start` the index of
+        `points[0]` within it.
         """
         owners = seam_points_subset[start: start + len(points)]
         normals_main = [sp.normal_base for sp in owners]
@@ -408,22 +408,19 @@ class PathCreator:
         on_edge_1 = sum(sp.on_edge_1 for sp in seam_points_subset) > half
         on_edge_2 = sum(sp.on_edge_2 for sp in seam_points_subset) > half
 
+        config = SeamConfig(
+            smoothed_points=points,
+            normals_main=np.array(normals_main),
+            normals_secondary=np.array(normals_secondary),
+            on_edge_1=on_edge_1,
+            on_edge_2=on_edge_2,
+        )
+
+        # A piece `_split_by_length` cut from an arc can be too short to refit; it goes out as PTP.
         fit = self._fit_circle(points) if seg_type == 'arc' else None
         if seg_type == 'line':
-            seam = Seam(line_segment=LineSegment(start=points[0], end=points[-1]))
-        elif fit is not None:
-            seam = Seam(arc_segment=ArcSegment(
-                points=points, center=fit['center'], radius=fit['radius']))
-        else:
-            seg_type = 'ptp'
-            seam = Seam(ptp_segment=PtPSegment(points=points))
-
-        seam.config['is_edge_joint'] = on_edge_1 and on_edge_2
-        seam.config['on_edge_1'] = on_edge_1
-        seam.config['on_edge_2'] = on_edge_2
-        seam.config['geometry_type'] = seg_type
-        seam.config['smoothed_points'] = points
-        seam.config['normals_main'] = np.array(normals_main)
-        seam.config['normals_secondary'] = np.array(normals_secondary)
-
-        return seam
+            return Seam(line_segment=LineSegment(start=points[0], end=points[-1]), config=config)
+        if fit is not None:
+            return Seam(arc_segment=ArcSegment(
+                points=points, center=fit['center'], radius=fit['radius']), config=config)
+        return Seam(ptp_segment=PtPSegment(points=points), config=config)

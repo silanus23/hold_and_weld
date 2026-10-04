@@ -51,7 +51,7 @@ def ellipse_points(a=0.1, b=0.08, n=120):
 
 def max_distance_to_curve(seam, curve):
     """Max distance from a seam's stored points to a densely sampled curve."""
-    pts = seam.config['smoothed_points']
+    pts = seam.config.smoothed_points
     d = np.linalg.norm(pts[:, None, :] - curve[None, :, :], axis=2)
     return float(np.max(np.min(d, axis=1)))
 
@@ -68,7 +68,7 @@ class TestLine:
         positions = np.column_stack([t, 0.5 * t, np.zeros(40)])
         seams = creator.process_path(make_seam_points(positions))
         assert len(seams) == 1
-        assert seams[0].config['geometry_type'] == 'line'
+        assert seams[0].segment_type == 'line'
 
     def test_noisy_line_within_tolerance_is_line(self, creator):
         rng = np.random.default_rng(7)
@@ -77,7 +77,7 @@ class TestLine:
         positions[:, 1] += rng.uniform(-3e-4, 3e-4, 60)  # < 1mm tolerance
         seams = creator.process_path(make_seam_points(positions))
         assert len(seams) == 1
-        assert seams[0].config['geometry_type'] == 'line'
+        assert seams[0].segment_type == 'line'
 
     def test_gentle_curve_below_tolerance_is_line(self, creator):
         # Deviation from straight stays under path tolerance: line by design.
@@ -96,14 +96,14 @@ class TestLine:
         positions = np.column_stack([t, sag, np.zeros(60)])
         seams = creator.process_path(make_seam_points(positions))
         for seam in seams:
-            if seam.config['geometry_type'] != 'line':
+            if seam.segment_type != 'line':
                 continue
-            points = seam.config['smoothed_points']
+            points = seam.config.smoothed_points
             chord = points[-1] - points[0]
             chord /= np.linalg.norm(chord)
             offsets = points - points[0]
             off_chord = offsets - np.outer(offsets @ chord, chord)
-            assert np.max(np.linalg.norm(off_chord, axis=1)) <= creator.cfg.tolerance
+            assert np.max(np.linalg.norm(off_chord, axis=1)) <= creator.cfg.path_tolerance
 
 
 class TestCircle:
@@ -115,9 +115,9 @@ class TestCircle:
         seams = creator.process_path(make_seam_points(positions), is_closed=True)
         assert len(seams) >= 2
         for seam in seams:
-            assert seam.config['geometry_type'] == 'arc'
-            points = seam.config['smoothed_points']
-            assert np.linalg.norm(points[-1] - points[0]) > creator.cfg.tolerance
+            assert seam.segment_type == 'arc'
+            points = seam.config.smoothed_points
+            assert np.linalg.norm(points[-1] - points[0]) > creator.cfg.path_tolerance
         total = sum(seam.length() for seam in seams)
         assert total == pytest.approx(2.0 * np.pi * 0.1, rel=1e-2)
 
@@ -126,14 +126,14 @@ class TestCircle:
         positions = circle_points(radius=0.02, n=60, closed=True)
         seams = creator.process_path(make_seam_points(positions), is_closed=True)
         for seam in seams:
-            points = seam.config['smoothed_points']
-            assert np.linalg.norm(points[-1] - points[0]) > creator.cfg.tolerance
+            points = seam.config.smoothed_points
+            assert np.linalg.norm(points[-1] - points[0]) > creator.cfg.path_tolerance
 
     def test_open_arc_is_arc(self, creator):
         positions = circle_points(closed=False)
         seams = creator.process_path(make_seam_points(positions))
         assert len(seams) == 1
-        assert seams[0].config['geometry_type'] == 'arc'
+        assert seams[0].segment_type == 'arc'
 
 
 class TestEllipseSafety:
@@ -174,8 +174,8 @@ class TestPtP:
         assert len(seams) >= 1
         # No fitted primitive may claim an erratic walk.
         for seam in seams:
-            if seam.config['geometry_type'] in ('line', 'arc'):
-                pts = seam.config['smoothed_points']
+            if seam.segment_type in ('line', 'arc'):
+                pts = seam.config.smoothed_points
                 assert len(pts) < len(positions)
 
 
@@ -230,7 +230,7 @@ class TestJoinConsecutive:
             seam.is_generated = True
 
             exported = seam.to_dict()
-            stored = seam.config['smoothed_points']
+            stored = seam.config.smoothed_points
             np.testing.assert_allclose(exported['start'], stored[0], atol=1e-12)
             np.testing.assert_allclose(exported['end'], stored[-1], atol=1e-12)
 
@@ -241,8 +241,8 @@ class TestJoinConsecutive:
 
         for seam, following in zip(seams, seams[1:]):
             np.testing.assert_allclose(
-                seam.config['smoothed_points'][-1],
-                following.config['smoothed_points'][0],
+                seam.config.smoothed_points[-1],
+                following.config.smoothed_points[0],
                 atol=1e-12,
             )
 
@@ -252,9 +252,9 @@ class TestJoinConsecutive:
         seams = creator.process_path(points, is_closed=False)
 
         for seam in seams:
-            count = len(seam.config['smoothed_points'])
-            assert len(seam.config['normals_main']) == count
-            assert len(seam.config['normals_secondary']) == count
+            count = len(seam.config.smoothed_points)
+            assert len(seam.config.normals_main) == count
+            assert len(seam.config.normals_secondary) == count
 
     def test_segment_length_follows_the_extended_points(self, creator):
         # `length()` reads the same `points`, so a stale array under-reports
@@ -263,7 +263,7 @@ class TestJoinConsecutive:
         seams = creator.process_path(points, is_closed=False)
 
         for seam in seams:
-            stored = seam.config['smoothed_points']
+            stored = seam.config.smoothed_points
             if seam.segment_type == 'line':
                 continue
             expected = float(np.sum(
@@ -287,8 +287,8 @@ class TestSegmentIndexing:
         seams = creator.process_path(points, is_closed=False)
 
         for seam in seams:
-            stored = seam.config['smoothed_points']
-            normals = seam.config['normals_main']
+            stored = seam.config.smoothed_points
+            normals = seam.config.normals_main
             # The join appends one point from the NEXT seam, whose normal is
             # taken from there too; every other point must match its own.
             for point, normal in zip(stored, normals):

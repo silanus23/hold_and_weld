@@ -18,7 +18,7 @@ from hold_and_weld_planning.planning.job_planner import JobPlanner
 
 import pytest
 
-REQUIRED = {'work_angle_deg': 45.0, 'travel_angle_deg': 0.0, 'gap_mm': 1.0}
+REQUIRED = {'work_angle_deg': 45.0, 'travel_angle_deg': 0.0, 'gap': 0.001}
 
 
 class TestParameterIsolation:
@@ -80,8 +80,9 @@ class TestParameterValidation:
     """A bad value fails at construction, before any geometry is loaded."""
 
     @pytest.mark.parametrize('main,secondary,bad', [
-        ('a.stl', 'b.stl', {'gap_mm': -1.0}),
-        ('a.stl', 'b.stl', {'path_tolerance_mm': 0.0}),
+        ('a.stl', 'b.stl', {'gap': -1.0}),
+        ('a.stl', 'b.stl', {'gap_mm': 40.0}),
+        ('a.stl', 'b.stl', {'path_tolerance': 0.0}),
         ('a.stl', 'b.stl', {'refine_iterations': 1.5}),
         ('a.step', 'b.step', {'coincidence_samples': 1}),
     ])

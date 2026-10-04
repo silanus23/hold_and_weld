@@ -15,11 +15,7 @@
 """Turn loose contact-boundary edges into ordered, oriented seam polylines.
 
 Four steps, in the order `SeamExtractorMesh.extract_chains` applies them: `loops`, `oriented`,
-`drop_coincident`, `stitch`.
-
-Plain functions of their arguments, reading only vertex positions and `SeamExtractorMeshParams`
-tuning - kept separate from `SeamExtractorMesh` so they can be tested against plain arrays, no mesh
-or extractor required.
+`drop_coincident`, `stitch`. `reject_holes` runs later, on each chain as refinement thresholds it.
 """
 
 import logging
@@ -145,6 +141,7 @@ def drop_coincident(
             n_other = len(others)
             if other_index == index or n_other < n_pos:
                 continue
+            # Between equally sampled pieces the lower index survives, so exactly one is kept.
             if n_other == n_pos and other_index > index:
                 continue
             max_dist = trees[other_index].query(positions)[0].max()
@@ -161,6 +158,14 @@ def drop_coincident(
     return keep
 
 
+# TODO(silanus23): small extra chains sometimes come out where two chains meet. Root cause not
+# pinned down yet. Suspects in stitch's scope:
+# - it doesn't know which mesh a piece came from, so it can join or leave same-mesh pieces
+#   that `loops` cut at a crossing; only `gap == 0.0` keeps it off those cuts
+# - the merge is greedy, joining the first pair within tolerance rather than the closest, so
+#   with three or more ends close together the scan order picks the partner
+# - a short piece that matches no partner passes through as its own chain; nothing drops it
+# It also decides whether each open chain is closed, which isn't joining.
 def stitch(
     pieces: list[tuple[NDArray, bool]], cfg: SeamExtractorMeshParams
 ) -> list[tuple[NDArray, bool]]:
@@ -169,6 +174,9 @@ def stitch(
     Each mesh contributes only the portion of the seam where it terminates, and the two share no
     vertices, so the pieces meet with a gap of roughly one segment. Closing those gaps gives one
     chain whose ownership alternates along its length.
+
+    Args:
+        pieces: (positions, is_closed) per piece, from either mesh; nothing records which.
 
     Returns:
         Closed chains pass through untouched; an open chain that closes on itself is returned
@@ -236,9 +244,81 @@ def stitch(
         # A straight run's ends sit its whole length apart, so a chain only a few samples long
         # passes the spacing test alone; a loop has to turn back toward its start.
         closed = gap <= cfg.stitch_gap_factor * span(piece) and gap <= length / 2.0
-        # Closing doesn't make the last point redundant - the gap that closed it is a real step.
+        # Closing doesn't make the last point redundant so the gap that closed it is a real step.
         # Only a last point landed exactly ON the first is a repeat.
         if gap == 0.0:
             array = array[:-1]
         result.append((array, closed))
     return result
+
+
+def reject_holes(
+    inside: NDArray, positions: NDArray, rho: NDArray,
+    is_closed: bool = False,
+) -> NDArray:
+    """Restore interior drop blocks that are holes rather than corners.
+
+    A block at a chain END is an ordinary trim. A block in the MIDDLE splits the chain, and its
+    ends get slid inward onto the level set, right at a real crossing, but catastrophic anywhere
+    else, since it carves a stretch out of the middle of a weld.
+
+    At a real crossing the seam leaves and re-enters the contact at the SAME place, so the
+    surviving points either side sit almost on top of each other. A coverage failure mid-seam
+    leaves a hole instead, its ends as far apart as the stretch that was lost. When they're
+    farther apart than the analysis scale, the points are kept rather than trusting a field that
+    has evidently gone wrong there.
+
+    Args:
+        inside: Per-point contact mask, as thresholding `coverage` at a half produced it. Modified
+            in place.
+        rho: Kernel radius used at each point; its maximum over a block is that block's analysis
+            scale.
+        is_closed: True when the chain wraps, so index 0 follows index N-1: no block sits at an
+            end, and one touching both ends of the array is a single block across the wrap.
+
+    Returns:
+        The same mask, with hole blocks restored to True.
+    """
+    count = len(inside)
+    blocks: list[tuple[int, int]] = []
+    start: int | None = None
+    for i, ok in enumerate(inside):
+        if not ok and start is None:
+            start = i
+        elif ok and start is not None:
+            blocks.append((start, i - 1))
+            start = None
+    if start is not None:
+        blocks.append((start, count - 1))
+
+    # On a closed chain, a block against each end is one block straddling the wrap, joined here so
+    # it's measured once, not as two phantom ends.
+    if is_closed and len(blocks) > 1 and blocks[0][0] == 0 and blocks[-1][1] == count - 1:
+        head, tail = blocks.pop(0), blocks.pop()
+        blocks.append((tail[0], head[1] + count))
+
+    restored = 0
+    for first, last in blocks:
+        if not is_closed and (first == 0 or last == count - 1):
+            continue                      # a chain end, so an ordinary trim
+        # Modulo, so a block written across the wrap reads its neighbours and its own points from
+        # the far end of the array.
+        block = [i % count for i in range(first, last + 1)]
+        before, after = (first - 1) % count, (last + 1) % count
+        span = float(np.linalg.norm(positions[after] - positions[before]))
+        scale = float(np.max(rho[block]))
+        if span <= scale:
+            continue                      # ends meet: a crossing
+        inside[block] = True
+        restored += len(block)
+        logger.warning(
+            f'Coverage drops {len(block)} point(s) mid-chain whose '
+            f'surviving ends are {span * 1000:.2f}mm apart, past the '
+            f'{scale * 1000:.2f}mm analysis scale; that is a hole, not a '
+            'corner, so the points are kept. Suspect rho or the mating '
+            'normal there.'
+        )
+
+    if restored:
+        logger.info(f'Restored {restored} point(s) over {len(blocks)} drop block(s)')
+    return inside

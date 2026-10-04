@@ -47,18 +47,7 @@ class MeshLoader:
         world_transform: NDArray | None = None,
         refine_iterations: int = MeshLoadParams.refine_iterations,
     ) -> None:
-        """Initialize mesh loader and build manifold.
-
-        Args:
-            mesh_path: Path to mesh file (supports package:// URIs)
-            world_transform: Global pose matrix (4x4) to apply after loading.
-                Defaults to identity.
-            refine_iterations: Pieces each edge is split into; see MeshLoadParams
-
-        Raises:
-            ValueError: If mesh loading or conversion fails
-            FileNotFoundError: If file doesn't exist
-        """
+        """Initialize mesh loader and build manifold."""
         world_transform = as_world_transform(world_transform)
 
         refine_iterations = MeshLoadParams.from_dict(
@@ -132,7 +121,7 @@ class MeshLoader:
 
             manifold_obj += solid
 
-        # Apply world transform (manifold3d uses 3x4 matrix: [R|t])
+        # manifold3d takes a 3x4 [R|t], not a 4x4.
         mat_3x4 = self.world_transform[:3, :].tolist()
         manifold_obj = manifold_obj.transform(mat_3x4)
 

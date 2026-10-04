@@ -64,9 +64,9 @@ extract exact intersection edges. For each intersection edge, wall surfaces are 
 based on whether a real boundary edge exists on the kissing face. Normals are evaluated
 directly from OCCT surface properties at each point; whichever part has a real boundary
 edge on the seam supplies the wall normal, and the other carries the base surface. The
-geometry is exact and only `epsilon` and `num_smooth_points` are read, so it is far less
-parameter-sensitive than the mesh pipeline — but it is not judgement-free, and it has no
-tests of its own. Pipe joint detection is under development.
+geometry is exact and only `epsilon`, `num_smooth_points` and `coincidence_samples` are
+read, so it is far less parameter-sensitive than the mesh pipeline — but it is not
+judgement-free. Pipe joint detection is under development.
 
 ## Results
 
