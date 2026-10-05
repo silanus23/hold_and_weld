@@ -14,14 +14,14 @@
 #        y: 0.0
 #        z: 0.0
 #        w: 1.0
-
+#
 #    child_link:
-#      urdf_path: 'urdf/environment/cylinder.urdf.xacro'
+#      urdf_path: 'urdf/environment/cube.urdf.xacro'
 #      id: 'child_link'
 #      spawn_name: 'cylinder_final_boss'
 #      pose:
-#        x: 1.6
-#        y: -0.5
+#        x: 1.2
+#        y: 0.3
 #        z: 0.125
 #      end_pose:
 #        position:
@@ -33,7 +33,7 @@
 #          y: 0.0
 #          z: 0.0
 #          w: 1.0
-
+#
 #    frame_id: 'world'
 
 # ── HC10DT + GP8L: robotiq_cube held on the small table ──────────────────────────
@@ -180,8 +180,8 @@
 #       spawn_name: 'elliptic_part_straight'
 #       pose:
 #         x: 1.2
-#         y: 0.3
-#         z: 0.05
+#         y: 0.0
+#         z: 0.125
 #       end_pose:
 #         position:
 #           x: 1.2
@@ -234,4 +234,51 @@
 #
 #     frame_id: 'world'
 
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Butt joint: two workpiece plates, yawed 90° ───────────────────────────────
+# end_pose must match the secondary_part pose in hold_and_weld_planning
+# urdf_welding_conf.yaml. Yawed, each plate spans 0.40 m in x and 0.80 m in y,
+# so the two meet edge to edge at y = -0.1.
+#/**:
+#   ros__parameters:
+#     base_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'base_link'
+#       spawn_name: 'workpiece_butt_main'
+#       pose:
+#         x: 1.2
+#         y: -0.5
+#         z: 0.65
+#       orientation:
+#         x: 0.0
+#         y: 0.0
+#         z: 0.7071068
+#         w: 0.7071068
+#
+#     child_link:
+#       urdf_path: 'urdf/environment/workpiece.urdf.xacro'
+#       id: 'child_link'
+#       spawn_name: 'workpiece_butt_secondary'
+#       pose:
+#         x: 1.2
+#         y: 0.3
+#         z: 0.15
+#       orientation:
+#         x: 0.0
+#         y: 0.0
+#         z: 0.7071068
+#         w: 0.7071068
+#       end_pose:
+#         position:
+#           x: 1.2
+#           y: 0.3
+#           z: 0.65
+#         orientation:
+#           x: 0.0
+#           y: 0.0
+#           z: 0.7071068
+#           w: 0.7071068
+
+     frame_id: 'world'
 # ──────────────────────────────────────────────────────────────────────────────

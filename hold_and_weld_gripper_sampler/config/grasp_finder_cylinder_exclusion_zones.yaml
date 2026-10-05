@@ -110,5 +110,5 @@
       triangulation_deflection: 0.0005
 
     output:
-      max_grasps: 15
+      max_grasps: 5
       min_quality: 0.0

@@ -200,6 +200,9 @@ parameters:
   # 0.10 -> +4.71 mm, 0.50 -> +36.31 mm. The seam count (8) does not change with
   # it; that fragmentation comes from PathCreator._split_on_contact_type.
   near_contact_edge_fraction: 0.1
+  # The elliptic mesh scene's -y overhang crosses the plate rim in only 2 edges (20mm each), a
+  # 3-vertex chain the default of 4 discards, leaving the seam open with a ~46mm hole there.
+  min_loop_points: 3
   #stitch_gap_factor: 3.0
 
   # ── Mesh intersection ──────────────────────────────────────────────────────
