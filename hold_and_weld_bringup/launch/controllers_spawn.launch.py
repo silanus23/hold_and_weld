@@ -19,10 +19,52 @@ Spawns robot controllers in sequence using event-based actions.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+# Controllers each robot_type spawns after joint_state_broadcaster, in order. A
+# controller missing from the controller_manager fails its spawner, so each bringup
+# must only name the slots its URDF has.
+CONTROLLERS_BY_ROBOT_TYPE = {
+    'gripper': ['robot1_arm_controller', 'robot1_gripper_controller'],
+    'welder': ['robot2_arm_controller'],
+    'dual': ['robot1_arm_controller', 'robot1_gripper_controller', 'robot2_arm_controller'],
+}
+
+
+def spawner(controller, use_sim_time, controller_manager_timeout):
+    """Spawner node for one controller."""
+    return Node(
+        package='controller_manager',
+        executable='spawner',
+        name=f'spawner_{controller}',
+        arguments=[
+            controller,
+            '--controller-manager', '/controller_manager',
+            '--controller-manager-timeout', controller_manager_timeout,
+        ],
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen',
+    )
+
+
+def launch_setup(context):
+    """Chain the spawners of the selected robot_type, each after the previous exits."""
+    robot_type = LaunchConfiguration('robot_type').perform(context)
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    controller_manager_timeout = LaunchConfiguration('controller_manager_timeout')
+
+    previous = spawner('joint_state_broadcaster', use_sim_time, controller_manager_timeout)
+    actions = [previous]
+    for controller in CONTROLLERS_BY_ROBOT_TYPE[robot_type]:
+        current = spawner(controller, use_sim_time, controller_manager_timeout)
+        actions.append(RegisterEventHandler(
+            event_handler=OnProcessExit(target_action=previous, on_exit=[current])
+        ))
+        previous = current
+    return actions
 
 
 def generate_launch_description():
@@ -46,87 +88,4 @@ def generate_launch_description():
         ),
     ]
 
-    use_sim_time = LaunchConfiguration('use_sim_time')
-    controller_manager_timeout = LaunchConfiguration('controller_manager_timeout')
-
-    joint_state_broadcaster = Node(
-        package='controller_manager',
-        executable='spawner',
-        name='spawner_joint_state_broadcaster',
-        arguments=[
-            'joint_state_broadcaster',
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', controller_manager_timeout,
-        ],
-        parameters=[{'use_sim_time': use_sim_time}],
-        output='screen',
-    )
-
-    robot1_arm_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        name='spawner_robot1_arm_controller',
-        arguments=[
-            'robot1_arm_controller',
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', controller_manager_timeout,
-        ],
-        parameters=[{'use_sim_time': use_sim_time}],
-        output='screen',
-    )
-
-    robot1_arm_controller = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=joint_state_broadcaster,
-            on_exit=[robot1_arm_controller_spawner],
-        )
-    )
-
-    gripper_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        name='spawner_robot1_gripper_controller',
-        arguments=[
-            'robot1_gripper_controller',
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', controller_manager_timeout,
-        ],
-        parameters=[{'use_sim_time': use_sim_time}],
-        output='screen',
-    )
-
-    gripper_controller = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=robot1_arm_controller_spawner,
-            on_exit=[gripper_controller_spawner],
-        )
-    )
-
-    robot2_arm_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        name='spawner_robot2_arm_controller',
-        arguments=[
-            'robot2_arm_controller',
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', controller_manager_timeout,
-        ],
-        parameters=[{'use_sim_time': use_sim_time}],
-        output='screen',
-    )
-
-    robot2_arm_controller = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=gripper_controller_spawner,
-            on_exit=[robot2_arm_controller_spawner],
-        )
-    )
-
-    nodes = [
-        joint_state_broadcaster,
-        robot1_arm_controller,
-        gripper_controller,
-        robot2_arm_controller,
-    ]
-
-    return LaunchDescription(declared_arguments + nodes)
+    return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])

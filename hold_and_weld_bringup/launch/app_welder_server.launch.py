@@ -27,10 +27,11 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.event_handlers import OnProcessStart
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import FileContent, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
+from launch_ros.parameter_descriptions import ParameterValue
 from lifecycle_msgs.msg import Transition
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +43,11 @@ def generate_launch_description():
     desc_pkg = get_package_share_directory('hold_and_weld_description')
 
     declared_arguments = [
+        DeclareLaunchArgument(
+            'robot_description_file',
+            default_value='dual_robot.srdf',
+            description='SRDF file in hold_and_weld_description/config; must match the URDF',
+        ),
         DeclareLaunchArgument(
             'welder_group_name',
             default_value='robot2_welder_arm',
@@ -75,11 +81,12 @@ def generate_launch_description():
     auto_trigger_delay_sec = LaunchConfiguration('auto_trigger_delay_sec')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
-    srdf_file = os.path.join(desc_pkg, 'config', 'dual_robot.srdf')
-    with open(srdf_file, 'r') as file:
-        robot_description_semantic_content = file.read()
     robot_description_semantic = {
-        'robot_description_semantic': robot_description_semantic_content
+        'robot_description_semantic': ParameterValue(
+            FileContent(PathJoinSubstitution(
+                [desc_pkg, 'config', LaunchConfiguration('robot_description_file')])),
+            value_type=str,
+        )
     }
 
     kinematics_yaml_dict = load_yaml(

@@ -67,7 +67,8 @@ def launch_setup(context, *args, **kwargs):
             f'planning_pipelines {pipeline_names}'
         )
 
-    srdf_file = os.path.join(desc_pkg, 'config', 'dual_robot.srdf')
+    srdf_file = os.path.join(
+        desc_pkg, 'config', LaunchConfiguration('robot_description_file').perform(context))
     with open(srdf_file, 'r') as file:
         robot_description_semantic_content = file.read()
     robot_description_semantic = {

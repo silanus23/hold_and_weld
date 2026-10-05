@@ -161,6 +161,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_rviz.launch.py']),
         condition=IfCondition(use_rviz),
         launch_arguments={
+            'robot_description_file': 'robot2_welder.srdf',
             'use_rviz': use_rviz,
             'use_sim_time': use_sim_time,
         }.items(),
@@ -179,6 +180,7 @@ def generate_launch_description():
     welder_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_welder_server.launch.py']),
         launch_arguments={
+            'robot_description_file': 'robot2_welder.srdf',
             'auto_trigger': auto_trigger,
             'auto_trigger_delay_sec': auto_trigger_delay_sec,
             'use_sim_time': use_sim_time,

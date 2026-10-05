@@ -140,6 +140,7 @@ def generate_launch_description():
     rviz = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/moveit_rviz.launch.py']),
         launch_arguments={
+            'robot_description_file': 'robot1_gripper.srdf',
             'use_rviz': use_rviz,
             'use_sim_time': use_sim_time,
         }.items(),
@@ -157,6 +158,7 @@ def generate_launch_description():
     gripper_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([bringup_launch_dir, '/app_gripper_server.launch.py']),
         launch_arguments={
+            'robot_description_file': 'robot1_gripper.srdf',
             'auto_trigger': auto_trigger,
             'auto_trigger_delay_sec': auto_trigger_delay_sec,
             'gazebo_attach': gazebo_attach,
