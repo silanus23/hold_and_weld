@@ -365,6 +365,18 @@ private:
    */
   bool retreat_from_part(const std::string & seam_id, const std::function<bool()> & should_stop);
 
+  /**
+   * @brief Block until every active joint of the welder group is claimed by an active
+   * controller in the controller_manager.
+   *
+   * Matches on joints, not on a controller name, so any controller driving the group
+   * counts. The welder-only bringup activates it seconds after this server is up.
+   *
+   * @return false (with the reason logged) if the joints are not all claimed within
+   *         controller_timeout_sec, or the job was stopped.
+   */
+  bool wait_for_welder_controller(const std::function<bool()> & should_stop);
+
   rclcpp_action::Server<TriggerWelder>::SharedPtr action_server_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
@@ -392,6 +404,9 @@ private:
   rclcpp::Logger logger_;
 
   std::chrono::nanoseconds shutdown_wait_time_{0};
+  std::chrono::nanoseconds controller_timeout_{0};
+  rclcpp::Client<controller_manager_msgs::srv::ListControllers>::SharedPtr
+    list_controllers_client_;
   bool auto_trigger_ = false;
   double auto_trigger_delay_sec_ = 3.0;
   bool auto_trigger_fired_ = false;

@@ -131,6 +131,7 @@ WelderActionServer::WelderActionServer(const rclcpp::NodeOptions & options)
   declare_parameter("auto_load_latest", true);
   declare_parameter("trajectory_directory", "");
   declare_parameter("shutdown_wait_sec", 5.0);
+  declare_parameter("controller_timeout_sec", 60.0);
 }
 
 WelderActionServer::~WelderActionServer()
@@ -224,6 +225,13 @@ CallbackReturn WelderActionServer::on_configure(const rclcpp_lifecycle::State & 
     return CallbackReturn::FAILURE;
   }
   shutdown_wait_time_ = hold_and_weld::to_nanoseconds(shutdown_wait_sec);
+  const double controller_timeout_sec = get_parameter("controller_timeout_sec").as_double();
+  if (!(controller_timeout_sec > 0.0 && controller_timeout_sec <= 600.0)) {
+    RCLCPP_ERROR(logger_, "controller_timeout_sec must be in (0, 600], got %.3f",
+      controller_timeout_sec);
+    return CallbackReturn::FAILURE;
+  }
+  controller_timeout_ = hold_and_weld::to_nanoseconds(controller_timeout_sec);
   auto_load_latest_ = get_parameter("auto_load_latest").as_bool();
   trajectory_directory_ = get_parameter("trajectory_directory").as_string();
 
@@ -267,7 +275,7 @@ CallbackReturn WelderActionServer::on_configure(const rclcpp_lifecycle::State & 
   {
     return CallbackReturn::FAILURE;
   }
-  RCLCPP_INFO(logger_, "Controllers are ready");
+  RCLCPP_INFO(logger_, "controller_manager is available");
 
   if (config_.use_approach_validator) {
     RCLCPP_WARN(logger_, "use_approach_validation is a legacy option; prefer "
@@ -317,6 +325,10 @@ CallbackReturn WelderActionServer::on_configure(const rclcpp_lifecycle::State & 
     }
 
     internal_node->declare_parameter("robot_description", urdf_string);
+
+    // On the internal node, spun by moveit_executor_, so a job can call it.
+    list_controllers_client_ = internal_node->create_client<
+      controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
 
     moveit_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     moveit_executor_->add_node(internal_node);
@@ -544,6 +556,7 @@ CallbackReturn WelderActionServer::on_cleanup(const rclcpp_lifecycle::State & /*
     std::lock_guard<std::mutex> lock(move_group_mutex_);
     move_group_.reset();
   }
+  list_controllers_client_.reset();
 
   try {
     if (moveit_executor_) {
@@ -903,6 +916,18 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
     return;
   }
 
+  if (!wait_for_welder_controller(should_stop)) {
+    if (should_stop()) {
+      end_stopped();
+      return;
+    }
+    result->success = false;
+    result->message = "No active controller drives group '" + config_.welder_group_name +
+      "' (see the server log)";
+    goal_handle->abort(result);
+    return;
+  }
+
   std::string json_path;
   if (!config_.json_file.empty() && config_.json_file != "auto") {
     json_path = config_.json_file;
@@ -1052,6 +1077,44 @@ void WelderActionServer::execute_weld(const std::shared_ptr<GoalHandleTriggerWel
   } else {
     goal_handle->abort(result);
   }
+}
+
+bool WelderActionServer::wait_for_welder_controller(const std::function<bool()> & should_stop)
+{
+  const std::vector<std::string> joints = move_group_->getActiveJoints();
+  const auto deadline = std::chrono::steady_clock::now() + controller_timeout_;
+  std::vector<std::string> missing = joints;
+  bool logged_wait = false;
+  while (rclcpp::ok() && std::chrono::steady_clock::now() < deadline) {
+    if (should_stop()) {
+      RCLCPP_WARN(logger_, "Stopped while waiting for the %s controller",
+        config_.welder_group_name.c_str());
+      return false;
+    }
+    auto request = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
+    auto future = list_controllers_client_->async_send_request(request);
+    if (future.wait_for(std::chrono::seconds(1)) == std::future_status::ready) {
+      missing = hold_and_weld::joints_without_active_controller(future.get()->controller, joints);
+      if (missing.empty()) {
+        return true;
+      }
+    } else {
+      list_controllers_client_->remove_pending_request(future);
+    }
+    if (!logged_wait) {
+      RCLCPP_INFO(logger_, "Waiting for an active controller to drive group '%s'",
+        config_.welder_group_name.c_str());
+      logged_wait = true;
+    }
+    rclcpp::sleep_for(std::chrono::milliseconds(250));
+  }
+  std::string missing_list;
+  for (const auto & joint : missing) {
+    missing_list += (missing_list.empty() ? "" : ", ") + joint;
+  }
+  RCLCPP_ERROR(logger_, "No active controller claims %s after %.1f s", missing_list.c_str(),
+    std::chrono::duration<double>(controller_timeout_).count());
+  return false;
 }
 
 bool WelderActionServer::move_to_seam_boundary(

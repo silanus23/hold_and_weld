@@ -235,6 +235,45 @@ inline bool is_controller_active(
            });
 }
 
+/**
+ * @brief Joints of @p joints that no active controller claims a command interface on.
+ *
+ * Lets a server wait for "whatever drives my planning group" without knowing the
+ * controller's name.
+ *
+ * @param controllers Controllers as listed by controller_manager/list_controllers.
+ * @param joints Joints that must be driven, e.g. a planning group's active joints.
+ * @return The unclaimed joints, in @p joints order; empty when all are driven.
+ */
+inline std::vector<std::string> joints_without_active_controller(
+  const std::vector<controller_manager_msgs::msg::ControllerState> & controllers,
+  const std::vector<std::string> & joints)
+{
+  auto claims = [](const controller_manager_msgs::msg::ControllerState & controller,
+    const std::string & joint) {
+      if (controller.state != "active") {
+        return false;
+      }
+      const std::string prefix = joint + "/";
+      for (const auto & interface : controller.claimed_interfaces) {
+        if (interface.rfind(prefix, 0) == 0) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+  std::vector<std::string> missing;
+  for (const auto & joint : joints) {
+    const bool claimed = std::any_of(controllers.begin(), controllers.end(),
+        [&](const auto & controller) {return claims(controller, joint);});
+    if (!claimed) {
+      missing.push_back(joint);
+    }
+  }
+  return missing;
+}
+
 }  // namespace hold_and_weld
 
 #endif  // HOLD_AND_WELD_APPLICATION__UTILS_HPP_
