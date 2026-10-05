@@ -36,8 +36,9 @@ from interactive_markers import InteractiveMarkerServer
 from moveit_msgs.msg import CollisionObject
 import rclpy
 from rclpy.node import Node
-from shape_msgs.msg import SolidPrimitive
+from shape_msgs.msg import Mesh, MeshTriangle, SolidPrimitive
 from std_msgs.msg import ColorRGBA, Header
+import trimesh
 from visualization_msgs.msg import (
     InteractiveMarker,
     InteractiveMarkerControl,
@@ -213,8 +214,12 @@ class FingerVisualizer(Node):
             if geometry is None:
                 continue
 
-            primitive = self._geometry_to_primitive(geometry, object_id)
-            if primitive is None:
+            mesh_element = geometry.find('mesh')
+            if mesh_element is not None:
+                shape = self._load_mesh(mesh_element)
+            else:
+                shape = self._geometry_to_primitive(geometry, object_id)
+            if shape is None:
                 continue
 
             local_x, local_y, local_z = 0.0, 0.0, 0.0
@@ -233,10 +238,14 @@ class FingerVisualizer(Node):
             pose.orientation.z = float(orient_cfg.get('z', 0.0))
             pose.orientation.w = float(orient_cfg.get('w', 1.0))
 
-            collision_obj.primitives.append(primitive)
-            collision_obj.primitive_poses.append(pose)
+            if isinstance(shape, Mesh):
+                collision_obj.meshes.append(shape)
+                collision_obj.mesh_poses.append(pose)
+            else:
+                collision_obj.primitives.append(shape)
+                collision_obj.primitive_poses.append(pose)
 
-        if not collision_obj.primitives:
+        if not collision_obj.primitives and not collision_obj.meshes:
             self.get_logger().error(
                 f"All collision geometries failed to parse for '{object_id}'"
             )
@@ -278,9 +287,34 @@ class FingerVisualizer(Node):
             return p
 
         self.get_logger().warn(
-            f"Unknown geometry type for '{object_id}' — only box/cylinder/sphere supported."
+            f"Unknown geometry type for '{object_id}' — only box/cylinder/sphere/mesh supported."
         )
         return None
+
+    def _load_mesh(self, mesh_element: ET.Element):
+        """Load a URDF <mesh> element's file as a shape_msgs Mesh, or None on failure."""
+        filename = mesh_element.get('filename', '')
+        if filename.startswith('package://'):
+            package, _, relative = filename[len('package://'):].partition('/')
+            filename = os.path.join(get_package_share_directory(package), relative)
+        elif filename.startswith('file://'):
+            filename = filename[len('file://'):]
+
+        try:
+            loaded = trimesh.load(filename, force='mesh')
+        except (OSError, ValueError) as e:
+            self.get_logger().error(f'Failed to load mesh {filename}: {e}')
+            return None
+
+        scale = mesh_element.get('scale')
+        if scale:
+            loaded.apply_scale([float(x) for x in scale.split()])
+
+        mesh = Mesh()
+        mesh.vertices = [Point(x=float(x), y=float(y), z=float(z)) for x, y, z in loaded.vertices]
+        mesh.triangles = [
+            MeshTriangle(vertex_indices=[int(a), int(b), int(c)]) for a, b, c in loaded.faces]
+        return mesh
 
     def _visualize_latest_grasps(self):
         """Find the latest grasp JSON and publish all visualization markers."""
