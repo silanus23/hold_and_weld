@@ -111,14 +111,15 @@ class PathCreator:
             if np.array_equal(config.smoothed_points[-1], nxt.smoothed_points[0]):
                 continue
 
-            # The normals belong to the position, so take the NEXT seam's - they were evaluated
-            # there. WeldPlanner requires one per point.
+            # The position is the next seam's start, but the pose there is still welded against
+            # THIS seam's faces, so the normals repeat its own last ones; the next seam's can
+            # belong to the other mesh and flip the torch. WeldPlanner requires one per point.
             seam.config = replace(
                 config,
                 smoothed_points=np.vstack([config.smoothed_points, nxt.smoothed_points[0]]),
-                normals_main=np.vstack([config.normals_main, nxt.normals_main[0]]),
+                normals_main=np.vstack([config.normals_main, config.normals_main[-1]]),
                 normals_secondary=np.vstack(
-                    [config.normals_secondary, nxt.normals_secondary[0]]),
+                    [config.normals_secondary, config.normals_secondary[-1]]),
             )
 
             if seam.line_segment is not None:
@@ -131,15 +132,17 @@ class PathCreator:
     def _split_on_contact_type(self, seam_points: list[SeamPoint]) -> list[list[SeamPoint]]:
         """Group the chain into sublists of uniform joint character.
 
-        The character is (is_edge_joint, owner_side); a change in either ends a sublist. Short
-        runs (by LENGTH, since the two meshes sample at very different densities) are flicker at
-        ambiguous zones and get absorbed into a same-side neighbour, never across a mesh handoff.
-        A single-point run can't be fitted alone, so it rides with an adjacent sublist instead,
-        keeping its own normals.
+        The character is (is_edge_joint, owner_side); a change in either ends a sublist, except
+        that an edge joint ignores owner_side: both meshes end on the seam there, so the owner is
+        a tie-break that flickers. Short runs (by LENGTH, since the two meshes sample at very
+        different densities) are flicker at ambiguous zones and get absorbed into a same-side
+        neighbour, never across a mesh handoff. A single-point run can't be fitted alone, so it
+        rides with an adjacent sublist instead; `_wrap_in_seam` gives it that sublist's normals.
         """
         runs: list[list[Any]] = []
         for sp in seam_points:
-            t = (sp.on_edge_1 and sp.on_edge_2, sp.owner_side)
+            edge_joint = sp.on_edge_1 and sp.on_edge_2
+            t = (True, 0) if edge_joint else (False, sp.owner_side)
             if runs and runs[-1][0] == t:
                 runs[-1][1] += 1
             else:
@@ -401,8 +404,22 @@ class PathCreator:
         `points[0]` within it.
         """
         owners = seam_points_subset[start: start + len(points)]
-        normals_main = [sp.normal_base for sp in owners]
-        normals_secondary = [sp.normal_wall for sp in owners]
+        normals_main = np.array([sp.normal_base for sp in owners])
+        normals_secondary = np.array([sp.normal_wall for sp in owners])
+
+        # A point owned by the other mesh - edge-joint flicker, or the single point closing a
+        # loop - carries that mesh's normals, which can point the opposite way. It takes those of
+        # the nearest point owned by the seam's majority. A tie names no majority.
+        side = np.array([sp.owner_side for sp in owners])
+        count_1, count_2 = int((side == 1).sum()), int((side == 2).sum())
+        if count_1 != count_2:
+            majority = 1 if count_1 > count_2 else 2
+            good = np.nonzero(side == majority)[0]
+            bad = np.nonzero(side != majority)[0]
+            if len(bad):
+                nearest = good[np.argmin(np.abs(bad[:, None] - good[None, :]), axis=1)]
+                normals_main[bad] = normals_main[nearest]
+                normals_secondary[bad] = normals_secondary[nearest]
 
         half = len(seam_points_subset) / 2.0
         on_edge_1 = sum(sp.on_edge_1 for sp in seam_points_subset) > half
@@ -410,8 +427,8 @@ class PathCreator:
 
         config = SeamConfig(
             smoothed_points=points,
-            normals_main=np.array(normals_main),
-            normals_secondary=np.array(normals_secondary),
+            normals_main=normals_main,
+            normals_secondary=normals_secondary,
             on_edge_1=on_edge_1,
             on_edge_2=on_edge_2,
         )

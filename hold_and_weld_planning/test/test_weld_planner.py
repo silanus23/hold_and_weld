@@ -25,8 +25,8 @@ UP = np.array([0.0, 0.0, 1.0])
 SIDE = np.array([1.0, 0.0, 0.0])
 
 
-def line_seam(points, normals_main=None, normals_secondary=None):
-    """Build a flat (edge-on-surface) seam over the given points."""
+def line_seam(points, normals_main=None, normals_secondary=None, edge_joint=False):
+    """Build a seam over the given points, edge-on-surface unless edge_joint is set."""
     points = np.asarray(points, dtype=float)
     n = len(points)
     return Seam(
@@ -36,7 +36,7 @@ def line_seam(points, normals_main=None, normals_secondary=None):
             normals_main=np.tile(UP, (n, 1)) if normals_main is None else normals_main,
             normals_secondary=(
                 np.tile(SIDE, (n, 1)) if normals_secondary is None else normals_secondary),
-            on_edge_1=False,
+            on_edge_1=edge_joint,
             on_edge_2=True,
         ))
 
@@ -115,3 +115,24 @@ class TestDegenerateInput:
         seam = line_seam(points)
         with pytest.raises(ValueError, match='tangent'):
             WeldPlanner(dict(PARAMS)).generate_seam(seam)
+
+
+class TestGap:
+    """The gap backs the torch tip off along its own axis, away from the parts."""
+
+    def test_a_butt_joint_lifts_the_tip_off_both_plates(self):
+        # Plates side by side in x with their tops at z = 0. The base normal is the touching
+        # face of the other plate (+x), so stepping along it alone slides onto that plate.
+        points = along_y()
+        n = len(points)
+        seam = line_seam(
+            points, normals_main=np.tile(SIDE, (n, 1)), normals_secondary=np.tile(UP, (n, 1)),
+            edge_joint=True)
+
+        WeldPlanner(dict(PARAMS)).generate_seam(seam)
+
+        for pose in seam.poses:
+            matrix = np.array(pose['matrix'])
+            offset = matrix[:3, 3] - points[pose['index']]
+            assert offset[2] > 0.0
+            np.testing.assert_allclose(offset, -PARAMS['gap'] * matrix[:3, 2], atol=1e-9)

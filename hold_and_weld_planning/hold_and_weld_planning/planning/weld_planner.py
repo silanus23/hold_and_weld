@@ -211,11 +211,10 @@ class WeldPlanner:
         if is_edge_joint:
             main_direction = toward_wall
             lean_direction = -main_normal
-            gap_offset_direction = main_normal
         else:
             main_direction = -main_normal
             lean_direction = toward_wall
-            gap_offset_direction = -toward_wall + main_normal
+        gap_offset_direction = -toward_wall + main_normal
 
         gap_offset_direction_norm = np.linalg.norm(gap_offset_direction)
         if gap_offset_direction_norm > 1e-10:

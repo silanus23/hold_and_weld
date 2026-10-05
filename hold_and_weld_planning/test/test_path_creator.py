@@ -256,6 +256,20 @@ class TestJoinConsecutive:
             assert len(seam.config.normals_main) == count
             assert len(seam.config.normals_secondary) == count
 
+    def test_joined_end_keeps_its_own_seams_normals(self, creator):
+        # The joined point is where the next seam starts, but this seam's last pose is still
+        # welded against this seam's faces. Measured on the cylinder scene, the next seam's
+        # normals there swung the last pose by 91 degrees.
+        points = flipping_chain(straight_run())
+        for sp in points:
+            sp.normal_base = np.array([0.0, 0.0, 1.0 if sp.owner_side == 1 else -1.0])
+
+        seams = creator.process_path(points, is_closed=False)
+
+        for seam in seams:
+            normals = seam.config.normals_main
+            np.testing.assert_array_equal(normals, np.tile(normals[0], (len(normals), 1)))
+
     def test_segment_length_follows_the_extended_points(self, creator):
         # `length()` reads the same `points`, so a stale array under-reports
         # the weld by the joined step.
@@ -269,6 +283,25 @@ class TestJoinConsecutive:
             expected = float(np.sum(
                 np.linalg.norm(np.diff(stored, axis=0), axis=1)))
             assert seam.length() == pytest.approx(expected, abs=1e-12)
+
+
+class TestSplitOnContactType:
+
+    def test_owner_flicker_on_an_edge_joint_does_not_split(self, creator):
+        # A butt joint: both meshes end on the seam, so which one owns it is a tie broken by
+        # turning density, which flickers. Measured on two plates end to end, the flicker came
+        # out as 22.5mm PtP seams. Kept in the seam, a flickered point's base normal is the other
+        # plate's end face, which points the opposite way.
+        points = make_seam_points(straight_run())
+        for i, sp in enumerate(points):
+            sp.on_edge_1 = True
+            sp.owner_side = 1 if 28 <= i < 32 else 2
+            sp.normal_base = np.array([0.0, -1.0 if sp.owner_side == 1 else 1.0, 0.0])
+
+        seams = creator.process_path(points, is_closed=False)
+
+        assert [seam.segment_type for seam in seams] == ['line']
+        np.testing.assert_array_equal(seams[0].config.normals_main[:, 1], 1.0)
 
 
 class TestSegmentIndexing:
