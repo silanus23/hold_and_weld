@@ -1,0 +1,26 @@
+{
+    "robots": [
+        {
+            "name": "GP25",
+            "type": "robotic arm",
+            "manufacturer": "Yaskawa Motoman",
+            "xacro-generated": false,
+            "meshes": [
+                "../../meshes/gp25"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/ros-industrial/motoman/tree/846fbbc57c60223f12bf4795ea6404982d57709e/motoman_gp25_support"
+        },
+        {
+            "name": "AR2010",
+            "type": "robotic arm",
+            "manufacturer": "Yaskawa Motoman",
+            "xacro-generated": false,
+            "meshes": [
+                "../../meshes/ar2010"
+            ],
+            "variant": null,
+            "source-link": "https://github.com/ros-industrial/motoman/tree/846fbbc57c60223f12bf4795ea6404982d57709e/motoman_ar2010_support"
+        }
+    ]
+}

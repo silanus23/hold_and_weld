@@ -38,12 +38,13 @@ requirements as the system matures.
 
 ## AI-Based Improvements
 
-- **LLM-composed behavior trees** — an LLM writes or edits the behavior tree from an
-  operator request (e.g. "weld everything except the underside seam"), and the tree is
-  validated before anything moves. The tree nodes are the LLM's vocabulary, so this
-  needs parameterized action goals (seam IDs, grasp index), query services listing
-  seams and grasps, explicit output IDs instead of the newest file in a folder, and
-  reason codes in results.
+- **Simulation-checked behavior trees** — a behavior tree composed or edited from an
+  operator request (e.g. "weld everything except the underside seam") runs first in
+  OmniSim, which an agent can drive through its MCP server, and reaches the robot only
+  after passing there. The hand-written tree stays the default and the fallback. The
+  tree nodes are the composer's vocabulary, so this needs parameterized action goals
+  (seam IDs, grasp index), query services listing seams and grasps, explicit output IDs
+  instead of the newest file in a folder, and reason codes in results.
 - **Primary model decision nodes** — a primary model picks among the candidates the
   pipeline already ranks: the gripper sampler's grasps and the ConfigurationFinder's
   approach configurations. It is an optional backend behind a common interface; the ranked

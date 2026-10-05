@@ -96,12 +96,29 @@ source install/setup.bash
 ros2 launch hold_and_weld_bringup system_bringup.launch.py
 ```
 
+For comprehensive guide for usage see [USAGE.md](USAGE.md).
 For adding a new robot to the workcell see [ADDING_A_ROBOT.md](ADDING_A_ROBOT.md).
-For the development roadmap see [ROADMAP.md](ROADMAP.md).
+For the development roadmap see [ROADMAP.md](ROADMAP.md), including the planned
+AI-based improvements: behavior trees checked in OmniSim before they run, primary
+models picking grasps and approach configurations, and grasp dataset generation.
 
 ## References
 
 Duff, T., Burgess, B., & Hery, C. (2017). Building an orthonormal basis, revisited.
 *Journal of Computer Graphics Techniques (JCGT)*, 6(1), 1–8.
 
-Robot meshes from Yaskawa Motoman's [motoman_ros2_support_packages](https://github.com/ros-industrial/motoman) (Apache 2.0 / BSD 3-Clause). Thanks Yaskawa.
+## Acknowledgements
+
+The robot and gripper models in `hold_and_weld_description` come from these projects.
+Thanks to their authors and maintainers.
+
+| Model | Source | License |
+|---|---|---|
+| Yaskawa GP25, AR2010 | [ros-industrial/motoman](https://github.com/ros-industrial/motoman) | BSD-3-Clause |
+| Yaskawa HC10DT, GP8L | [Yaskawa-Global/motoman_ros2_support_packages](https://github.com/Yaskawa-Global/motoman_ros2_support_packages) | BSD-3-Clause |
+| OnRobot 2FG7 | [juandpenan/onrobot_2FG7_gripper_description](https://github.com/juandpenan/onrobot_2FG7_gripper_description) | MIT |
+| Rethink Robotics electric gripper | [RethinkRobotics/baxter_common](https://github.com/RethinkRobotics/baxter_common) | BSD-3-Clause |
+| Robotiq 2F-140 | [ros-industrial/robotiq](https://github.com/ros-industrial/robotiq) | BSD-3-Clause |
+| Schunk PG 70 | [ipa320/schunk_modular_robotics](https://github.com/ipa320/schunk_modular_robotics) | Apache-2.0 |
+
+Their license texts are in `hold_and_weld_description/vendor/`.
