@@ -8,7 +8,7 @@
 
     # 0.25 m cube resting on the ground: spans z 0..0.25, top face at z = 0.25.
     primary:
-      urdf_path: 'config/cube_workpiece.urdf'
+      urdf_path: 'package://hold_and_weld_description/urdf/environment/cube.urdf.xacro'
       transform:
         translation:
           x: 1.2

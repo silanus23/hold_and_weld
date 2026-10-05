@@ -98,8 +98,9 @@ public:
    *
    * Extracts all collision geometries, places each link by its joint <origin>s
    * (joints at position zero) and combines them. Meshes are skipped with a warning.
+   * A path ending in .xacro is expanded with the xacro command first.
    *
-   * @param urdf_path Path to URDF file
+   * @param urdf_path Path to URDF or xacro file
    * @return Combined collision geometry shape
    */
   TopoDS_Shape load_from_urdf(const std::string & urdf_path);

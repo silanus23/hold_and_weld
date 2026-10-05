@@ -19,6 +19,8 @@
 
 #include <vector>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
@@ -332,6 +334,29 @@ TEST_F(ShapeLoaderTest, LoadFromFile_WithNonexistentFile_ThrowsRuntimeError)
   EXPECT_THROW(
     loader_->load_from_urdf("/nonexistent/path/file.urdf"),
     std::runtime_error);
+}
+
+// The description package's environment parts are .urdf.xacro files, sized with
+// xacro properties; the loader must expand them rather than parse "${size}".
+TEST_F(ShapeLoaderTest, LoadFromUrdf_WithXacroFile_ExpandsProperties)
+{
+  const auto path = std::filesystem::temp_directory_path() / "shape_loader_test_box.urdf.xacro";
+  std::ofstream(path) <<
+    R"(<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="box">
+  <xacro:property name="size" value="0.2"/>
+  <link name="box">
+    <collision><geometry><box size="${size} ${size} ${size}"/></geometry></collision>
+  </link>
+</robot>
+)";
+
+  const TopoDS_Shape shape = loader_->load_from_urdf(path.string());
+  std::filesystem::remove(path);
+
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape, props);
+  EXPECT_NEAR(props.Mass(), 0.2 * 0.2 * 0.2, 1e-9);
 }
 
 TEST_F(ShapeLoaderTest, LoadFromUrdfString_WithSphereGeometry_CreatesCorrectShape)

@@ -14,7 +14,9 @@
 
 #include "hold_and_weld_gripper_sampler/io/shape_loader.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -58,6 +60,28 @@ static const rclcpp::Logger logger_ = rclcpp::get_logger("gripper_sampler");
 
 namespace
 {
+
+/** @brief Expanded URDF of a .xacro file, by running the xacro command. */
+std::string expand_xacro(const std::string & xacro_path)
+{
+  // The path comes from a trusted config file; quoting only guards spaces.
+  const std::string command = "xacro '" + xacro_path + "' 2>&1";
+  auto pipe_deleter = [](FILE * fp) {if (fp) {pclose(fp);}};
+  std::unique_ptr<FILE, decltype(pipe_deleter)> pipe(popen(command.c_str(), "r"), pipe_deleter);
+  if (!pipe) {
+    throw std::runtime_error("Failed to run xacro on " + xacro_path);
+  }
+  std::array<char, 4096> buffer;
+  std::string output;
+  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+    output += buffer.data();
+  }
+  if (pclose(pipe.release()) != 0) {
+    throw std::runtime_error("xacro failed on " + xacro_path + ": " + output);
+  }
+  return output;
+}
+
 
 void validate_vector3d(const Eigen::Vector3d & vec, const std::string & context)
 {
@@ -310,12 +334,18 @@ TopoDS_Shape ShapeLoader::load_from_urdf(const std::string & urdf_path)
     throw std::runtime_error("URDF file not found: " + urdf_path);
   }
 
-  std::stringstream buffer;
-  buffer << file.rdbuf();
-  file.close();
+  std::string urdf_string;
+  if (urdf_path.size() >= 6 && urdf_path.compare(urdf_path.size() - 6, 6, ".xacro") == 0) {
+    file.close();
+    urdf_string = expand_xacro(urdf_path);
+  } else {
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    urdf_string = buffer.str();
+  }
 
   const size_t first_new_skip = skipped_.size();
-  TopoDS_Shape shape = load_from_urdf_string(buffer.str());
+  TopoDS_Shape shape = load_from_urdf_string(urdf_string);
   for (size_t i = first_new_skip; i < skipped_.size(); ++i) {
     skipped_[i] = urdf_path + ": " + skipped_[i];
   }
