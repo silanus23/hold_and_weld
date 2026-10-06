@@ -43,6 +43,7 @@ RUN git clone --depth 1 -b 7.9.0 https://github.com/tpaviot/pythonocc-core.git /
     -DPYTHONOCC_MESHDS_NUMPY=ON \
   && cmake --build /tmp/pythonocc/build -j${JOBS:-$(nproc)} \
   && cmake --install /tmp/pythonocc/build \
+  && cp /tmp/pythonocc/LICENSE /opt/pythonocc/LICENSE \
   && rm -rf /tmp/pythonocc
 
 

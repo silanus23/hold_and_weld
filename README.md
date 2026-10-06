@@ -137,3 +137,10 @@ Thanks to their authors and maintainers.
 | Schunk PG 70 | [ipa320/schunk_modular_robotics](https://github.com/ipa320/schunk_modular_robotics) | Apache-2.0 |
 
 Their license texts are in `hold_and_weld_description/vendor/`.
+
+## License
+
+Apache-2.0, see [LICENSE](LICENSE). The vendored robot and gripper models keep their own
+licenses, listed above. The Docker image also ships OpenCASCADE (LGPL-2.1 with the OCCT
+exception) and pythonocc-core (LGPL-3.0); their license texts are in the image under
+`/opt/occt/share/doc/opencascade/` and `/opt/pythonocc/`.
