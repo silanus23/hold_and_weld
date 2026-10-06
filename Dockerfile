@@ -94,4 +94,8 @@ source /ws/install/setup.bash
 exec "$@"
 EOF
 
+LABEL org.opencontainers.image.source="https://github.com/silanus23/hold_and_weld" \
+  org.opencontainers.image.description="Dual-arm hold-and-weld workcell on ROS 2 Jazzy" \
+  org.opencontainers.image.licenses="Apache-2.0"
+
 CMD ["bash"]
