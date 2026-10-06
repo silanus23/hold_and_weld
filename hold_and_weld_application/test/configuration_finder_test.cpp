@@ -20,13 +20,13 @@
 #include <string>
 #include <vector>
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 #include "hold_and_weld_application/kinematics/configuration_finder.hpp"
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
+#include "gp25_urdf.hpp"
 
 using hold_and_weld::kinematics::Candidate;
 using hold_and_weld::kinematics::CeresIKSolver;
@@ -63,11 +63,9 @@ protected:
       rclcpp::init(0, nullptr);
     }
 
-    std::string pkg_share = ament_index_cpp::get_package_share_directory(
-      "hold_and_weld_description");
     URDFParser parser;
     ParsedChain chain = parser.extract_joint_chain(
-      pkg_share + "/urdf/dual_robot.xacro", "robot2_base_link", "robot2_wire_tip");
+      gp25_dual_robot_urdf(), "robot2_base_link", "robot2_wire_tip");
 
     kin_ = std::make_shared<KinematicsSolver>(chain);
     ik_ = std::make_shared<CeresIKSolver>(kin_);

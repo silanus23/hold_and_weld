@@ -194,6 +194,7 @@ if(BUILD_TESTING)
   )
   ament_target_dependencies(kinematics_solver_test
     rclcpp
+    ament_index_cpp
     hold_and_weld_description
   )
 
@@ -221,6 +222,11 @@ if(BUILD_TESTING)
     ament_index_cpp
     hold_and_weld_description
   )
+
+  foreach(test_target kinematics_solver_test ceres_ik_solver_test configuration_finder_test)
+    target_compile_definitions(${test_target} PRIVATE
+      TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
+  endforeach()
 
   ament_add_gtest(approach_validator_test
     test/approach_validator_test.cpp

@@ -333,7 +333,8 @@ std::vector<FaceSample> sample_face_region(
   if (u_size > kMaxFaceSamples / v_size) {
     std::ostringstream detail;
     detail << "grid=" << u_size << " x " << v_size
-           << ", estimated sample bytes=" << static_cast<double>(u_size) * v_size * sizeof(FaceSample)
+           << ", estimated sample bytes="
+           << static_cast<double>(u_size) * v_size * sizeof(FaceSample)
            << ", limit=" << kMaxFaceSamples << " points, spacing=" << config.sample_density
            << " m, grid_steps=" << config.grid_steps
            << ", UV=[" << u_min << ", " << u_max << "] x [" << v_min << ", " << v_max << "]";

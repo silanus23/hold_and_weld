@@ -144,8 +144,8 @@ fields" section for the exact layout. `hold_and_weld_application`'s
 
 - CAD geometry input only. Mesh and point cloud support is planned.
 - Parallel jaw grippers only. Other gripper types are not supported.
-- Tested on box, prism, and small cylinder workpieces. Complex organic geometry
-  is not yet validated.
+- Validated on primitive shapes and a complex non-convex part; real industrial parts
+  may still reveal improvements.
 - The ground is a finite box over the `ground_plane` footprint (an infinite
   halfspace only when no footprint is set).
 - Filter pipeline is defined but not yet wired into the active pipeline.

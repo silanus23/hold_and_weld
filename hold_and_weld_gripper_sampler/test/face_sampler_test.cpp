@@ -939,7 +939,7 @@ TEST(FaceSamplerTest, RejectsOverflowingUniformGridAndInvalidSpacing)
   EXPECT_THROW(sample_face_region(face, config), std::runtime_error);
   config.grid_steps = 0;
   for (double density : {0.0, -1.0, std::numeric_limits<double>::infinity(),
-    std::numeric_limits<double>::quiet_NaN()})
+      std::numeric_limits<double>::quiet_NaN()})
   {
     config.sample_density = density;
     EXPECT_THROW(sample_face_region(face, config), std::runtime_error);

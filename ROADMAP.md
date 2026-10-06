@@ -30,9 +30,9 @@ requirements as the system matures.
   torch and gripper TCPs, and the workpiece pose. Needed for the move from simulation to
   real hardware.
 - **Mesh-based effectors and extra axes** — the system currently assumes parallel
-  jaw grippers and fixed-base robots. Integrating more realistic mesh-based effectors
-  and extended extra axis support is planned as part of the robot-agnostic extensibility
-  goal.
+  jaw grippers, and robot1's linear rail is the only extra axis. Integrating more
+  realistic mesh-based effectors and extended extra axis support is planned as part of
+  the robot-agnostic extensibility goal.
 
 ---
 
@@ -101,15 +101,19 @@ does not yet expose. Thanks to the OmniSim team for reaching out.
   based on surface geometry and gripper dimensions is planned.
 - Expose `FaceSamplingConfig::max_cells_per_tile` as a YAML key. Every caller uses the
   default of 16 today.
+- Reproducible runs. The Angle Finder's randomization is seeded from the clock, so parts
+  without symmetry (prism, elliptic part) give a slightly different candidate set on
+  every run. Take the seed from the config, keeping the clock as the default.
 - Guided sampling: identify geometrically promising sampling areas first to reduce
   brute-force surface traversal. Deferred together with the native mesh pipeline it was
   designed alongside.
 
 ### Validation
 
-- Integration testing for filters and exclusion zone constraints beyond current unit tests.
-- Organic shape testing. Current validation covers box, prism, and small cylinder only.
-  Complex non-convex geometry is not yet validated.
+- Integration testing for the constraints beyond current unit tests, and for filters
+  once they are wired.
+- Real-life parts. Validated on primitive shapes and a complex non-convex part;
+  real industrial parts may still reveal improvements.
 
 ### Action Server Integration
 
@@ -142,8 +146,6 @@ contact pair interface.
 
 - Add `BRepCheck_Analyzer` validation to URDF geometry loading. STEP loading already
   validates.
-- Fix known error handling inconsistencies per error handling policy. Primarily single
-  layer catch blocks in `contact_point_sampler.cpp`.
 
 ---
 
@@ -158,11 +160,13 @@ contact pair interface.
 - `detach_object` wiring in `run_job` once re-grasp workflow is defined.
 - ACM collision allowance per object instead of per link — required to handle complex
   multi-primitive objects correctly where per-link granularity is insufficient.
-- `YAML` value validation in `load_job_from_yaml`.
 - Online parameter update for execution-time tunable parameters: velocity scaling,
   acceleration scaling, controller type.
-- Replace `move_to_pose` with proper implementation.
-- Limit extra axis movement by parameters.
+- Make `move_to_pose` a lifecycle action server like the gripper and welder servers.
+- Limit extra axis (robot1's rail) movement by parameters.
+- Weld PtP seams as one blended Pilz sequence of the short line pieces they are divided
+  into (see `hold_and_weld_planning`). They currently go through `computeCartesianPath`;
+  separate Pilz motions would stop the torch between pieces.
 - Planning scene coordinator to make scene management event driven.
 - Seam-level resume for the welder: report completed seams in the result and accept an
   optional start/skip field in the goal, so an interrupted job continues with a new goal
@@ -191,10 +195,9 @@ judgement-free (see the package README). Pipe joint detection remains incomplete
 not planned for the near term; manual weld rejection (see `hold_and_weld_application`)
 covers the seams it gets wrong.
 
-The core primitive planned here for complex curves — those not adequately represented as
-sequences of line and arc segments — now exists as `PtPSegment`, and both extractors emit
-it: the mesh path classifier demotes any run that fails the tolerance cascade, and the
-OCCT extractor uses it for any curve OCCT cannot identify as a line or a circle.
+Curves that are neither a line nor an arc come out of both extractors as `PtPSegment`s,
+which Pilz cannot execute. They are to be divided into short line pieces Pilz can run
+(see the welder item in `hold_and_weld_application`).
 
 A separate planned capability is seam extraction from scanned mesh inputs where CAD
 geometry is unavailable. This requires a different pipeline: plane segmentation from the

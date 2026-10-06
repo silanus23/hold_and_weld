@@ -17,12 +17,12 @@
 #include <limits>
 #include <vector>
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include "hold_and_weld_application/kinematics/ceres_ik_solver.hpp"
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
+#include "gp25_urdf.hpp"
 
 using hold_and_weld::kinematics::CeresIKSolver;
 using hold_and_weld::kinematics::KinematicsSolver;
@@ -47,13 +47,9 @@ protected:
     }
 
     // Load URDF and create solvers
-    std::string pkg_share = ament_index_cpp::get_package_share_directory(
-      "hold_and_weld_description");
-    std::string urdf_path = pkg_share + "/urdf/dual_robot.xacro";
-
     URDFParser parser;
     ParsedChain chain = parser.extract_joint_chain(
-      urdf_path,
+      gp25_dual_robot_urdf(),
       "robot2_base_link",
       "robot2_wire_tip");
 

@@ -273,6 +273,7 @@ def test_write_yaml_keeps_header_and_writes_through_symlink(tmp_path):
 def test_saved_layout_is_what_xacro_builds(tmp_path):
     """The configurator's workcell.yaml output must drive dual_robot.xacro as placed."""
     workcell = wc.load_yaml(os.path.join(DESCRIPTION_DIR, 'config', 'workcell.yaml'))
+    robot1_model = workcell['robots']['robot1']['model']
     slots = {s.name: s for s in wc.robot_slots_from_workcell(workcell)}
     slots['robot1'].position = [0.5, 1.5, 0.0]
     slots['robot1'].orientation = wc.yaw_to_quaternion(math.pi / 2)
@@ -296,7 +297,8 @@ def test_saved_layout_is_what_xacro_builds(tmp_path):
     assert origin('robot2_base_joint') == pytest.approx([3.0, -1.0, 0.1, 0.0, 0.0, -1.0])
     meshes = {m.get('filename') for m in robot.iter('mesh')}
     assert any('/ar2010/' in m for m in meshes)
-    assert any('/gp25/' in m for m in meshes), 'robot1 should still be gp25'
+    assert any(f'/{robot1_model}/' in m for m in meshes), \
+        f'robot1 should still be {robot1_model}'
     assert any('/schunk_pg70/' in m for m in meshes), 'robot1 should carry the chosen gripper'
 
 

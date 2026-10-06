@@ -37,7 +37,8 @@ PIPELINE_YAML_PATHS = {
 
 
 def launch_setup(context, *args, **kwargs):
-    """Build the move_group node.
+    """
+    Build the move_group node.
 
     Run via OpaqueFunction: which pipeline YAMLs to load is only known once
     'planning_pipelines' is resolved at launch time, not at launch-file-generation

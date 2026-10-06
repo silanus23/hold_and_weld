@@ -21,6 +21,7 @@
 
 #include "hold_and_weld_application/kinematics/kinematics_solver.hpp"
 #include "hold_and_weld_application/kinematics/urdf_parser.hpp"
+#include "gp25_urdf.hpp"
 
 using hold_and_weld::kinematics::KinematicsSolver;
 using hold_and_weld::kinematics::URDFParser;
@@ -43,7 +44,7 @@ protected:
     // Parse robot URDF
     URDFParser parser;
     auto chain = parser.extract_joint_chain(
-      "package://hold_and_weld_description/urdf/dual_robot.xacro",
+      gp25_dual_robot_urdf(),
       "robot2_base_link",
       "robot2_wire_tip"
     );
@@ -371,7 +372,7 @@ TEST_F(KinematicsSolverTest, Constructor_RejectsNonUnitAxis)
 {
   URDFParser parser;
   auto chain = parser.extract_joint_chain(
-    "package://hold_and_weld_description/urdf/dual_robot.xacro",
+    gp25_dual_robot_urdf(),
     "robot2_base_link", "robot2_wire_tip");
   chain.actuated_joints[1].axis *= 2.0;
   EXPECT_THROW(KinematicsSolver bad(chain), std::invalid_argument);
@@ -381,7 +382,7 @@ TEST_F(KinematicsSolverTest, Constructor_RejectsInvalidLimits)
 {
   URDFParser parser;
   auto chain = parser.extract_joint_chain(
-    "package://hold_and_weld_description/urdf/dual_robot.xacro",
+    gp25_dual_robot_urdf(),
     "robot2_base_link", "robot2_wire_tip");
   chain.actuated_joints[3].q_max = chain.actuated_joints[3].q_min;
   EXPECT_THROW(KinematicsSolver bad(chain), std::invalid_argument);
