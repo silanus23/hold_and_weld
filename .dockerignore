@@ -1,0 +1,7 @@
+.git
+build
+install
+log
+docs
+**/__pycache__
+**/.pytest_cache

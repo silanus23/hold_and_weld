@@ -2,7 +2,7 @@
 
 **A ROS 2 framework for automated dual-arm robotic welding systems that perform holding and welding simultaneously with integrated grasp sampler and weld finder. Currently at PoC stage. Targets ROS 2 Jazzy.**
 
-https://github.com/user-attachments/assets/d16089c2-f43c-417d-a8ca-88f5b7243f64
+https://github.com/user-attachments/assets/986d984e-00fb-4769-97a7-4cb6e9866428
 
 ## Packages
 
@@ -38,6 +38,18 @@ Key packages have detailed READMEs.
 
 Ubuntu 24.04 with ROS 2 Jazzy. The repo is expected at `<ws>/src/hold_and_weld`.
 
+**Docker (instead of steps 1–4)**
+
+The image builds OpenCASCADE and pythonocc-core from source, so the first build takes a while.
+
+```bash
+cd <ws>/src/hold_and_weld
+docker build -t hold_and_weld .
+xhost +local:docker
+docker run -it --rm --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+  --device /dev/dri hold_and_weld ros2 launch hold_and_weld_bringup system_bringup.launch.py
+```
+
 **1. ROS and system dependencies**
 
 MoveIt 2, Gazebo, Ceres, FCL, Embree and the rest come from rosdep:
@@ -59,8 +71,8 @@ These are built from source: apt only ships OCCT 7.6, and pythonocc-core is not 
 pythonocc-core must be built against the same OCCT.
 
 ```bash
-sudo apt install cmake swig python3-dev tcl-dev tk-dev libfreetype-dev \
-  libgl1-mesa-dev libxi-dev libxmu-dev
+sudo apt install cmake swig python3-dev python3-numpy rapidjson-dev tcl-dev tk-dev \
+  libfreetype-dev libgl1-mesa-dev libxi-dev libxmu-dev
 
 git clone --depth 1 -b V7_9_3 https://github.com/Open-Cascade-SAS/OCCT.git
 cmake -S OCCT -B OCCT/build -DCMAKE_BUILD_TYPE=Release \
@@ -68,10 +80,13 @@ cmake -S OCCT -B OCCT/build -DCMAKE_BUILD_TYPE=Release \
 cmake --build OCCT/build -j$(nproc) && cmake --install OCCT/build
 
 git clone --depth 1 -b 7.9.0 https://github.com/tpaviot/pythonocc-core.git
+# 7.9.0 asks for SWIG 4.2.1; Ubuntu 24.04 ships 4.2.0, which builds it fine
+sed -i 's/find_package(SWIG 4.2.1/find_package(SWIG 4.2.0/' pythonocc-core/CMakeLists.txt
 cmake -S pythonocc-core -B pythonocc-core/build -DCMAKE_BUILD_TYPE=Release \
   -DOCCT_INCLUDE_DIR=$HOME/tools/occt_7.9.3/include/opencascade \
   -DOCCT_LIBRARY_DIR=$HOME/tools/occt_7.9.3/lib \
-  -DPYTHONOCC_INSTALL_DIRECTORY=$(python3 -m site --user-site)/OCC
+  -DPYTHONOCC_INSTALL_DIRECTORY=$(python3 -m site --user-site)/OCC \
+  -DPYTHONOCC_MESHDS_NUMPY=ON
 cmake --build pythonocc-core/build -j$(nproc) && cmake --install pythonocc-core/build
 ```
 
