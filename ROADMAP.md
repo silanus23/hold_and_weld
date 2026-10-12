@@ -73,10 +73,9 @@ answer questions such as:
 
 Results would feed back into grasp scoring, so grasps that cannot physically hold are
 rejected before execution. The planned simulator is OmniSim, using its MuJoCo physics
-backend (through Newton). OmniSim provides STEP import, deterministic headless runs and
-scene snapshots for checking each grasp candidate. The check needs per-surface friction
-(gripper pad against part) and contact-force readback, which MuJoCo supports and OmniSim
-does not yet expose. Thanks to the OmniSim team for reaching out.
+backend through Newton. The integration will require control over gripper–part friction
+and access to contact-force measurements. Thanks to the OmniSim team for reaching out and
+proposing an initial hold-under-load evaluation.
 
 ---
 
